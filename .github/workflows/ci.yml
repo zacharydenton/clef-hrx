@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: ["1.91.0", stable]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal --component rustfmt --component clippy
+      - name: Check formatting
+        run: cargo +${{ matrix.rust }} fmt --check
+      - name: Lint
+        run: cargo +${{ matrix.rust }} clippy --locked --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo +${{ matrix.rust }} test --locked --lib --bins --tests --examples --all-features
+      - name: Check documentation
+        run: cargo +${{ matrix.rust }} test --locked --doc
+      - name: Test video decoding
+        if: matrix.rust == 'stable'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
+          cargo +${{ matrix.rust }} test --locked --lib media::tests -- --ignored
+      - name: Verify package
+        if: matrix.rust == 'stable'
+        run: cargo +${{ matrix.rust }} package --locked

@@ -4,14 +4,26 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
-description = "Cloudflare CLEF typed decisions with native Rust/HRX inference"
+description = "Local CLEF inference on AMD GPUs with Rust and Loom"
+repository = "https://github.com/zacharydenton/clef-hrx"
+readme = "README.md"
+keywords = ["inference", "amdgpu", "clef", "loom"]
+categories = ["science"]
+include = [
+    "/src/**", "/kernels/**", "/reference/**", "/tests/**", "/benches/**",
+    "/examples/**", "/licenses/**", "/LICENSE", "/THIRD_PARTY_NOTICES.md",
+    "/README.md", "/Cargo.lock", "!/benches/results/**", "!/tests/results/**",
+]
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 half = { version = "2", features = ["bytemuck"] }
-bytemuck = { version = "1", features = ["derive"] }
-hrx = { package = "hrx-rs", path = "../hrx-rs" }
+bytemuck = "1"
+hrx = { package = "hrx-rs", version = "=0.8.16" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -24,7 +36,6 @@ bench-internals = []
 
 [dev-dependencies]
 tempfile = "3"
-safetensors = "0.8"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]

@@ -96,24 +96,35 @@ fn paired(c: &mut Criterion) {
         let mut samples = Vec::new();
         let mut sequence = 0u64;
         group.throughput(Throughput::Elements(tokens as u64));
-        group.bench_function(BenchmarkId::new(name,tokens),|b| b.iter_custom(|iterations| {
-            let mut old = Duration::ZERO;
-            let mut new = Duration::ZERO;
-            for _ in 0..iterations {
-                // Alternate order on each pair to reduce drift bias. Both
-                // paths see the same background load within milliseconds.
-                for candidate in [sequence.is_multiple_of(2),!sequence.is_multiple_of(2)] {
-                    let started = Instant::now();
-                    if candidate {optimized.run().unwrap();new+=started.elapsed();}
-                    else {reference.run().unwrap();old+=started.elapsed();}
+        group.bench_function(BenchmarkId::new(name, tokens), |b| {
+            b.iter_custom(|iterations| {
+                let mut old = Duration::ZERO;
+                let mut new = Duration::ZERO;
+                for _ in 0..iterations {
+                    // Alternate order on each pair to reduce drift bias. Both
+                    // paths see the same background load within milliseconds.
+                    for candidate in [sequence.is_multiple_of(2), !sequence.is_multiple_of(2)] {
+                        let started = Instant::now();
+                        if candidate {
+                            optimized.run().unwrap();
+                            new += started.elapsed();
+                        } else {
+                            reference.run().unwrap();
+                            old += started.elapsed();
+                        }
+                    }
+                    sequence += 1;
                 }
-                sequence+=1;
-            }
-            samples.push(serde_json::json!({"iterations":iterations,"reference_ns":old.as_nanos() as u64,"optimized_ns":new.as_nanos() as u64}));
-            // Criterion reports candidate time; reference timing is saved
-            // separately for paired acceptance checks.
-            new
-        }));
+                samples.push(serde_json::json!({
+                    "iterations": iterations,
+                    "reference_ns": old.as_nanos() as u64,
+                    "optimized_ns": new.as_nanos() as u64,
+                }));
+                // Criterion reports candidate time; reference timing is saved
+                // separately for paired acceptance checks.
+                new
+            });
+        });
         assert_eq!(
             reference.allocated_bytes() + optimized.allocated_bytes(),
             allocated
@@ -125,8 +136,13 @@ fn paired(c: &mut Criterion) {
         std::fs::write(
             root.join("paired.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
-            "tokens":tokens,"allocated_bytes":allocated,"sample_size":40,"samples":samples,
-            "run_id":run_id,"fingerprint":fingerprint,"measurement_seconds":measurement_seconds
+                "tokens": tokens,
+                "allocated_bytes": allocated,
+                "sample_size": 40,
+                "samples": samples,
+                "run_id": run_id,
+                "fingerprint": fingerprint,
+                "measurement_seconds": measurement_seconds,
             }))
             .unwrap(),
         )

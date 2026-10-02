@@ -1,176 +1,135 @@
 # clef-hrx
 
-Cloudflare CLEF typed decisions in Rust and Loom, using local `../hrx-rs` on
-AMD Strix Halo (`gfx1151`). Implements the 64-layer hybrid text backbone,
-27-layer vision encoder, and trained joint schema head. Kernel algorithms live
-in `kernels/*.loom`; Rust supplies numeric compiler specializations, bindings,
-and graph scheduling. No Python runtime, exporters, or kernel generator scripts.
+Run [Cloudflare CLEF](https://huggingface.co/Cloudflare/clef) locally on AMD
+Strix Halo (`gfx1151`). Rust handles schema encoding and media preprocessing;
+[Loom](https://github.com/zacharydenton/hrx-rs) kernels run the text backbone,
+vision encoder, and decision head. No Python runtime is required.
 
-The checkpoint is pinned to `Cloudflare/clef` revision
-`2f3de3dd85f379784083b0814d997ab627200f0c`. Despite its Qwen3.8 branding, its
-architecture is `Qwen3_5ForConditionalGeneration`. Weights stay BF16; reductions
-and DeltaNet state use FP32. The head uses the separate output embedding matrix.
+CLEF answers structured questions about text, images, and video:
 
-## Build and use
+| Type | Result |
+| --- | --- |
+| `choice` | Selected option, confidence, and probabilities |
+| `score` | Expected score, legend, confidence, and probabilities |
+| `noul` | Probability that a proposition is true |
 
-Requires Rust 1.91+, Linux, AMD kernel drivers, and local `../hrx-rs` (0.8.15).
-HRX provisions its pinned native runtime/compiler. CPU tests do not open a GPU.
+**Experimental.** The full-model corpus has a known probability deviation from
+the BF16 reference on the incident/outage fixture. The 0.003 error threshold is
+kept in the tests. Only `gfx1151` is supported.
+
+## Build
+
+Requires Rust 1.91+, Linux, AMD kernel drivers, and at least 50 GiB of available
+RAM for short requests. HRX downloads its pinned native runtime and compiler
+when needed. Video input also requires `ffmpeg` and `ffprobe` on `PATH`.
 
 ```sh
+git clone https://github.com/zacharydenton/clef-hrx
+cd clef-hrx
 cargo build --release --locked
-# Metadata only; no GPU or checkpoint weight download:
-./target/release/clef inspect
-./target/release/clef encode examples/invoice.json
-./target/release/clef --max-length 512 decide examples/invoice.json
-# Keep one model loaded for newline-delimited requests:
-./target/release/clef --max-length 1536 decide requests.jsonl --jsonl
-# Include logits, probabilities, and timings:
-./target/release/clef --max-length 512 decide examples/invoice.json --raw
 ```
 
-`--offline` uses cached files; `--model-dir /path/to/snapshot` uses a local
-release. The loader checks all 1,184 backbone tensors and 122 head tensors,
-including shape, dtype, and shard membership. Local files must remain unchanged
-while the model is alive. Transfers use bounded 16 MiB staging chunks.
+The first inference downloads about 51.2 GiB from `Cloudflare/clef`, pinned to
+revision `2f3de3dd85f379784083b0814d997ab627200f0c`. Weights use BF16; resident
+weights need about 46.5 GiB, plus workspace. Embedding rows are read on demand.
+Use `--offline` for cached checkpoint files or `--model-dir /path/to/snapshot`
+for a local copy. Checkpoint files must remain unchanged while the model is loaded.
 
-The checkpoint occupies about 51.2 GiB; resident weights use 46.5 GiB, plus
-workspace and staging. Rust reads only the requested BF16 rows from the input
-and lexical embedding tables, saving 4.7 GiB without changing precision.
-Changed requests incur row reads and uploads; identical-input graph replay
-reuses the uploaded rows. `inspect` reports both total and resident weight bytes.
-Allow at least 50 GiB **available** RAM for short requests. The loader checks `MemAvailable` before
-loading and rechecks during large allocations. `--memory-gib` is an allocation
-budget (default 80), not a reservation. The default input limit is 16,384 tokens;
-use `--max-length` to limit workspace. `--max-state-tokens` limits state text.
-Oversized fixed schemas or media are rejected. Run full-model jobs sequentially.
+## CLI
 
-SystemOne responses contain `model`, `answers`, and `usage`. `choice` returns
-winner/confidence/probabilities; `score` returns expected score/legend/probabilities;
-`noul` returns the probability of true. Responses round to four decimals.
+```sh
+# Inspect checkpoint metadata or encode a request without loading GPU weights.
+./target/release/clef inspect
+./target/release/clef encode examples/invoice.json
 
-## Media and library
+./target/release/clef --max-length 512 decide examples/invoice.json
+./target/release/clef --max-length 512 decide examples/invoice.json --raw
 
-Requests accept `"images": ["receipt.png"]` and `"videos": ["clip.mp4"]`.
-Paths are relative to the working directory. PNG/JPEG/WebP decoding is Rust;
-local video files require `ffmpeg` and `ffprobe` on PATH. Sampling, RGB bicubic
-resize, normalization, patchification, timestamps, and MRoPE are implemented in
-Rust. Decoded video storage is capped at 1 GiB; reduce source resolution or
-`num_frames` for larger clips.
+# Keep one model loaded for newline-delimited requests. Use - for stdin.
+./target/release/clef --max-length 1536 decide requests.jsonl --jsonl
+```
 
-`media_kwargs` supports `min_pixels`, `max_pixels`, `fps`, `num_frames`, and
-`do_sample_frames`. Unknown keys are errors; `fps` and `num_frames` are mutually
-exclusive. Pixel defaults match the pinned processor.
+Responses contain `model`, `answers`, and `usage`, with probabilities rounded to
+four decimals. `--raw` includes logits, unrounded probabilities, and timings.
 
-`ClefModel::load` creates an HRX context; `load_in` accepts an existing
-`hrx::inference::ModelContext`. `infer`, `infer_batch`, and `systemone` return
-owned host results. `media::prepare` accepts RGB images and `VideoFrames`;
-`infer_with_media` accepts prepared input. `Encoder` works without GPU/weights.
+A minimal request:
 
-Transformer and decision-head weights remain resident. Scratch leases and
-byte-range graph dependencies allow allocation reuse. Requests execute
-sequentially through HRX `NativeSession`.
-One exact-input graph is cached; input changes rebuild it while reusing kernels
-and allocation capacity. Failed native execution requires reloading the model.
-DeltaNet uses 64-token chunkwise prefill above 64 tokens and an independent
-recurrent path for shorter sequences. Attention uses bounded-memory online softmax.
+```json
+{
+  "model": "clef",
+  "state": "The invoice is 30 days overdue.",
+  "questions": {
+    "needs_followup": {
+      "type": "noul",
+      "instructions": "Does this invoice need a payment reminder?"
+    }
+  }
+}
+```
 
-## Unit tests
+For `choice`, supply a `criteria` object mapping option IDs to descriptions.
+For `score`, supply an ordered `criteria` array. See [examples/invoice.json](examples/invoice.json).
+
+Requests can include `"images": ["receipt.png"]` and `"videos": ["clip.mp4"]`.
+Paths are relative to the working directory; images support PNG, JPEG, and WebP.
+`media_kwargs` accepts `min_pixels`, `max_pixels`, `fps`, `num_frames`, and
+`do_sample_frames`. `fps` and `num_frames` are mutually exclusive. Decoded video
+storage is capped at 1 GiB.
+
+`--max-length` limits the total input to 1–16,384 tokens (default 16,384).
+State text is truncated to fit; oversized schemas and media are rejected.
+`--max-state-tokens` further limits state text. `--memory-gib` sets an allocation
+budget (default 80), not a reservation. Run full-model jobs sequentially.
+
+## Library
+
+```rust
+use clef_hrx::{ClefModel, EncodeOptions, LoadOptions, Request};
+
+let request: Request = serde_json::from_str(include_str!("examples/invoice.json"))?;
+let mut model = ClefModel::load(LoadOptions {
+    encoding: EncodeOptions { max_length: 512, ..Default::default() },
+    ..Default::default()
+})?;
+let response = model.systemone(&request)?;
+```
+
+`Encoder` works without a GPU or model weights. `media::prepare` accepts RGB
+images and decoded video frames; `infer_with_media` uses that prepared input.
+`load_in` accepts an existing HRX `ModelContext`. Inference is sequential and
+caches one exact-input graph. Reload the model after a native execution failure.
+
+## Development
 
 ```sh
 cargo fmt --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked
-# GPU operators/head, cached tokenizer, and ffmpeg; excludes the full-model run:
+cargo test --locked --lib --bins --tests --examples --all-features
+cargo test --locked --doc
+
+# GPU operators, trained head, cached tokenizer, and video fixtures:
 cargo test --locked --lib -- --include-ignored --skip full_checkpoint_corpus --test-threads=1
-# Full checkpoint corpus, run alone when RAM is available:
+# Full checkpoint; run separately with at least 50 GiB available RAM:
 cargo test --release --locked --lib full_checkpoint_corpus -- --ignored --nocapture --test-threads=1
 ```
 
-Tests cover canonical JSON, schema ordering, response semantics, invalid inputs,
-checkpoint validation, exact token/position fixtures, bicubic patch fixtures,
-nonzero GEMM/attention/DeltaNet references, state reset, scratch reuse, and the
-trained head. Embedding tests check exact BF16 row bytes, duplicate and reordered
-IDs, file bounds, and both real checkpoint tables after mappings are released.
-Tests read captured reference data directly in Rust. GPU and cache
-requirements are explicit `#[ignore]` annotations; no silent test skipping.
-
-The full-model corpus covers all question types, Unicode/JSON, longer text,
-images, video, mixed media, and changed/identical-input replay. It checks exact
-tokens, winners, a 0.003 maximum probability-error gate, and deterministic replay.
-Fixtures record upstream Torch 2.14.0 / Transformers 5.10.2 provenance; they are
-not a claim of qualification against the release's Torch 2.11 environment.
-
-**Experimental:** strict BF16-reference parity has a known probability deviation
-on the incident/outage fixture. The 0.003 gate remains unchanged. The full-corpus
-test reports all numerical failures before failing, so one discrepancy does not
-hide later cases. Hardware support is currently limited to gfx1151.
-
-Arithmetic accuracy and reference compatibility are separate checks. DeltaNet
-L2 normalization retains FP32 intermediates rather than reproducing the CPU
-reference's BF16 rounding. Gated RMSNorm now fuses normalization, weights, and
-SiLU in one wave-cooperative kernel, rounding only its final output to BF16.
-Independent Rust FP64 oracles check both operations and require the fused gated
-norm to reduce error versus the previous three-dispatch path. Operator arithmetic
-checks do not establish whole-model prediction accuracy.
-
-## Criterion benchmarks
+GPU and checkpoint tests are explicitly ignored by default. Fixtures capture
+Torch 2.14.0 / Transformers 5.10.2 outputs. `CLEF_MODEL_DIR` selects a local
+checkpoint for the full-model test and benchmark.
 
 ```sh
 cargo bench --locked --bench preprocessing
-# Small synthetic graphs; no full checkpoint:
 cargo bench --locked --features bench-internals --bench kernels
-# Paired old/new comparison, followed by acceptance checks:
-cargo bench --locked --features bench-internals --bench kernels -- paired_delta_prefill --save-baseline optimized
-cargo run --locked --example check_benches -- target/criterion paired
-# Diagnostic per-kernel GPU timestamps (serialized, not throughput evidence):
-cargo run --release --locked --features bench-internals --example profile_delta -- 260
-# Opt-in, cached checkpoint, at least 50 GiB available RAM:
 CLEF_BENCH_FULL_MODEL=1 cargo bench --locked --bench inference
 ```
 
-Criterion separates warmup and sampling. Kernel benches exclude compilation,
-upload, and readback; each iteration includes dispatch and completion fencing.
-The full-model bench loads one model and warms its graph before sampling the
-complete `infer` call. `CLEF_MODEL_DIR` can select a local checkpoint for the
-full-model test/benchmark. Per-request diagnostics separately report encoding,
-graph preparation, inference, readback, and allocated/uploaded bytes.
+Kernel benchmarks include paired reference/optimized measurements. Check them
+with `cargo run --locked --example check_benches -- target/criterion paired`;
+thresholds are in [benches/criteria.json](benches/criteria.json). Use an idle GPU.
+`CLEF_TRACE_DIR=/path` dumps FP32 intermediates for debugging and increases memory
+use. Leave it unset for benchmarks.
 
-Acceptance criteria live in `benches/criteria.json`: at least 20% faster chunked
-prefill at 260 and 1,024 tokens, at most 5% regression at 65 tokens, no slowdown
-for the more accurate gated norm at 260 and 1,024 tokens, and at most 256 MiB
-of device allocations for each comparison. The paired benchmark keeps
-the old and new graphs resident, verifies numerical agreement before measuring,
-alternates execution order, and checks that replay does not grow allocations.
-The original kernels are retained for tests/benchmarks; normal inference selects
-the optimized kernels.
+## License
 
-The optimized path uses shared memory for the triangular inverse, computes four
-matrix rows per lane to reuse loads, and prepares each token/head cooperatively
-across a wave. Matrix reduction order and gate-prefix order are preserved;
-normalization uses an FP32 wave reduction. Matrix-tail and inverse-residual tests
-pass, and the existing DeltaNet error tolerance remains 0.002.
-
-The checker uses the upper endpoint of a 95% paired bootstrap confidence
-interval across 40 measurement batches. Missing data, different run identities,
-or changed kernel sources fail the check. Calibration/warmup calls are excluded.
-Results are written under `target/criterion`; run all five paired checks together
-from the repository root. Use an idle GPU for reproducible absolute timings.
-Set `CLEF_BENCH_PAIRED_SECONDS=30` for a longer measurement under contention
-(default 8 seconds per size, allowed range 1–300). This changes sampling time,
-not the sample count or acceptance thresholds.
-Named before/after Criterion baselines can also be compared with
-`check_benches target/criterion before after`; paired evidence is preferable on
-a shared machine. Benchmark checks supplement the unit tests and the separate
-full-checkpoint qualification; they do not replace either.
-
-Generated benchmark and test results stay local; `target/`, `artifacts/`,
-`benches/results/`, and `tests/results/` are excluded from Git. Verify local
-paired measurements against the current source:
-
-```sh
-cargo run --locked --example check_benches -- target/criterion paired
-cargo test --locked --example check_benches
-```
-
-`CLEF_TRACE_DIR=/path` retains and dumps FP32 intermediates for debugging;
-it increases memory and readback costs. Disable tracing for benchmarks.
+[Apache-2.0](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for
+checkpoint, algorithm, and kernel attribution.

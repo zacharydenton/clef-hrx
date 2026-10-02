@@ -76,6 +76,7 @@ impl NativeState {
 impl ClefModel {
     /// Loads the pinned checkpoint. Local files must remain unmodified while the model is alive.
     pub fn load(options: LoadOptions) -> Result<Self> {
+        options.encoding.validate()?;
         let manager = ResidencyManager::new(options.memory_budget_bytes)?;
         let context = ModelContext::new(RuntimeOptions {
             gpu_index: options.device,
@@ -86,40 +87,19 @@ impl ClefModel {
     }
     /// Uses an existing context. Checkpoint files must remain unmodified while the model is alive.
     pub fn load_in(context: &ModelContext, options: LoadOptions) -> Result<Self> {
+        options.encoding.validate()?;
         let info = options.source.inspect()?;
+        let required = info.resident_weight_bytes
+            + crate::checkpoint::workspace_estimate(options.encoding.max_length);
         ensure!(
-            info.resident_weight_bytes as usize
-                + crate::checkpoint::workspace_estimate(options.encoding.max_length) as usize
-                <= options.memory_budget_bytes,
+            required <= options.memory_budget_bytes as u64,
             "memory budget cannot fit weights and configured workspace"
         );
-        // Check OS availability before loading resident weights. No process is
-        // terminated and no hidden swap/offload fallback is attempted.
-        if let Ok(mem) = std::fs::read_to_string("/proc/meminfo") {
-            let available = mem
-                .lines()
-                .find_map(|l| {
-                    l.strip_prefix("MemAvailable:")
-                        .and_then(|v| v.split_whitespace().next())
-                        .and_then(|v| v.parse::<u64>().ok())
-                })
-                .unwrap_or(u64::MAX);
-            ensure!(
-                available.saturating_mul(1024)
-                    > info.resident_weight_bytes
-                        + crate::checkpoint::workspace_estimate(options.encoding.max_length),
-                "insufficient available RAM for BF16 CLEF: need approximately {:.1} GiB, available {:.1} GiB",
-                (info.resident_weight_bytes
-                    + crate::checkpoint::workspace_estimate(options.encoding.max_length))
-                    as f64
-                    / (1u64 << 30) as f64,
-                available as f64 / (1u64 << 20) as f64
-            );
-        }
+        crate::memory::require(required)?;
+        let mut engine = Engine::new(context)?;
         let encoder = Encoder::load(options.source.resolve("tokenizer.json")?)?;
         // Files are only mapped while loading, before this method returns.
         let checkpoint = unsafe { Checkpoint::open(&options.source)? };
-        let mut engine = Engine::new(context)?;
         for name in checkpoint.names() {
             if crate::embedding::TABLES.contains(&name) {
                 engine
@@ -195,7 +175,9 @@ impl ClefModel {
         );
         // Safety: NativeState owns every stream, graph and allocation. Stages
         // return owned host results only; the fence drains even on errors.
-        let result = unsafe { self.native.run(|state| state.execute(&record)) }?;
+        let result = unsafe { self.native.run(|state| state.execute(&record)) }
+            .map_err(anyhow::Error::from)
+            .and_then(|result| result);
         if result.is_err() {
             self.failed = true;
         }
@@ -206,24 +188,39 @@ impl ClefModel {
         Self::response(request, &prediction)
     }
     pub fn response(request: &Request, prediction: &Prediction) -> Result<Response> {
+        request.validate()?;
+        ensure!(
+            prediction.questions.len() == request.questions.len(),
+            "prediction question count differs from request"
+        );
         let mut answers = IndexMap::new();
         for q in &prediction.questions {
-            let probabilities = q
+            ensure!(
+                !answers.contains_key(&q.question_id),
+                "duplicate prediction question {}",
+                q.question_id
+            );
+            let question = request
+                .questions
+                .get(&q.question_id)
+                .context("prediction question is absent from request")?;
+            let options = question.options()?;
+            ensure!(
+                q.option_ids.len() == q.probabilities.len() && q.option_ids.len() == options.len(),
+                "prediction option count differs from request"
+            );
+            let probabilities: IndexMap<_, _> = q
                 .option_ids
                 .iter()
                 .cloned()
                 .zip(q.probabilities.iter().copied())
                 .collect();
-            answers.insert(
-                q.question_id.clone(),
-                answer(
-                    request
-                        .questions
-                        .get(&q.question_id)
-                        .context("prediction question is absent from request")?,
-                    &probabilities,
-                )?,
+            ensure!(
+                probabilities.len() == options.len()
+                    && options.iter().all(|(id, _)| probabilities.contains_key(id)),
+                "prediction option IDs differ from request"
             );
+            answers.insert(q.question_id.clone(), answer(question, &probabilities)?);
         }
         Ok(Response {
             model: request.model.clone(),
@@ -240,8 +237,7 @@ impl NativeState {
     fn execute(&mut self, record: &EncodedRecord) -> Result<Prediction> {
         let start = Instant::now();
         let uploaded = self.engine.uploaded;
-        // Exact-input replay cache: all constants/media are part of the key.
-        // Shape-independent reuse can later replace this without changing API.
+        // Include media bytes because EncodedRecord skips them during serialization.
         use sha2::{Digest, Sha256};
         let mut hash = Sha256::new();
         hash.update(serde_json::to_vec(record)?);

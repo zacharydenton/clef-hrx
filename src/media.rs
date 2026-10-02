@@ -115,6 +115,14 @@ pub fn smart_resize(
 ) -> Result<(usize, usize)> {
     ensure!(h > 0 && w > 0 && frames > 0, "empty media");
     ensure!(
+        min >= 1024 && min <= max && max <= 25165824,
+        "invalid media pixel limits"
+    );
+    let pixels = frames
+        .checked_mul(h)
+        .and_then(|n| n.checked_mul(w))
+        .context("media dimensions overflow")?;
+    ensure!(
         h.max(w) as f64 / h.min(w) as f64 <= 200.,
         "media aspect ratio exceeds 200"
     );
@@ -123,13 +131,20 @@ pub fn smart_resize(
     }
     let mut hh = (h as f64 / 32.).round_ties_even() as usize * 32;
     let mut ww = (w as f64 / 32.).round_ties_even() as usize * 32;
-    let t = if video { frames.div_ceil(2) * 2 } else { 1 };
-    if t * hh * ww > max {
+    let t = if video {
+        frames
+            .checked_add(frames % 2)
+            .context("frame count overflow")?
+    } else {
+        1
+    };
+    let rounded_pixels = t.saturating_mul(hh).saturating_mul(ww);
+    if rounded_pixels > max {
         let beta = (frames as f64 * h as f64 * w as f64 / max as f64).sqrt();
         hh = ((h as f64 / beta / 32.).floor() as usize * 32).max(32);
         ww = ((w as f64 / beta / 32.).floor() as usize * 32).max(32);
-    } else if t * hh * ww < min {
-        let beta = (min as f64 / (frames * h * w) as f64).sqrt();
+    } else if rounded_pixels < min {
+        let beta = (min as f64 / pixels as f64).sqrt();
         hh = (h as f64 * beta / 32.).ceil() as usize * 32;
         ww = (w as f64 * beta / 32.).ceil() as usize * 32;
     }
@@ -375,25 +390,16 @@ pub fn prepare(
     Ok(out)
 }
 pub fn prepare_paths(request: &Request, budget: usize) -> Result<PreparedMedia> {
-    let images = request
-        .images
-        .iter()
-        .map(|p| {
-            image::open(p)
-                .map(|v| v.to_rgb8())
-                .with_context(|| format!("image {p}"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut out = prepare(&images, &[], &request.media_kwargs, budget)?;
-    if !out.items.is_empty() {
-        out.prompt.pop();
+    let mut out = PreparedMedia::default();
+    let mut remaining = budget;
+    for path in &request.images {
+        let image = image::open(path)
+            .with_context(|| format!("image {path}"))?
+            .to_rgb8();
+        let v = item(&[image], &[0], 1., false, &request.media_kwargs, remaining)?;
+        remaining -= v.grid.iter().product::<usize>() / 4;
+        append(&mut out, v);
     }
-    let mut remaining = budget
-        - out
-            .items
-            .iter()
-            .map(|v| v.grid.iter().product::<usize>() / 4)
-            .sum::<usize>();
     for path in &request.videos {
         let (frames, indices, fps) = decode_video(Path::new(path), &request.media_kwargs)?;
         let v = item(
@@ -418,6 +424,8 @@ fn decode_video(path: &Path, options: &MediaOptions) -> Result<(Vec<RgbImage>, V
         "video must be a local file: {}",
         path.display()
     );
+    // Absolute paths also prevent leading '-' filenames from becoming options.
+    let path = path.canonicalize()?;
     let probe = Command::new("ffprobe")
         .args([
             "-v",
@@ -426,11 +434,12 @@ fn decode_video(path: &Path, options: &MediaOptions) -> Result<(Vec<RgbImage>, V
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height,r_frame_rate,nb_read_frames",
+            "stream=width,height,avg_frame_rate,r_frame_rate,nb_read_frames",
             "-of",
             "json",
         ])
-        .arg(path)
+        .arg(&path)
+        .stdin(Stdio::null())
         .output()
         .context("ffprobe is required for video files")?;
     ensure!(
@@ -446,9 +455,15 @@ fn decode_video(path: &Path, options: &MediaOptions) -> Result<(Vec<RgbImage>, V
         w > 0 && h > 0 && w <= 8192 && h <= 8192,
         "unsupported video dimensions"
     );
-    let rate = s["r_frame_rate"].as_str().context("video fps")?;
-    let (a, b) = rate.split_once('/').context("video rate")?;
-    let fps = a.parse::<f64>()? / b.parse::<f64>()?;
+    // r_frame_rate can reflect the container timebase for short clips.
+    let fps = ["avg_frame_rate", "r_frame_rate"]
+        .into_iter()
+        .find_map(|key| {
+            let (a, b) = s[key].as_str()?.split_once('/')?;
+            let rate = a.parse::<f64>().ok()? / b.parse::<f64>().ok()?;
+            (rate.is_finite() && rate > 0.).then_some(rate)
+        })
+        .context("video fps")?;
     let total = s["nb_read_frames"]
         .as_str()
         .context("video frame count")?
@@ -474,9 +489,11 @@ fn decode_video(path: &Path, options: &MediaOptions) -> Result<(Vec<RgbImage>, V
             .join("+")
     );
     let mut child = Command::new("ffmpeg")
-        .args(["-v", "error", "-noautorotate", "-i"])
-        .arg(path)
+        .args(["-v", "error", "-nostdin", "-noautorotate", "-i"])
+        .arg(&path)
         .args([
+            "-map",
+            "0:v:0",
             "-vf",
             &filter,
             "-fps_mode",
@@ -487,6 +504,7 @@ fn decode_video(path: &Path, options: &MediaOptions) -> Result<(Vec<RgbImage>, V
             "rgb24",
             "pipe:1",
         ])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -513,4 +531,53 @@ fn decode_video(path: &Path, options: &MediaOptions) -> Result<(Vec<RgbImage>, V
     let frames = read?;
     ensure!(status.success(), "ffmpeg decode failed");
     Ok((frames, indices, fps))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires ffmpeg and ffprobe"]
+    fn decode_uses_the_probed_video_stream() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("streams.mkv");
+        let output = Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-nostdin",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red:s=32x32:r=2:d=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=blue:s=64x64:r=2:d=1",
+                "-map",
+                "0:v",
+                "-map",
+                "1:v",
+                "-c:v",
+                "ffv1",
+            ])
+            .arg(&path)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "fixture: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // FFmpeg's automatic selection prefers the larger second stream.
+        let (frames, indices, fps) = decode_video(&path, &MediaOptions::default())?;
+        assert_eq!(indices, [0, 1]);
+        assert_eq!(fps, 2.);
+        assert_eq!(frames.len(), 2);
+        for frame in frames {
+            assert_eq!(frame.dimensions(), (32, 32));
+            assert!(frame.pixels().all(|p| p[0] > 240 && p[1] < 10 && p[2] < 10));
+        }
+        Ok(())
+    }
 }

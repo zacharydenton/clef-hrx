@@ -1,4 +1,4 @@
-//! Audited raw HRX graph boundary. Tensor leases govern scratch reuse while
+//! HRX graph execution. Tensor leases govern scratch reuse while
 //! byte-range access declarations order reuse inside a recorded graph.
 use crate::Result;
 use anyhow::{Context, ensure};

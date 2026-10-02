@@ -447,7 +447,6 @@ dependencies = [
  "hrx-rs",
  "image",
  "indexmap",
- "safetensors",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1280,7 +1279,9 @@ dependencies = [
 
 [[package]]
 name = "hrx-rs"
-version = "0.8.15"
+version = "0.8.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdbec3111a219e3b33d23d0f71e13c61362d54e13896a515a6fc4e1f165ef461"
 dependencies = [
  "flate2",
  "hf-hub",

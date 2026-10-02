@@ -94,6 +94,10 @@ fn media_layout_temporal_padding_and_positions() {
         [0, 3, 6, 9]
     );
     assert!(smart_resize(1, 1000, 1, 1024, 2048, false).is_err());
+    assert!(smart_resize(32, 32, 1, 1024, 0, false).is_err());
+    assert!(smart_resize(32, 32, 1, 2048, 1024, false).is_err());
+    assert!(smart_resize(usize::MAX, usize::MAX, 1, 1024, 2048, false).is_err());
+    assert!(smart_resize(32, 32, usize::MAX, 1024, 2048, true).is_err());
     assert!(
         prepare(
             &[image::RgbImage::new(100, 100)],
@@ -457,5 +461,56 @@ fn full_checkpoint_corpus() -> crate::Result<()> {
         "full corpus failures: {}",
         failures.join("; ")
     );
+    Ok(())
+}
+
+#[test]
+fn invalid_length_fails_before_model_loading() {
+    for max_length in [0, 16385, usize::MAX] {
+        let result = crate::ClefModel::load(crate::LoadOptions {
+            encoding: EncodeOptions {
+                max_length,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(result.err().unwrap().to_string().contains("max_length"));
+    }
+}
+
+#[test]
+fn response_rejects_incomplete_or_mismatched_predictions() -> crate::Result<()> {
+    use crate::{ClefModel, Prediction, model::QuestionPrediction};
+    let request: Request = serde_json::from_value(json!({
+        "model": "clef", "state": "test",
+        "questions": {"a": {"type": "noul"}, "b": {"type": "noul"}}
+    }))?;
+    let valid = Prediction {
+        questions: ["a", "b"]
+            .map(|id| QuestionPrediction {
+                question_id: id.into(),
+                option_ids: vec!["true".into(), "false".into()],
+                logits: vec![0., 0.],
+                probabilities: vec![0.5, 0.5],
+            })
+            .into(),
+        input_tokens: 100,
+        timings: Default::default(),
+    };
+    assert_eq!(ClefModel::response(&request, &valid)?.answers.len(), 2);
+    let mut missing = valid.clone();
+    missing.questions.pop();
+    assert!(ClefModel::response(&request, &missing).is_err());
+    let mut duplicate = valid.clone();
+    duplicate.questions[1].question_id = "a".into();
+    assert!(ClefModel::response(&request, &duplicate).is_err());
+    for ids in [vec!["true", "true"], vec!["true", "other"], vec!["true"]] {
+        let mut bad = valid.clone();
+        bad.questions[0].option_ids = ids.into_iter().map(String::from).collect();
+        assert!(ClefModel::response(&request, &bad).is_err());
+    }
+    let mut truncated = valid.clone();
+    truncated.questions[0].probabilities.pop();
+    assert!(ClefModel::response(&request, &truncated).is_err());
     Ok(())
 }

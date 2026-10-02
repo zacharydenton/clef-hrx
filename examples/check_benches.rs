@@ -1,4 +1,4 @@
-//! Compare named Criterion baselines. Missing or invalid evidence fails closed.
+//! Compare paired measurements or named Criterion baselines.
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::path::Path;
@@ -125,7 +125,7 @@ fn main() -> Result<()> {
             )?;
             ensure!(
                 data.fingerprint == support::fingerprint(),
-                "stale benchmark evidence for {}: kernel sources changed",
+                "stale benchmark evidence for {}: sources or dependencies changed",
                 gate.benchmark
             );
             ensure!(!data.run_id.is_empty(), "missing paired run identity");

@@ -22,6 +22,15 @@ impl Default for EncodeOptions {
         }
     }
 }
+impl EncodeOptions {
+    pub(crate) fn validate(self) -> Result<()> {
+        ensure!(
+            (1..=16384).contains(&self.max_length),
+            "max_length must be 1..=16384"
+        );
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncodedQuestion {
     pub question_id: String,
@@ -64,6 +73,8 @@ impl Encoder {
         request: &Request,
         options: EncodeOptions,
     ) -> Result<EncodedRecord> {
+        options.validate()?;
+        request.validate()?;
         let media = crate::media::prepare_paths(request, options.max_length)?;
         self.encode_with_media(request, options, media)
     }
@@ -73,6 +84,7 @@ impl Encoder {
         options: EncodeOptions,
         mut media: PreparedMedia,
     ) -> Result<EncodedRecord> {
+        options.validate()?;
         request.validate()?;
         let mut visual_tokens = 0usize;
         for item in &media.items {
@@ -107,10 +119,6 @@ impl Encoder {
         ensure!(
             visual_tokens <= options.max_length,
             "media exceeds total token budget"
-        );
-        ensure!(
-            (1..=16384).contains(&options.max_length),
-            "max_length must be 1..=16384"
         );
         let mut schema = self.tokens("\n\nSCHEMA FIELDS:\n")?;
         let mut questions = Vec::new();
