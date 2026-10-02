@@ -76,6 +76,14 @@ impl Engine {
         if self.reference_kernels.gemm {
             return self.linear_impl::<false>(x, w, bias);
         }
+        if x.rows >= 128
+            && (1024..=65536).contains(&x.cols)
+            && x.cols.is_multiple_of(64)
+            && (4096..=65536).contains(&w.rows)
+            && w.rows.is_multiple_of(256)
+        {
+            return self.linear_pipelined(x, w, bias);
+        }
         // Larger reductions amortize barriers on prefill-sized matrices. The
         // smaller tile retains occupancy for short sequences and head queries.
         if x.rows >= 128 && x.cols >= 1024 && w.rows >= 1024 {
@@ -124,6 +132,52 @@ impl Engine {
             spec,
             constants,
             [n.div_ceil(64) as u32, m.div_ceil(64) as u32, 1],
+            &[x, w],
+            &out,
+        )?;
+        if let Some(b) = bias {
+            self.binary(&out, &b.reshape(1, n), "addf")
+        } else {
+            Ok(out)
+        }
+    }
+    pub(crate) fn linear_pipelined(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        bias: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let (m, k, n) = (x.rows, x.cols, w.rows);
+        ensure!(
+            x.dtype == DType::Bf16
+                && w.dtype == DType::Bf16
+                && w.cols == k
+                && (1..=16777216).contains(&m)
+                && (64..=65536).contains(&k)
+                && k.is_multiple_of(64)
+                && (256..=65536).contains(&n)
+                && n.is_multiple_of(256),
+            "pipelined GEMM shape/dtype mismatch"
+        );
+        let out = self.alloc(m, n, DType::Bf16)?;
+        let mut spec = Specialization::new("krea2_gemm_bf16_fast");
+        for (key, value) in [
+            ("k_size", k),
+            ("n_size", n),
+            ("k_stride", k),
+            ("m_group", 8.min(m.div_ceil(128))),
+            ("grid_x", n / 256),
+            ("grid_y", m.div_ceil(128)),
+        ] {
+            spec.set_config(format!("krea2.gemm_bf16_fast.{key}"), value.to_string());
+        }
+        let mut constants = Constants::new();
+        constants.push(m as u32)?;
+        self.emit_special(
+            include_str!("../kernels/gemm_bf16_pipelined.loom"),
+            spec,
+            constants,
+            [(n / 256) as u32, m.div_ceil(128) as u32, 1],
             &[x, w],
             &out,
         )?;
@@ -260,6 +314,54 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151; checks pipelined GEMM row tails and workgroup remapping"]
+    fn pipelined_gemm_parity() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        for (m, k, n) in [
+            (1, 64, 256),
+            (127, 128, 512),
+            (128, 192, 256),
+            (129, 256, 768),
+            (257, 320, 512),
+            (1153, 64, 512),
+        ] {
+            let values = |len, factor| {
+                (0..len)
+                    .map(|i| half::bf16::from_f32(((i * factor % 251) as f32 - 125.) / 128.))
+                    .collect::<Vec<_>>()
+            };
+            let x = engine
+                .input(
+                    m + 1,
+                    k,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values((m + 1) * k, 17)),
+                )?
+                .slice_rows(1, m);
+            let w = engine
+                .input(
+                    n + 1,
+                    k,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values((n + 1) * k, 31)),
+                )?
+                .slice_rows(1, n);
+            let bias = engine.input(1, n, DType::Bf16, bytemuck::cast_slice(&values(n, 7)))?;
+            let old = engine.linear_impl::<false>(&x, &w, Some(&bias))?;
+            let new = engine.linear_pipelined(&x, &w, Some(&bias))?;
+            let mut graph = engine.finish()?;
+            engine.run(&mut graph)?;
+            let actual = engine.read_f32(&new)?;
+            assert_eq!(actual, engine.read_f32(&old)?, "{m}x{k}x{n}");
+            engine.run(&mut graph)?;
+            assert_eq!(actual, engine.read_f32(&new)?, "replay {m}x{k}x{n}");
+            engine.reset_plan()?;
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires gfx1151; checks GEMM tiles, tails, and sliced inputs"]

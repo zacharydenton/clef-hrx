@@ -10,6 +10,9 @@
 - `kernels/gemm_bf16.loom` and `kernels/gemm_bf16_reference.loom` are adapted from
   Zachary Denton's `qwen-image-hrx` `gemm_bf16_bf16_nt.loom` (MIT); see
   `licenses/qwen-image-hrx-MIT.txt`.
+- `kernels/gemm_bf16_pipelined.loom` comes from qwen-image-hrx's
+  `gemm_bf16_fast.loom`, itself adapted from h3-hrx's `gemm_f16_fast_256b.loom`
+  (MIT). Its source header is retained; see `licenses/qwen-image-hrx-MIT.txt`.
 - Resize coefficient quantization follows PyTorch's
   `aten/src/ATen/native/cpu/UpSampleKernel.cpp` algorithm. PyTorch is BSD-3-Clause
   (see `licenses/pytorch-BSD.txt`); the bicubic filter and resampling algorithm

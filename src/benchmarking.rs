@@ -18,8 +18,26 @@ pub struct GemmBenchmark {
     output: Tensor,
     _context: ModelContext,
 }
+pub enum GemmKernel {
+    Reference,
+    Wide,
+    Pipelined,
+    Auto,
+}
 impl GemmBenchmark {
     pub fn new(m: usize, k: usize, n: usize, optimized: bool) -> Result<Self> {
+        Self::with_kernel(
+            m,
+            k,
+            n,
+            if optimized {
+                GemmKernel::Auto
+            } else {
+                GemmKernel::Reference
+            },
+        )
+    }
+    pub fn with_kernel(m: usize, k: usize, n: usize, kernel: GemmKernel) -> Result<Self> {
         anyhow::ensure!(
             (1..=1024).contains(&m) && (1..=17408).contains(&k) && (1..=17408).contains(&n),
             "unsupported GEMM benchmark shape"
@@ -33,10 +51,11 @@ impl GemmBenchmark {
         };
         let x = engine.input(m, k, DType::Bf16, bytemuck::cast_slice(&values(m * k)))?;
         let w = engine.input(n, k, DType::Bf16, bytemuck::cast_slice(&values(n * k)))?;
-        let output = if optimized {
-            engine.linear(&x, &w, None)?
-        } else {
-            engine.linear_impl::<false>(&x, &w, None)?
+        let output = match kernel {
+            GemmKernel::Auto => engine.linear(&x, &w, None)?,
+            GemmKernel::Reference => engine.linear_impl::<false>(&x, &w, None)?,
+            GemmKernel::Wide => engine.linear_impl::<true>(&x, &w, None)?,
+            GemmKernel::Pipelined => engine.linear_pipelined(&x, &w, None)?,
         };
         let mut graph = engine.finish()?;
         engine.run(&mut graph)?;

@@ -1,9 +1,18 @@
-use clef_hrx::benchmarking::GemmBenchmark;
+use clef_hrx::benchmarking::{GemmBenchmark, GemmKernel};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::time::{Duration, Instant};
 
 fn benches(c: &mut Criterion) {
-    let mut group = c.benchmark_group("gemm");
+    comparisons(c, false);
+    comparisons(c, true);
+}
+
+fn comparisons(c: &mut Criterion, wide_reference: bool) {
+    let mut group = c.benchmark_group(if wide_reference {
+        "gemm_pipelined"
+    } else {
+        "gemm"
+    });
     group
         .sample_size(20)
         .warm_up_time(Duration::from_secs(1))
@@ -12,12 +21,28 @@ fn benches(c: &mut Criterion) {
         (7, 1024, 1024),
         (65, 5120, 5120),
         (128, 5120, 17408),
+        (128, 5120, 5120),
         (260, 5120, 17408),
         (260, 17408, 5120),
+        (260, 6144, 5120),
         (260, 5120, 1024),
+        (256, 1280, 5120),
         (1024, 5120, 17408),
     ] {
-        let mut reference = GemmBenchmark::new(m, k, n, false).unwrap();
+        if wide_reference && (m < 128 || n < 4096) {
+            continue;
+        }
+        let mut reference = GemmBenchmark::with_kernel(
+            m,
+            k,
+            n,
+            if wide_reference {
+                GemmKernel::Wide
+            } else {
+                GemmKernel::Reference
+            },
+        )
+        .unwrap();
         let mut optimized = GemmBenchmark::new(m, k, n, true).unwrap();
         assert_eq!(
             reference.output().unwrap(),
@@ -48,12 +73,14 @@ fn benches(c: &mut Criterion) {
                 elapsed
             });
         });
-        eprintln!(
-            "{m}x{k}x{n}: reference={:.3} ms, optimized={:.3} ms, speedup={:.2}x ({runs} pairs)",
-            old_total.as_secs_f64() * 1000. / runs as f64,
-            new_total.as_secs_f64() * 1000. / runs as f64,
-            old_total.as_secs_f64() / new_total.as_secs_f64()
-        );
+        if runs > 0 {
+            eprintln!(
+                "{m}x{k}x{n}: reference={:.3} ms, optimized={:.3} ms, speedup={:.2}x ({runs} pairs)",
+                old_total.as_secs_f64() * 1000. / runs as f64,
+                new_total.as_secs_f64() * 1000. / runs as f64,
+                old_total.as_secs_f64() / new_total.as_secs_f64()
+            );
+        }
     }
     group.finish();
 }

@@ -137,9 +137,11 @@ It accepts an optional request JSON path and uses the cached checkpoint with a
 1,536-token limit. Diagnostic timings include serialization barriers; use the
 inference benchmark for end-to-end latency.
 
-The GEMM benchmark compares the original 32-element reduction tile with the
-shape-selected kernel and checks identical outputs. Small matrices retain the
-original tile. To compare normalization and GEMM changes within one loaded model:
+The GEMM benchmark compares the original kernel with automatic selection and
+checks identical outputs. Large compatible matrices use the pipelined 128×256
+kernel from qwen-image-hrx; other shapes use the K64 or original K32 kernel.
+The `gemm_pipelined` group also compares against K64 directly. To compare
+normalization and GEMM changes within one loaded model:
 
 ```sh
 cargo run --release --locked --features bench-internals --example compare_inference
