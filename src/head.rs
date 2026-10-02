@@ -125,14 +125,7 @@ pub(crate) fn forward(e: &mut Engine, hidden: &Tensor, record: &EncodedRecord) -
         lexical_ids.extend_from_slice(&record.input_ids[*start..*end]);
         lexical_spans.push([s, lexical_ids.len()]);
     }
-    let ids = e.input(
-        lexical_ids.len(),
-        1,
-        DType::U32,
-        bytemuck::cast_slice(&lexical_ids),
-    )?;
-    let embeddings = e.w("lm_head.weight")?;
-    let lexical_tokens = e.gather(&embeddings, &ids)?;
+    let lexical_tokens = e.embedding("lm_head.weight", &lexical_ids)?;
     let lexical = e.pool_spans(&lexical_tokens, &lexical_spans)?;
     drop(lexical_tokens);
     let repeats: Vec<u32> = record
@@ -228,12 +221,10 @@ mod tests {
             e.weight(format!("head.{name}"), rows, cols, t.bytes)?;
         }
         let fixture = FileView::read("tests/fixtures/head.safetensors")?;
-        e.weight(
+        e.embedding_rows.insert(
             "lm_head.weight".into(),
-            32,
-            5120,
-            fixture.get("embeddings")?.bytes,
-        )?;
+            crate::embedding::EmbeddingRows::open(&fixture, "embeddings")?,
+        );
         let hidden = e.input(24, 5120, DType::Bf16, fixture.get("hidden")?.bytes)?;
         let data: serde_json::Value =
             serde_json::from_slice(&std::fs::read("tests/fixtures/head.json")?)?;

@@ -227,6 +227,7 @@ fn local_checkpoint_validation_and_offline_failures() {
     let info = source.inspect().unwrap();
     assert_eq!(info.backbone_layers, 64);
     assert_eq!(info.weight_bytes, 54969569768);
+    assert_eq!(info.resident_weight_bytes, 49883976168);
     let mut config: Value = serde_json::from_str(include_str!("../reference/config.json")).unwrap();
     config["text_config"]["hidden_size"] = json!(42);
     std::fs::write(
@@ -323,7 +324,38 @@ fn corpus_encoding_parity() -> crate::Result<()> {
 }
 
 #[test]
-#[ignore = "requires gfx1151, cached full checkpoint, ffmpeg, and at least 55 GiB available RAM; run alone"]
+#[ignore = "requires the pinned checkpoint in the shared HF cache; reads only selected embedding rows"]
+fn cached_embedding_row_parity() -> crate::Result<()> {
+    let source = crate::checkpoint::Source {
+        offline: true,
+        ..Default::default()
+    };
+    // Cached checkpoint files remain immutable for the lifetime of these mappings.
+    let checkpoint = unsafe { crate::checkpoint::Checkpoint::open(&source)? };
+    let ids = [248319, 0, 151643, 1, 248319];
+    let mut cases = Vec::new();
+    for name in crate::embedding::TABLES {
+        let tensor = checkpoint.tensor(name)?;
+        let row_bytes = tensor.shape[1] * 2;
+        let expected: Vec<u8> = ids
+            .iter()
+            .flat_map(|&id| {
+                let start = id as usize * row_bytes;
+                tensor.bytes[start..start + row_bytes].iter().copied()
+            })
+            .collect();
+        cases.push((checkpoint.embedding_rows(name)?, expected));
+    }
+    drop(checkpoint);
+    // Row readers remain usable after the loader releases every mapping.
+    for (rows, expected) in cases {
+        assert_eq!(rows.read(&ids)?, expected);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires gfx1151, cached full checkpoint, ffmpeg, and at least 50 GiB available RAM; run alone"]
 fn full_checkpoint_corpus() -> crate::Result<()> {
     use crate::{ClefModel, LoadOptions, checkpoint::Source};
     let mut model = ClefModel::load(LoadOptions {

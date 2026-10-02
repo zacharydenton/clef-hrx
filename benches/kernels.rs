@@ -40,11 +40,19 @@ fn paired(c: &mut Criterion) {
         .as_nanos()
         .to_string();
     let fingerprint = support::fingerprint();
+    let measurement_seconds = std::env::var("CLEF_BENCH_PAIRED_SECONDS")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .expect("CLEF_BENCH_PAIRED_SECONDS must be an integer")
+        })
+        .unwrap_or(8);
+    assert!((1..=300).contains(&measurement_seconds));
     let mut group = c.benchmark_group("paired_delta_prefill");
     group
         .sample_size(40)
         .warm_up_time(Duration::from_secs(1))
-        .measurement_time(Duration::from_secs(8));
+        .measurement_time(Duration::from_secs(measurement_seconds));
     for tokens in [65, 260, 1024] {
         let mut reference = DeltaBenchmark::reference(tokens).unwrap();
         let mut optimized = DeltaBenchmark::new(tokens, true).unwrap();
@@ -96,7 +104,7 @@ fn paired(c: &mut Criterion) {
             root.join("paired.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
             "tokens":tokens,"allocated_bytes":allocated,"sample_size":40,"samples":samples,
-            "run_id":run_id,"fingerprint":fingerprint
+            "run_id":run_id,"fingerprint":fingerprint,"measurement_seconds":measurement_seconds
             }))
             .unwrap(),
         )

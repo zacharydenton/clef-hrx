@@ -2,7 +2,7 @@ use crate::{
     Result,
     checkpoint::{Checkpoint, Source},
     encoding::{EncodeOptions, EncodedRecord, Encoder},
-    gpu::{DType, Engine, Tensor},
+    gpu::{Engine, Tensor},
     schema::{Request, Response, Usage, answer, softmax},
 };
 use anyhow::{Context, ensure};
@@ -74,7 +74,7 @@ impl NativeState {
     }
 }
 impl ClefModel {
-    /// Loads the pinned checkpoint. Local files must remain unmodified during loading.
+    /// Loads the pinned checkpoint. Local files must remain unmodified while the model is alive.
     pub fn load(options: LoadOptions) -> Result<Self> {
         let manager = ResidencyManager::new(options.memory_budget_bytes)?;
         let context = ModelContext::new(RuntimeOptions {
@@ -84,15 +84,16 @@ impl ClefModel {
         })?;
         Self::load_in(&context, options)
     }
+    /// Uses an existing context. Checkpoint files must remain unmodified while the model is alive.
     pub fn load_in(context: &ModelContext, options: LoadOptions) -> Result<Self> {
         let info = options.source.inspect()?;
         ensure!(
-            info.weight_bytes as usize
+            info.resident_weight_bytes as usize
                 + crate::checkpoint::workspace_estimate(options.encoding.max_length) as usize
                 <= options.memory_budget_bytes,
             "memory budget cannot fit weights and configured workspace"
         );
-        // Check OS availability before touching 55 GB of weights. No process is
+        // Check OS availability before loading resident weights. No process is
         // terminated and no hidden swap/offload fallback is attempted.
         if let Ok(mem) = std::fs::read_to_string("/proc/meminfo") {
             let available = mem
@@ -105,10 +106,10 @@ impl ClefModel {
                 .unwrap_or(u64::MAX);
             ensure!(
                 available.saturating_mul(1024)
-                    > info.weight_bytes
+                    > info.resident_weight_bytes
                         + crate::checkpoint::workspace_estimate(options.encoding.max_length),
                 "insufficient available RAM for BF16 CLEF: need approximately {:.1} GiB, available {:.1} GiB",
-                (info.weight_bytes
+                (info.resident_weight_bytes
                     + crate::checkpoint::workspace_estimate(options.encoding.max_length))
                     as f64
                     / (1u64 << 30) as f64,
@@ -120,6 +121,12 @@ impl ClefModel {
         let checkpoint = unsafe { Checkpoint::open(&options.source)? };
         let mut engine = Engine::new(context)?;
         for name in checkpoint.names() {
+            if crate::embedding::TABLES.contains(&name) {
+                engine
+                    .embedding_rows
+                    .insert(name.into(), checkpoint.embedding_rows(name)?);
+                continue;
+            }
             let tensor = checkpoint.tensor(name)?;
             let rows = tensor.shape.first().copied().unwrap_or(1);
             let cols = tensor.shape.iter().skip(1).product::<usize>();
@@ -246,14 +253,10 @@ impl NativeState {
         if self.plan.as_ref().is_none_or(|p| p.key != key) {
             self.plan = None;
             self.engine.reset_plan()?;
-            let ids = self.engine.input(
-                record.input_ids.len(),
-                1,
-                DType::U32,
-                bytemuck::cast_slice(&record.input_ids),
+            let x = self.engine.embedding(
+                "model.language_model.embed_tokens.weight",
+                &record.input_ids,
             )?;
-            let embeddings = self.engine.w("model.language_model.embed_tokens.weight")?;
-            let x = self.engine.gather(&embeddings, &ids)?;
             for item in &record.media.items {
                 let features = crate::vision::forward(&mut self.engine, item)?;
                 let mut offset = 0;

@@ -31,10 +31,14 @@ cargo build --release --locked
 `--offline` uses cached files; `--model-dir /path/to/snapshot` uses a local
 release. The loader checks all 1,184 backbone tensors and 122 head tensors,
 including shape, dtype, and shard membership. Local files must remain unchanged
-while loading. Transfers use bounded 16 MiB staging chunks.
+while the model is alive. Transfers use bounded 16 MiB staging chunks.
 
-Weights occupy about 51.2 GiB, plus workspace and staging. Allow at least 55 GiB
-**available** RAM for short requests. The loader checks `MemAvailable` before
+The checkpoint occupies about 51.2 GiB; resident weights use 46.5 GiB, plus
+workspace and staging. Rust reads only the requested BF16 rows from the input
+and lexical embedding tables, saving 4.7 GiB without changing precision.
+Changed requests incur row reads and uploads; identical-input graph replay
+reuses the uploaded rows. `inspect` reports both total and resident weight bytes.
+Allow at least 50 GiB **available** RAM for short requests. The loader checks `MemAvailable` before
 loading and rechecks during large allocations. `--memory-gib` is an allocation
 budget (default 80), not a reservation. The default input limit is 16,384 tokens;
 use `--max-length` to limit workspace. `--max-state-tokens` limits state text.
@@ -62,8 +66,9 @@ exclusive. Pixel defaults match the pinned processor.
 owned host results. `media::prepare` accepts RGB images and `VideoFrames`;
 `infer_with_media` accepts prepared input. `Encoder` works without GPU/weights.
 
-Weights remain resident. Scratch leases and byte-range graph dependencies allow
-allocation reuse. Requests execute sequentially through HRX `NativeSession`.
+Transformer and decision-head weights remain resident. Scratch leases and
+byte-range graph dependencies allow allocation reuse. Requests execute
+sequentially through HRX `NativeSession`.
 One exact-input graph is cached; input changes rebuild it while reusing kernels
 and allocation capacity. Failed native execution requires reloading the model.
 DeltaNet uses 64-token chunkwise prefill above 64 tokens and an independent
@@ -75,7 +80,7 @@ recurrent path for shorter sequences. Attention uses bounded-memory online softm
 cargo fmt --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked
-# GPU operators/head, cached tokenizer, and ffmpeg; excludes the 55 GiB run:
+# GPU operators/head, cached tokenizer, and ffmpeg; excludes the full-model run:
 cargo test --locked --lib -- --include-ignored --skip full_checkpoint_corpus --test-threads=1
 # Full checkpoint corpus, run alone when RAM is available:
 cargo test --release --locked --lib full_checkpoint_corpus -- --ignored --nocapture --test-threads=1
@@ -84,7 +89,9 @@ cargo test --release --locked --lib full_checkpoint_corpus -- --ignored --nocapt
 Tests cover canonical JSON, schema ordering, response semantics, invalid inputs,
 checkpoint validation, exact token/position fixtures, bicubic patch fixtures,
 nonzero GEMM/attention/DeltaNet references, state reset, scratch reuse, and the
-trained head. Tests read captured reference data directly in Rust. GPU and cache
+trained head. Embedding tests check exact BF16 row bytes, duplicate and reordered
+IDs, file bounds, and both real checkpoint tables after mappings are released.
+Tests read captured reference data directly in Rust. GPU and cache
 requirements are explicit `#[ignore]` annotations; no silent test skipping.
 
 The full-model corpus covers all question types, Unicode/JSON, longer text,
@@ -96,8 +103,9 @@ not a claim of qualification against the release's Torch 2.11 environment.
 **Experimental:** operator/head and preprocessing parity have passed locally.
 Earlier full-model text/image runs agreed within 0.0002 probability error.
 The full corpus still needs rerunning after the Loom migration, chunked-prefill
-switch, and video-marker fix, when sufficient RAM is available. Hardware support
-is currently limited to gfx1151.
+switch, video-marker fix, and embedding-row loading, when sufficient RAM is
+available. The latest attempt stopped at preflight: 49.1 GiB required versus
+24.9 GiB available. Hardware support is currently limited to gfx1151.
 
 ## Criterion benchmarks
 
@@ -110,7 +118,7 @@ cargo bench --locked --features bench-internals --bench kernels -- paired_delta_
 cargo run --locked --example check_benches -- target/criterion paired
 # Diagnostic per-kernel GPU timestamps (serialized, not throughput evidence):
 cargo run --release --locked --features bench-internals --example profile_delta -- 260
-# Opt-in, cached checkpoint, at least 55 GiB available RAM:
+# Opt-in, cached checkpoint, at least 50 GiB available RAM:
 CLEF_BENCH_FULL_MODEL=1 cargo bench --locked --bench inference
 ```
 
@@ -151,20 +159,28 @@ interval across 40 measurement batches. Missing data, different run identities,
 or changed kernel sources fail the check. Calibration/warmup calls are excluded.
 Results are written under `target/criterion`; run all three paired sizes together
 from the repository root. Use an idle GPU for reproducible absolute timings.
+Set `CLEF_BENCH_PAIRED_SECONDS=30` for a longer measurement under contention
+(default 8 seconds per size, allowed range 1–300). This changes sampling time,
+not the sample count or acceptance thresholds.
 Named before/after Criterion baselines can also be compared with
 `check_benches target/criterion before after`; paired evidence is preferable on
 a shared machine. Benchmark checks supplement the unit tests and the separate
 full-checkpoint qualification; they do not replace either.
 
-Saved paired results are under `benches/results/gfx1151`. This run shared a GPU
+Saved paired results are under `benches/results/gfx1151`. The 30-second-target run shared a GPU
 that was observed at 99–100% utilization between our runs; absolute latency is
 not representative of an idle device. The paired acceptance checks passed:
 
 | Tokens | New / old time | Upper 95% ratio | Required maximum | Combined allocations |
 | --- | ---: | ---: | ---: | ---: |
-| 65 | 0.775 | 0.976 | 1.050 | 77.6 MiB |
-| 260 | 0.547 | 0.626 | 0.800 | 89.8 MiB |
-| 1,024 | 0.596 | 0.740 | 0.800 | 137.7 MiB |
+| 65 | 0.715 | 0.775 | 1.050 | 77.6 MiB |
+| 260 | 0.641 | 0.680 | 0.800 | 89.8 MiB |
+| 1,024 | 0.586 | 0.675 | 0.800 | 137.7 MiB |
+
+The preceding 8-second-target run is retained under `benches/results/gfx1151/contention`.
+It failed the 260-token gate (ratio 0.714, upper bound 0.902). Longer sampling
+resolved the uncertainty without changing kernels or thresholds. Both runs
+passed numerical and allocation checks; neither measures full-model performance.
 
 Verify the saved evidence against the current source:
 

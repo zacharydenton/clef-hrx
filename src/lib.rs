@@ -3,6 +3,7 @@
 mod backbone;
 pub mod checkpoint;
 mod chunk;
+mod embedding;
 pub mod encoding;
 mod gpu;
 mod head;

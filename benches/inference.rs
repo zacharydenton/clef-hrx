@@ -5,7 +5,7 @@ use std::{hint::black_box, time::Duration};
 fn benches(c: &mut Criterion) {
     if std::env::var("CLEF_BENCH_FULL_MODEL").as_deref() != Ok("1") {
         eprintln!(
-            "Full-model benchmark disabled. Set CLEF_BENCH_FULL_MODEL=1 with at least 55 GiB available RAM and a cached checkpoint."
+            "Full-model benchmark disabled. Set CLEF_BENCH_FULL_MODEL=1 with at least 50 GiB available RAM and a cached checkpoint."
         );
         return;
     }

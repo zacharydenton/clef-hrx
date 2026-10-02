@@ -106,6 +106,8 @@ impl Source {
             backbone_layers: 64,
             vision_layers: 27,
             weight_bytes: index.metadata.total_size + head_bytes as u64,
+            resident_weight_bytes: index.metadata.total_size + head_bytes as u64
+                - crate::embedding::TABLE_BYTES,
             files,
             workspace_estimate_bytes: workspace_estimate(16384),
             qualification: "experimental; full-checkpoint parity required".into(),
@@ -133,6 +135,7 @@ pub struct Inspection {
     pub backbone_layers: usize,
     pub vision_layers: usize,
     pub weight_bytes: u64,
+    pub resident_weight_bytes: u64,
     pub workspace_estimate_bytes: u64,
     pub files: Vec<String>,
     pub qualification: String,
@@ -159,6 +162,10 @@ pub struct Checkpoint {
     tensors: BTreeMap<String, usize>,
 }
 impl Checkpoint {
+    pub(crate) fn embedding_rows(&self, name: &str) -> Result<crate::embedding::EmbeddingRows> {
+        let i = *self.tensors.get(name).context("missing embedding tensor")?;
+        crate::embedding::EmbeddingRows::open(&self.files[i], name)
+    }
     /// # Safety
     /// Checkpoint files must remain unchanged while this mapping is alive.
     pub unsafe fn open(source: &Source) -> Result<Self> {
