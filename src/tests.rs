@@ -370,8 +370,11 @@ fn full_checkpoint_corpus() -> crate::Result<()> {
         },
         ..Default::default()
     })?;
+    eprintln!("checkpoint loaded; starting full corpus");
     let mut first = None;
+    let mut failures = Vec::new();
     for case in [0, 1, 2, 3, 4, 5, 6, 7, 0, 0] {
+        eprintln!("case {case}: starting");
         let request: Request = serde_json::from_slice(&std::fs::read(format!(
             "tests/fixtures/corpus/{case}.json"
         ))?)?;
@@ -412,13 +415,27 @@ fn full_checkpoint_corpus() -> crate::Result<()> {
                     .unwrap()
                     .0
             };
-            assert_eq!(
-                winner(&actual.probabilities),
-                winner(&probabilities),
-                "case {case}: winner"
-            );
+            if winner(&actual.probabilities) != winner(&probabilities) {
+                failures.push(format!(
+                    "case {case}: question {} winner",
+                    actual.question_id
+                ));
+            }
+            if actual
+                .probabilities
+                .iter()
+                .zip(&probabilities)
+                .any(|(a, b)| (a - b).abs() > 0.003)
+            {
+                eprintln!(
+                    "case {case}: question {}, actual {:?}, reference {:?}",
+                    actual.question_id, actual.probabilities, probabilities
+                );
+            }
         }
-        assert!(maximum <= 0.003, "case {case}: probability error {maximum}");
+        if maximum > 0.003 {
+            failures.push(format!("case {case}: probability error {maximum}"));
+        }
         eprintln!(
             "case {case}: tokens={}, max_probability_error={maximum:.8}, inference_ms={:.2}, allocated_GiB={:.2}",
             prediction.input_tokens,
@@ -435,5 +452,10 @@ fn full_checkpoint_corpus() -> crate::Result<()> {
             }
         }
     }
+    assert!(
+        failures.is_empty(),
+        "full corpus failures: {}",
+        failures.join("; ")
+    );
     Ok(())
 }

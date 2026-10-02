@@ -6,6 +6,8 @@ pub fn fingerprint() -> String {
         include_str!("../../src/chunk.rs"),
         include_str!("../../src/gpu.rs"),
         include_str!("../../src/ops.rs"),
+        include_str!("../../src/backbone.rs"),
+        include_str!("../../kernels/delta_norm.loom"),
         include_str!("../../kernels/common.loom"),
         include_str!("../../kernels/bmm_f32.loom"),
         include_str!("../../kernels/bmm_f32_reference.loom"),

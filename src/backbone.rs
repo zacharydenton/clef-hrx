@@ -137,6 +137,24 @@ impl Engine {
             .reshape(n, 6144);
         self.cast(&prefix, DType::Bf16)
     }
+    pub fn delta_norm(&mut self, x: &Tensor, w: &Tensor, z: &Tensor) -> Result<Tensor> {
+        anyhow::ensure!(
+            x.cols == 128 && w.len() == 128 && z.len() == x.len(),
+            "DeltaNet gated norm dimensions"
+        );
+        let out = self.alloc(x.rows, x.cols, DType::Bf16)?;
+        self.dispatch(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/delta_norm.loom")
+            ),
+            x.rows * 32,
+            &[("x", x), ("w", w), ("z", z)],
+            &out,
+            &[],
+        )?;
+        Ok(out)
+    }
 }
 
 pub(crate) fn text_rope(positions: &[[u32; 3]]) -> Vec<half::bf16> {
@@ -216,10 +234,8 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             };
             let d = d.reshape(n * 48, 128);
             let w = e.w(&format!("{p}.norm.weight"))?;
-            let d = e.norm(&d, &w, None, 1e-6, false)?.reshape(n, 6144);
             let z = e.project(&norm, &format!("{p}.in_proj_z"), false)?;
-            let z = e.unary(&z, "silu")?;
-            let d = e.binary(&d, &z, "mulf")?;
+            let d = e.delta_norm(&d, &w, &z)?.reshape(n, 6144);
             e.project(&d, &format!("{p}.out_proj"), false)?
         };
         x = e.binary(&x, &attn, "addf")?;
@@ -235,4 +251,58 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
     let x = e.named_norm(&x, "model.language_model.norm", false, 1e-6)?;
     e.trace("hidden", &x);
     Ok(x)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151; compares fused gated RMSNorm with an FP64 oracle"]
+    fn gated_norm_fp64_accuracy() -> Result<()> {
+        let mut e = Engine::new(&hrx::inference::ModelContext::new(Default::default())?)?;
+        let rows = 13;
+        let x: Vec<_> = (0..rows * 128)
+            .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 16.))
+            .collect();
+        let z: Vec<_> = (0..rows * 128)
+            .map(|i| half::bf16::from_f32(((i * 31 % 131) as f32 - 65.) / 16.))
+            .collect();
+        let w: Vec<_> = (0..128)
+            .map(|i| half::bf16::from_f32(0.5 + (i * 7 % 67) as f32 / 64.))
+            .collect();
+        let tx = e.input(rows, 128, DType::Bf16, bytemuck::cast_slice(&x))?;
+        let tz = e.input(rows, 128, DType::Bf16, bytemuck::cast_slice(&z))?;
+        let tw = e.input(1, 128, DType::Bf16, bytemuck::cast_slice(&w))?;
+        let fused = e.delta_norm(&tx, &tw, &tz)?;
+        let old = e.norm(&tx, &tw, None, 1e-6, false)?;
+        let gate = e.unary(&tz, "silu")?;
+        let old = e.binary(&old, &gate, "mulf")?;
+        let mut graph = e.finish()?;
+        e.run(&mut graph)?;
+        let actual = e.read_f32(&fused)?;
+        let old = e.read_f32(&old)?;
+        let mut fused_error = 0.;
+        let mut old_error = 0.;
+        for row in 0..rows {
+            let variance = x[row * 128..(row + 1) * 128]
+                .iter()
+                .map(|v| v.to_f64().powi(2))
+                .sum::<f64>()
+                / 128.;
+            for (col, weight) in w.iter().enumerate() {
+                let i = row * 128 + col;
+                let gate = z[i].to_f64();
+                let expected = x[i].to_f64() / (variance + 1e-6).sqrt() * weight.to_f64() * gate
+                    / (1. + (-gate).exp());
+                let error = (actual[i] as f64 - expected).abs();
+                assert!(error <= expected.abs() / 256. + 1e-6);
+                fused_error += error.powi(2);
+                old_error += (old[i] as f64 - expected).powi(2);
+            }
+        }
+        eprintln!("gated RMSNorm FP64 squared error: fused={fused_error:e}, old={old_error:e}");
+        assert!(fused_error < old_error);
+        Ok(())
+    }
 }

@@ -1,0 +1,78 @@
+// Gated RMSNorm: a wave per row, FP32 intermediates, one final BF16 rounding.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.z_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.z_dtype : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %w_buffer: buffer, %z_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %width = index.constant 128 : index
+ %wave = index.constant 32 : index
+ %four = index.constant 4 : index
+ %wf = scalar.constant 128.0 : f32
+ %eps = scalar.constant 1.0e-6 : f32
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %x_len = config.get @clef.x_len : index
+ %x_dtype = config.get @clef.x_dtype : index
+ %w_len = config.get @clef.w_len : index
+ %w_dtype = config.get @clef.w_dtype : index
+ %z_len = config.get @clef.z_len : index
+ %z_dtype = config.get @clef.z_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+  %record = index.div %id, %wave : index
+  %ll = index.rem %id, %wave : index
+  %row = index.mul %record, %width : index
+  %sum_lane = scf.for %part = [%zero to %four step %one](%acc = %fzero : f32) -> (f32) unroll {
+   %j0 = index.mul %part, %wave : index
+   %j = index.add %j0, %ll : index
+   %p = index.add %row, %j : index
+   %x = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %p) : (index, buffer, index, index) -> (f32)
+   %next = scalar.fmaf %x, %x, %acc : f32
+   scf.yield %next : f32
+  }
+  %sum = kernel.subgroup.reduce<addf> %sum_lane : f32
+  %variance = scalar.divf %sum, %wf : f32
+  %ve = scalar.addf %variance, %eps : f32
+  %inv = scalar.rsqrtf %ve : f32
+  scf.for %part1 = [%zero to %four step %one] unroll {
+   %j10 = index.mul %part1, %wave : index
+   %j1 = index.add %j10, %ll : index
+   %p1 = index.add %row, %j1 : index
+   %x1 = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %p1) : (index, buffer, index, index) -> (f32)
+   %w = template.apply<@clef.load>(%w_dtype, %w_buffer, %w_len, %j1) : (index, buffer, index, index) -> (f32)
+   %z = template.apply<@clef.load>(%z_dtype, %z_buffer, %z_len, %p1) : (index, buffer, index, index) -> (f32)
+   %norm = scalar.mulf %x1, %inv : f32
+   %weighted = scalar.mulf %norm, %w : f32
+   %nz = scalar.negf %z : f32
+   %ez = scalar.expf<afn> %nz : f32
+   %den = scalar.addf %fone, %ez : f32
+   %gate = scalar.divf %z, %den : f32
+   %out = scalar.mulf %weighted, %gate : f32
+   template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %p1, %out) : (index, buffer, index, index, f32) -> ()
+  }
+ }
+ kernel.return
+}

@@ -110,7 +110,8 @@ impl Source {
                 - crate::embedding::TABLE_BYTES,
             files,
             workspace_estimate_bytes: workspace_estimate(16384),
-            qualification: "experimental; full-checkpoint parity required".into(),
+            qualification:
+                "experimental; full corpus has a known BF16-reference probability deviation".into(),
         })
     }
 }

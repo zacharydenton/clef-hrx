@@ -348,6 +348,63 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[ignore = "requires gfx1151; checks FP32 normalization against an independent FP64 oracle"]
+    fn normalization_fp64_accuracy() -> Result<()> {
+        let mut e = Engine::new(&hrx::inference::ModelContext::new(Default::default())?)?;
+        let n = 3;
+        let values: Vec<_> = (0..n * 10240)
+            .map(|i| half::bf16::from_f32(((i * 13 % 251) as f32 - 125.) / 32.))
+            .collect();
+        let qkv = e.input(n, 10240, DType::Bf16, bytemuck::cast_slice(&values))?;
+        let ab = e.input(
+            n,
+            48,
+            DType::Bf16,
+            bytemuck::cast_slice(&vec![half::bf16::ZERO; n * 48]),
+        )?;
+        let al = e.input(
+            1,
+            48,
+            DType::Bf16,
+            bytemuck::cast_slice(&[half::bf16::ZERO; 48]),
+        )?;
+        let prepared = e.chunk_prepare::<true>(&qkv, &ab, &ab, &al, &al)?;
+        let mut graph = e.finish()?;
+        e.run(&mut graph)?;
+        let actual = e.read_f32(&prepared)?;
+        let bf = |x: f64| half::bf16::from_f64(x).to_f64();
+        let mut native_error = 0.;
+        let mut fallback_error = 0.;
+        for head in 0..48 {
+            for token in 0..n {
+                for (offset, output_offset, scale) in [(0, 0, 1. / 128f64.sqrt()), (2048, 128, 1.)]
+                {
+                    let start = token * 10240 + (head / 3) * 128 + offset;
+                    let row = &values[start..start + 128];
+                    let sum: f64 = row.iter().map(|v| v.to_f64().powi(2)).sum();
+                    let inv = (sum + 1e-6).sqrt().recip();
+                    // BF16 CPU fallback rounds squares, sum, epsilon, rsqrt, and product.
+                    let low_sum = bf(row.iter().map(|v| bf(v.to_f64().powi(2))).sum());
+                    let low_inv = bf(bf(low_sum + 1e-6).sqrt().recip());
+                    for (j, value) in row.iter().enumerate() {
+                        let expected = value.to_f64() * inv * scale;
+                        let native = actual[(head * n + token) * 641 + output_offset + j] as f64;
+                        let fallback = bf(value.to_f64() * low_inv) * scale;
+                        assert!((native - expected).abs() < 1e-6);
+                        native_error += (native - expected).powi(2);
+                        fallback_error += (fallback - expected).powi(2);
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "normalization FP64 squared error: native={native_error:e}, BF16 fallback={fallback_error:e}"
+        );
+        assert!(native_error < fallback_error / 10000.);
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "requires gfx1151; compares chunked versus recurrent prefill"]
     fn prefill_comparison() -> Result<()> {
         let mut e = Engine::new(&hrx::inference::ModelContext::new(Default::default())?)?;

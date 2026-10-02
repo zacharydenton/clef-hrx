@@ -12,6 +12,43 @@ pub struct DeltaBenchmark {
     _context: ModelContext,
 }
 impl DeltaBenchmark {
+    /// Compare the previous three-dispatch gated norm with the FP32 fused kernel.
+    pub fn gated_norm(tokens: usize, fused: bool) -> Result<Self> {
+        anyhow::ensure!(
+            (1..=1024).contains(&tokens),
+            "benchmark supports 1..=1024 tokens"
+        );
+        let context = ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        let rows = tokens * 48;
+        let x: Vec<_> = (0..rows * 128)
+            .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 16.))
+            .collect();
+        let z: Vec<_> = (0..rows * 128)
+            .map(|i| half::bf16::from_f32(((i * 31 % 131) as f32 - 65.) / 16.))
+            .collect();
+        let w: Vec<_> = (0..128)
+            .map(|i| half::bf16::from_f32(0.5 + (i * 7 % 67) as f32 / 64.))
+            .collect();
+        let x = engine.input(rows, 128, DType::Bf16, bytemuck::cast_slice(&x))?;
+        let z = engine.input(rows, 128, DType::Bf16, bytemuck::cast_slice(&z))?;
+        let w = engine.input(1, 128, DType::Bf16, bytemuck::cast_slice(&w))?;
+        let output = if fused {
+            engine.delta_norm(&x, &w, &z)?
+        } else {
+            let norm = engine.norm(&x, &w, None, 1e-6, false)?;
+            let gate = engine.unary(&z, "silu")?;
+            engine.binary(&norm, &gate, "mulf")?
+        };
+        let mut graph = engine.finish()?;
+        engine.run(&mut graph)?;
+        Ok(Self {
+            graph,
+            engine,
+            _output: output,
+            _context: context,
+        })
+    }
     pub fn new(tokens: usize, chunked: bool) -> Result<Self> {
         Self::build(tokens, chunked, false, true)
     }

@@ -53,9 +53,26 @@ fn paired(c: &mut Criterion) {
         .sample_size(40)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(measurement_seconds));
-    for tokens in [65, 260, 1024] {
-        let mut reference = DeltaBenchmark::reference(tokens).unwrap();
-        let mut optimized = DeltaBenchmark::new(tokens, true).unwrap();
+    for (name, tokens) in [
+        ("chunked", 65),
+        ("chunked", 260),
+        ("chunked", 1024),
+        ("gated_norm", 260),
+        ("gated_norm", 1024),
+    ] {
+        let norm = name == "gated_norm";
+        let mut reference = if norm {
+            DeltaBenchmark::gated_norm(tokens, false)
+        } else {
+            DeltaBenchmark::reference(tokens)
+        }
+        .unwrap();
+        let mut optimized = if norm {
+            DeltaBenchmark::gated_norm(tokens, true)
+        } else {
+            DeltaBenchmark::new(tokens, true)
+        }
+        .unwrap();
         let allocated = reference.allocated_bytes() + optimized.allocated_bytes();
         assert!(
             allocated <= allocation_limit(),
@@ -65,17 +82,21 @@ fn paired(c: &mut Criterion) {
             let before = reference.output().unwrap();
             let after = optimized.output().unwrap();
             assert_eq!(before.len(), after.len());
-            assert!(
-                before
-                    .iter()
-                    .zip(&after)
-                    .all(|(a, b)| a.is_finite() && b.is_finite() && (a - b).abs() < 0.002)
-            );
+            assert!(before.iter().zip(&after).all(|(a, b)| a.is_finite()
+                && b.is_finite()
+                && (a - b).abs()
+                    < if norm {
+                        // Fusing removes intermediate BF16 rounding. FP64
+                        // oracle tests separately bound each output's error.
+                        a.abs().max(b.abs()) * 0.02 + 1e-6
+                    } else {
+                        0.002
+                    }));
         }
         let mut samples = Vec::new();
         let mut sequence = 0u64;
         group.throughput(Throughput::Elements(tokens as u64));
-        group.bench_function(BenchmarkId::new("chunked",tokens),|b| b.iter_custom(|iterations| {
+        group.bench_function(BenchmarkId::new(name,tokens),|b| b.iter_custom(|iterations| {
             let mut old = Duration::ZERO;
             let mut new = Duration::ZERO;
             for _ in 0..iterations {
@@ -97,7 +118,8 @@ fn paired(c: &mut Criterion) {
             reference.allocated_bytes() + optimized.allocated_bytes(),
             allocated
         );
-        let root = std::path::PathBuf::from("target/criterion/paired_delta_prefill/chunked")
+        let root = std::path::PathBuf::from("target/criterion/paired_delta_prefill")
+            .join(name)
             .join(tokens.to_string());
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(

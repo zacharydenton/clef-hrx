@@ -100,12 +100,18 @@ tokens, winners, a 0.003 maximum probability-error gate, and deterministic repla
 Fixtures record upstream Torch 2.14.0 / Transformers 5.10.2 provenance; they are
 not a claim of qualification against the release's Torch 2.11 environment.
 
-**Experimental:** operator/head and preprocessing parity have passed locally.
-Earlier full-model text/image runs agreed within 0.0002 probability error.
-The full corpus still needs rerunning after the Loom migration, chunked-prefill
-switch, video-marker fix, and embedding-row loading, when sufficient RAM is
-available. The latest attempt stopped at preflight: 49.1 GiB required versus
-24.9 GiB available. Hardware support is currently limited to gfx1151.
+**Experimental:** strict BF16-reference parity has a known probability deviation
+on the incident/outage fixture. The 0.003 gate remains unchanged. The full-corpus
+test reports all numerical failures before failing, so one discrepancy does not
+hide later cases. Hardware support is currently limited to gfx1151.
+
+Arithmetic accuracy and reference compatibility are separate checks. DeltaNet
+L2 normalization retains FP32 intermediates rather than reproducing the CPU
+reference's BF16 rounding. Gated RMSNorm now fuses normalization, weights, and
+SiLU in one wave-cooperative kernel, rounding only its final output to BF16.
+Independent Rust FP64 oracles check both operations and require the fused gated
+norm to reduce error versus the previous three-dispatch path. Operator arithmetic
+checks do not establish whole-model prediction accuracy.
 
 ## Criterion benchmarks
 
@@ -129,20 +135,10 @@ complete `infer` call. `CLEF_MODEL_DIR` can select a local checkpoint for the
 full-model test/benchmark. Per-request diagnostics separately report encoding,
 graph preparation, inference, readback, and allocated/uploaded bytes.
 
-Earlier gfx1151 Criterion estimates before the latest optimization (10 samples;
-synthetic DeltaNet only):
-
-| Tokens | Recurrent | Chunked |
-| --- | ---: | ---: |
-| 65 | 18.13 ms | 2.02 ms |
-| 260 | 67.55 ms | 8.43 ms |
-| 1,024 | 286.32 ms | 32.77 ms |
-
-These measure a single DeltaNet operation, not complete-model latency.
-
 Acceptance criteria live in `benches/criteria.json`: at least 20% faster chunked
-prefill at 260 and 1,024 tokens, at most 5% regression at 65 tokens, and at most
-256 MiB of device allocations for each comparison. The paired benchmark keeps
+prefill at 260 and 1,024 tokens, at most 5% regression at 65 tokens, no slowdown
+for the more accurate gated norm at 260 and 1,024 tokens, and at most 256 MiB
+of device allocations for each comparison. The paired benchmark keeps
 the old and new graphs resident, verifies numerical agreement before measuring,
 alternates execution order, and checks that replay does not grow allocations.
 The original kernels are retained for tests/benchmarks; normal inference selects
@@ -157,7 +153,7 @@ pass, and the existing DeltaNet error tolerance remains 0.002.
 The checker uses the upper endpoint of a 95% paired bootstrap confidence
 interval across 40 measurement batches. Missing data, different run identities,
 or changed kernel sources fail the check. Calibration/warmup calls are excluded.
-Results are written under `target/criterion`; run all three paired sizes together
+Results are written under `target/criterion`; run all five paired checks together
 from the repository root. Use an idle GPU for reproducible absolute timings.
 Set `CLEF_BENCH_PAIRED_SECONDS=30` for a longer measurement under contention
 (default 8 seconds per size, allowed range 1–300). This changes sampling time,
@@ -167,25 +163,12 @@ Named before/after Criterion baselines can also be compared with
 a shared machine. Benchmark checks supplement the unit tests and the separate
 full-checkpoint qualification; they do not replace either.
 
-Saved paired results are under `benches/results/gfx1151`. The 30-second-target run shared a GPU
-that was observed at 99–100% utilization between our runs; absolute latency is
-not representative of an idle device. The paired acceptance checks passed:
-
-| Tokens | New / old time | Upper 95% ratio | Required maximum | Combined allocations |
-| --- | ---: | ---: | ---: | ---: |
-| 65 | 0.715 | 0.775 | 1.050 | 77.6 MiB |
-| 260 | 0.641 | 0.680 | 0.800 | 89.8 MiB |
-| 1,024 | 0.586 | 0.675 | 0.800 | 137.7 MiB |
-
-The preceding 8-second-target run is retained under `benches/results/gfx1151/contention`.
-It failed the 260-token gate (ratio 0.714, upper bound 0.902). Longer sampling
-resolved the uncertainty without changing kernels or thresholds. Both runs
-passed numerical and allocation checks; neither measures full-model performance.
-
-Verify the saved evidence against the current source:
+Generated benchmark and test results stay local; `target/`, `artifacts/`,
+`benches/results/`, and `tests/results/` are excluded from Git. Verify local
+paired measurements against the current source:
 
 ```sh
-cargo run --locked --example check_benches -- benches/results/gfx1151 paired
+cargo run --locked --example check_benches -- target/criterion paired
 cargo test --locked --example check_benches
 ```
 
