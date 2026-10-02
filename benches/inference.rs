@@ -1,6 +1,9 @@
 use clef_hrx::{ClefModel, EncodeOptions, LoadOptions, Request, checkpoint::Source};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use std::{hint::black_box, time::Duration};
+use std::{
+    hint::black_box,
+    time::{Duration, Instant},
+};
 
 fn benches(c: &mut Criterion) {
     if std::env::var("CLEF_BENCH_FULL_MODEL").as_deref() != Ok("1") {
@@ -10,6 +13,7 @@ fn benches(c: &mut Criterion) {
         return;
     }
     let request: Request = serde_json::from_str(include_str!("../examples/invoice.json")).unwrap();
+    let started = Instant::now();
     let mut model = ClefModel::load(LoadOptions {
         source: Source {
             directory: std::env::var_os("CLEF_MODEL_DIR").map(Into::into),
@@ -23,7 +27,15 @@ fn benches(c: &mut Criterion) {
         ..Default::default()
     })
     .expect("full-model memory preflight and checkpoint loading");
+    eprintln!("Model load: {:.3} s", started.elapsed().as_secs_f64());
     let warmup = model.infer(&request).unwrap();
+    eprintln!("First invoice: {:?}", warmup.timings);
+    let mut changed = request.clone();
+    changed.state["invoice"]["total"] = serde_json::json!(1251.0);
+    let original_ids = model.encode_record(&request).unwrap().input_ids;
+    let changed_ids = model.encode_record(&changed).unwrap().input_ids;
+    assert_ne!(original_ids, changed_ids);
+    assert_eq!(original_ids.len(), changed_ids.len());
     let mut group = c.benchmark_group("full_model");
     group
         .sample_size(10)
@@ -32,6 +44,18 @@ fn benches(c: &mut Criterion) {
     group.throughput(Throughput::Elements(warmup.input_tokens as u64));
     group.bench_function("invoice_cached_graph", |b| {
         b.iter(|| model.infer(black_box(&request)).unwrap())
+    });
+    // Alternate equal-length inputs to measure graph construction and uploads
+    // with warm kernel specializations, without hitting the exact-input cache.
+    model.infer(&changed).unwrap();
+    model.infer(&request).unwrap();
+    let mut use_changed = true;
+    group.bench_function("invoice_changed_input", |b| {
+        b.iter(|| {
+            let input = if use_changed { &changed } else { &request };
+            use_changed = !use_changed;
+            model.infer(black_box(input)).unwrap()
+        })
     });
     group.finish();
 }

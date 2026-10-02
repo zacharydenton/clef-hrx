@@ -209,28 +209,34 @@ fn resize(image: &RgbImage, h: usize, w: usize) -> RgbImage {
     let (yt, yprecision) = quantized_taps(sh, h);
     let mut mid = vec![0u8; sh * w * 3];
     for y in 0..sh {
+        let source = &image.as_raw()[y * sw * 3..(y + 1) * sw * 3];
         for (x, t) in xt.iter().enumerate() {
+            let mut sums = [0i32; 3];
+            for &(xx, a) in t {
+                for c in 0..3 {
+                    sums[c] += source[xx * 3 + c] as i32 * a;
+                }
+            }
             for c in 0..3 {
-                let s: i32 = t
-                    .iter()
-                    .map(|(xx, a)| image.as_raw()[(y * sw + xx) * 3 + c] as i32 * a)
-                    .sum();
                 mid[(y * w + x) * 3 + c] =
-                    ((s + (1 << (xprecision - 1))) >> xprecision).clamp(0, 255) as u8;
+                    ((sums[c] + (1 << (xprecision - 1))) >> xprecision).clamp(0, 255) as u8;
             }
         }
     }
     let mut out = vec![0u8; h * w * 3];
+    // Accumulate contiguous rows so the inner loop can vectorize. Keep the
+    // coefficient order and integer rounding identical to the Torch path.
+    let mut sums = vec![0i32; w * 3];
     for (y, t) in yt.iter().enumerate() {
-        for x in 0..w {
-            for c in 0..3 {
-                let s: i32 = t
-                    .iter()
-                    .map(|(yy, a)| mid[(yy * w + x) * 3 + c] as i32 * a)
-                    .sum();
-                out[(y * w + x) * 3 + c] =
-                    ((s + (1 << (yprecision - 1))) >> yprecision).clamp(0, 255) as u8;
+        sums.fill(0);
+        for &(yy, a) in t {
+            let source = &mid[yy * w * 3..(yy + 1) * w * 3];
+            for (sum, &pixel) in sums.iter_mut().zip(source) {
+                *sum += pixel as i32 * a;
             }
+        }
+        for (pixel, &sum) in out[y * w * 3..(y + 1) * w * 3].iter_mut().zip(&sums) {
+            *pixel = ((sum + (1 << (yprecision - 1))) >> yprecision).clamp(0, 255) as u8;
         }
     }
     RgbImage::from_raw(w as u32, h as u32, out).unwrap()

@@ -123,6 +123,11 @@ cargo bench --locked --features bench-internals --bench kernels
 CLEF_BENCH_FULL_MODEL=1 cargo bench --locked --bench inference
 ```
 
+The full-model benchmark reports load and first-request timings separately, then
+measures exact-input graph replay and alternating equal-length requests. The
+alternating case includes graph rebuilding and uploads with warm kernel
+specializations; new token lengths can also incur compilation costs.
+
 Kernel benchmarks include paired reference/optimized measurements. Check them
 with `cargo run --locked --example check_benches -- target/criterion paired`;
 thresholds are in [benches/criteria.json](benches/criteria.json). Use an idle GPU.
