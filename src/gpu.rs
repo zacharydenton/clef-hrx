@@ -75,6 +75,8 @@ struct Command {
     bindings: Vec<Binding>,
 }
 pub(crate) struct Engine {
+    #[cfg(feature = "bench-internals")]
+    pub reference_kernels: crate::benchmarking::ReferenceKernels,
     stream: Stream,
     compiler: Compiler,
     allocations: Vec<Allocation>,
@@ -136,6 +138,8 @@ impl Engine {
         );
         let compiler = Compiler::for_stream(None, &stream)?;
         Ok(Self {
+            #[cfg(feature = "bench-internals")]
+            reference_kernels: Default::default(),
             stream,
             compiler,
             allocations: Vec::new(),
@@ -605,8 +609,14 @@ mod differential {
         let f = FileView::read("tests/fixtures/operators.safetensors")?;
         let x = fixture(&mut e, &f, "gemm_x")?;
         let w = fixture(&mut e, &f, "gemm_w")?;
-        let y = e.linear(&x, &w, None)?;
-        compare(&mut e, &y, &f, "gemm_y", 0.008)?;
+        for wide in [false, true] {
+            let y = if wide {
+                e.linear_impl::<true>(&x, &w, None)?
+            } else {
+                e.linear_impl::<false>(&x, &w, None)?
+            };
+            compare(&mut e, &y, &f, "gemm_y", 0.008)?;
+        }
         e.reset_plan()?;
         let q = fixture(&mut e, &f, "attn_q")?;
         let k = fixture(&mut e, &f, "attn_k")?;

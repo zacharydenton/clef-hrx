@@ -121,6 +121,7 @@ checkpoint for the full-model test and benchmark.
 cargo bench --locked --bench preprocessing
 cargo bench --locked --features bench-internals --bench kernels
 cargo bench --locked --features bench-internals --bench normalization
+cargo bench --locked --features bench-internals --bench gemm
 CLEF_BENCH_FULL_MODEL=1 cargo bench --locked --bench inference
 ```
 
@@ -135,6 +136,21 @@ and reports paired timings. For full-model per-kernel diagnostics, run
 It accepts an optional request JSON path and uses the cached checkpoint with a
 1,536-token limit. Diagnostic timings include serialization barriers; use the
 inference benchmark for end-to-end latency.
+
+The GEMM benchmark compares the original 32-element reduction tile with the
+shape-selected kernel and checks identical outputs. Small matrices retain the
+original tile. To compare normalization and GEMM changes within one loaded model:
+
+```sh
+cargo run --release --locked --features bench-internals --example compare_inference
+# Check all corpus outputs without timing rounds:
+cargo run --release --locked --features bench-internals --example compare_inference -- \
+  --rounds 0 tests/fixtures/corpus/{0..7}.json
+```
+
+This rotates kernel variants, checks exact GEMM prediction parity, and reports
+normalization probability differences. Request timings include graph rebuilding;
+inference timings isolate graph execution. Run full-model jobs sequentially.
 
 Kernel benchmarks include paired reference/optimized measurements. Check them
 with `cargo run --locked --example check_benches -- target/criterion paired`;

@@ -56,6 +56,11 @@ name = "normalization"
 harness = false
 required-features = ["bench-internals"]
 
+[[bench]]
+name = "gemm"
+harness = false
+required-features = ["bench-internals"]
+
 [[bin]]
 name = "clef"
 path = "src/main.rs"
@@ -66,6 +71,10 @@ required-features = ["bench-internals"]
 
 [[example]]
 name = "profile_inference"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "compare_inference"
 required-features = ["bench-internals"]
 
 [profile.release]

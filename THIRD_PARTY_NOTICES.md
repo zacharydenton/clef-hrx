@@ -7,8 +7,9 @@
   v5.10.2 (Apache-2.0), https://github.com/huggingface/transformers/tree/v5.10.2/src/transformers.
   Captured numerical fixtures record the reference versions used; no Python
   implementation is distributed or required.
-- `kernels/gemm_bf16.loom` is adapted from Zachary Denton's `qwen-image-hrx`
-  `gemm_bf16_bf16_nt.loom` (MIT); see `licenses/qwen-image-hrx-MIT.txt`.
+- `kernels/gemm_bf16.loom` and `kernels/gemm_bf16_reference.loom` are adapted from
+  Zachary Denton's `qwen-image-hrx` `gemm_bf16_bf16_nt.loom` (MIT); see
+  `licenses/qwen-image-hrx-MIT.txt`.
 - Resize coefficient quantization follows PyTorch's
   `aten/src/ATen/native/cpu/UpSampleKernel.cpp` algorithm. PyTorch is BSD-3-Clause
   (see `licenses/pytorch-BSD.txt`); the bicubic filter and resampling algorithm

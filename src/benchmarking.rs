@@ -5,6 +5,56 @@ use crate::{
 };
 use hrx::{GraphExec, inference::ModelContext};
 
+/// Development-only switches for paired full-model comparisons.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReferenceKernels {
+    pub gemm: bool,
+    pub norm: bool,
+}
+
+pub struct GemmBenchmark {
+    graph: GraphExec,
+    engine: Engine,
+    output: Tensor,
+    _context: ModelContext,
+}
+impl GemmBenchmark {
+    pub fn new(m: usize, k: usize, n: usize, optimized: bool) -> Result<Self> {
+        anyhow::ensure!(
+            (1..=1024).contains(&m) && (1..=17408).contains(&k) && (1..=17408).contains(&n),
+            "unsupported GEMM benchmark shape"
+        );
+        let context = ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        let values = |len| {
+            (0..len)
+                .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 128.))
+                .collect::<Vec<_>>()
+        };
+        let x = engine.input(m, k, DType::Bf16, bytemuck::cast_slice(&values(m * k)))?;
+        let w = engine.input(n, k, DType::Bf16, bytemuck::cast_slice(&values(n * k)))?;
+        let output = if optimized {
+            engine.linear(&x, &w, None)?
+        } else {
+            engine.linear_impl::<false>(&x, &w, None)?
+        };
+        let mut graph = engine.finish()?;
+        engine.run(&mut graph)?;
+        Ok(Self {
+            graph,
+            engine,
+            output,
+            _context: context,
+        })
+    }
+    pub fn run(&mut self) -> Result<()> {
+        self.engine.run(&mut self.graph)
+    }
+    pub fn output(&mut self) -> Result<Vec<f32>> {
+        self.engine.read_f32(&self.output)
+    }
+}
+
 pub struct NormBenchmark {
     graph: GraphExec,
     engine: Engine,

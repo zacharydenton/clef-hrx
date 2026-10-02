@@ -182,6 +182,34 @@ impl ClefModel {
         }
         result
     }
+    /// Selects reference kernels for paired benchmarks, invalidating the graph.
+    #[cfg(feature = "bench-internals")]
+    pub fn set_reference_kernels(
+        &mut self,
+        kernels: crate::benchmarking::ReferenceKernels,
+    ) -> Result<()> {
+        ensure!(
+            !self.failed,
+            "model execution failed; reload model before reusing it"
+        );
+        // Safety: only owned host configuration crosses the native session.
+        let result = unsafe {
+            self.native.run(|state| -> Result<()> {
+                if state.engine.reference_kernels != kernels {
+                    state.plan = None;
+                    state.engine.reset_plan()?;
+                    state.engine.reference_kernels = kernels;
+                }
+                Ok(())
+            })
+        }
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
     pub fn infer_with_media(
         &mut self,
         request: &Request,
