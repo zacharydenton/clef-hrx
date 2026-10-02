@@ -29,6 +29,7 @@ pub fn fingerprint() -> String {
         include_str!("../../kernels/subf.loom"),
         include_str!("../../kernels/mulf.loom"),
         include_str!("../../kernels/norm.loom"),
+        include_str!("../../kernels/norm_reference.loom"),
         include_str!("../../kernels/silu.loom"),
         include_str!("../../kernels/scale_rows_exp.loom"),
         include_str!("../../kernels/zero.loom"),

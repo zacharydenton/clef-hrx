@@ -128,6 +128,16 @@ impl Engine {
         eps: f32,
         offset: bool,
     ) -> Result<Tensor> {
+        self.norm_impl::<true>(x, w, b, eps, offset)
+    }
+    pub(crate) fn norm_impl<const PARALLEL: bool>(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        b: Option<&Tensor>,
+        eps: f32,
+        offset: bool,
+    ) -> Result<Tensor> {
         let width = x.cols;
         ensure!(
             w.len() == width && b.is_none_or(|b| b.len() == width),
@@ -135,11 +145,18 @@ impl Engine {
         );
         let out = self.alloc(x.rows, width, x.dtype)?;
         self.dispatch(
-            concat!(
-                include_str!("../kernels/common.loom"),
-                include_str!("../kernels/norm.loom")
-            ),
-            x.rows,
+            if PARALLEL {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/norm.loom")
+                )
+            } else {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/norm_reference.loom")
+                )
+            },
+            x.rows * if PARALLEL { 32 } else { 1 },
             &[("x", x), ("w", w), ("b", b.unwrap_or(w))],
             &out,
             &[
@@ -211,5 +228,92 @@ impl Engine {
             &[("cols", (x.cols).to_string())],
         )?;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151; validates parallel normalization against an FP64 oracle"]
+    fn parallel_norm_accuracy_and_tails() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        for dtype in [DType::Bf16, DType::F32] {
+            let round = |x: f32| match dtype {
+                DType::Bf16 => half::bf16::from_f32(x).to_f32(),
+                _ => x,
+            };
+            for width in [1, 7, 32, 33, 128, 256, 1024, 1280, 5120] {
+                let rows = 5;
+                let values: Vec<_> = (0..rows * width)
+                    .map(|i| {
+                        let value = ((i * 17 % 251) as f32 - 125.) / 16.;
+                        round(match i / width {
+                            0 => 0.,
+                            1 => 2.,
+                            2 => value,
+                            3 => 128. + (i % 3) as f32,
+                            _ => value * 1e-4,
+                        })
+                    })
+                    .collect();
+                let weights: Vec<_> = (0..width)
+                    .map(|i| round(((i * 7 % 67) as f32 - 33.) / 64.))
+                    .collect();
+                let biases: Vec<_> = (0..width).map(|i| round((i % 11) as f32 / 32.)).collect();
+                let mut input = |rows, cols, values: &[f32]| {
+                    if dtype == DType::Bf16 {
+                        let bytes: Vec<_> =
+                            values.iter().map(|&x| half::bf16::from_f32(x)).collect();
+                        engine.input(rows, cols, dtype, bytemuck::cast_slice(&bytes))
+                    } else {
+                        engine.input(rows, cols, dtype, bytemuck::cast_slice(values))
+                    }
+                };
+                let x = input(rows, width, &values)?;
+                let w = input(1, width, &weights)?;
+                let b = input(1, width, &biases)?;
+                for (layer, offset) in [(false, false), (false, true), (true, false)] {
+                    let eps = if layer { 1e-5 } else { 1e-6 };
+                    let out = engine.norm(&x, &w, layer.then_some(&b), eps, offset)?;
+                    let mut graph = engine.finish()?;
+                    engine.run(&mut graph)?;
+                    let actual = engine.read_f32(&out)?;
+                    for row in 0..rows {
+                        let v = &values[row * width..(row + 1) * width];
+                        let mean = if layer {
+                            v.iter().map(|&x| x as f64).sum::<f64>() / width as f64
+                        } else {
+                            0.
+                        };
+                        let variance = v.iter().map(|&x| (x as f64 - mean).powi(2)).sum::<f64>()
+                            / width as f64;
+                        for col in 0..width {
+                            let weight = weights[col] as f64 + if offset { 1. } else { 0. };
+                            let bias = if layer { biases[col] as f64 } else { 0. };
+                            let expected = (v[col] as f64 - mean) / (variance + eps as f64).sqrt()
+                                * weight
+                                + bias;
+                            let actual = actual[row * width + col] as f64;
+                            let relative = if dtype == DType::Bf16 {
+                                1. / 256.
+                            } else {
+                                5e-5
+                            };
+                            assert!(
+                                actual.is_finite()
+                                    && (actual - expected).abs()
+                                        <= expected.abs() * relative + 2e-5,
+                                "{dtype:?} width={width} row={row} col={col} layer={layer} offset={offset}: {actual} vs {expected}"
+                            );
+                        }
+                    }
+                }
+                engine.reset_plan()?;
+            }
+        }
+        Ok(())
     }
 }

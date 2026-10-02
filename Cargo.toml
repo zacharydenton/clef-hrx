@@ -51,12 +51,21 @@ required-features = ["bench-internals"]
 name = "inference"
 harness = false
 
+[[bench]]
+name = "normalization"
+harness = false
+required-features = ["bench-internals"]
+
 [[bin]]
 name = "clef"
 path = "src/main.rs"
 
 [[example]]
 name = "profile_delta"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "profile_inference"
 required-features = ["bench-internals"]
 
 [profile.release]

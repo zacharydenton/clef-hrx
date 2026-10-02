@@ -146,6 +146,42 @@ impl ClefModel {
             p
         })
     }
+    /// Serialized diagnostic GPU timings, including profiling barriers.
+    /// Rebuilds the graph and invalidates the ordinary exact-input cache.
+    #[cfg(feature = "bench-internals")]
+    pub fn profile(&mut self, request: &Request) -> Result<hrx::fabric::DeviceProfile> {
+        ensure!(
+            !self.failed,
+            "model execution failed; reload model before reusing it"
+        );
+        let record = self.encode_record(request)?;
+        ensure!(
+            record.input_ids.iter().all(|id| *id < 248320),
+            "token ID outside checkpoint vocabulary"
+        );
+        // Safety: all device resources stay in NativeState, as in infer_encoded.
+        let result = unsafe {
+            self.native.run(|state| -> Result<_> {
+                let output = state.build(&record)?;
+                let graph = state.engine.finish_profiled()?;
+                // A blank key cannot match the SHA256 key used by infer_encoded.
+                state.plan = Some(Plan {
+                    key: String::new(),
+                    graph,
+                    output,
+                });
+                let plan = state.plan.as_mut().context("missing profiling plan")?;
+                state.engine.run(&mut plan.graph)?;
+                state.engine.profile(&mut plan.graph)
+            })
+        }
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
     pub fn infer_with_media(
         &mut self,
         request: &Request,
@@ -234,6 +270,29 @@ impl ClefModel {
 }
 
 impl NativeState {
+    fn build(&mut self, record: &EncodedRecord) -> Result<Tensor> {
+        self.plan = None;
+        self.engine.reset_plan()?;
+        let x = self.engine.embedding(
+            "model.language_model.embed_tokens.weight",
+            &record.input_ids,
+        )?;
+        for item in &record.media.items {
+            let features = crate::vision::forward(&mut self.engine, item)?;
+            let mut offset = 0;
+            for [start, end] in &item.token_ranges {
+                let len = end - start;
+                self.engine.copy_into(
+                    &features.slice_rows(offset, len),
+                    &x.slice_rows(*start, len),
+                )?;
+                offset += len;
+            }
+        }
+        let hidden = crate::backbone::forward(&mut self.engine, x, &record.position_ids)?;
+        let output = crate::head::forward(&mut self.engine, &hidden, record)?;
+        Ok(output)
+    }
     fn execute(&mut self, record: &EncodedRecord) -> Result<Prediction> {
         let start = Instant::now();
         let uploaded = self.engine.uploaded;
@@ -247,26 +306,7 @@ impl NativeState {
         }
         let key = format!("{:x}", hash.finalize());
         if self.plan.as_ref().is_none_or(|p| p.key != key) {
-            self.plan = None;
-            self.engine.reset_plan()?;
-            let x = self.engine.embedding(
-                "model.language_model.embed_tokens.weight",
-                &record.input_ids,
-            )?;
-            for item in &record.media.items {
-                let features = crate::vision::forward(&mut self.engine, item)?;
-                let mut offset = 0;
-                for [start, end] in &item.token_ranges {
-                    let len = end - start;
-                    self.engine.copy_into(
-                        &features.slice_rows(offset, len),
-                        &x.slice_rows(*start, len),
-                    )?;
-                    offset += len;
-                }
-            }
-            let hidden = crate::backbone::forward(&mut self.engine, x, &record.position_ids)?;
-            let output = crate::head::forward(&mut self.engine, &hidden, record)?;
+            let output = self.build(record)?;
             let graph = self.engine.finish()?;
             self.plan = Some(Plan { key, graph, output });
         }

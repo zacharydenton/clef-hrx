@@ -5,6 +5,51 @@ use crate::{
 };
 use hrx::{GraphExec, inference::ModelContext};
 
+pub struct NormBenchmark {
+    graph: GraphExec,
+    engine: Engine,
+    output: Tensor,
+    _context: ModelContext,
+}
+impl NormBenchmark {
+    pub fn new(rows: usize, width: usize, layer: bool, parallel: bool) -> Result<Self> {
+        anyhow::ensure!(
+            rows > 0 && rows <= 16384 && width > 0 && width <= 5120,
+            "unsupported norm benchmark shape"
+        );
+        let context = ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        let values: Vec<_> = (0..rows * width)
+            .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 16.))
+            .collect();
+        let weights: Vec<_> = (0..width)
+            .map(|i| half::bf16::from_f32(((i * 7 % 67) as f32 - 33.) / 64.))
+            .collect();
+        let x = engine.input(rows, width, DType::Bf16, bytemuck::cast_slice(&values))?;
+        let w = engine.input(1, width, DType::Bf16, bytemuck::cast_slice(&weights))?;
+        let bias = layer.then_some(&w);
+        let output = if parallel {
+            engine.norm_impl::<true>(&x, &w, bias, 1e-6, !layer)?
+        } else {
+            engine.norm_impl::<false>(&x, &w, bias, 1e-6, !layer)?
+        };
+        let mut graph = engine.finish()?;
+        engine.run(&mut graph)?;
+        Ok(Self {
+            graph,
+            engine,
+            output,
+            _context: context,
+        })
+    }
+    pub fn run(&mut self) -> Result<()> {
+        self.engine.run(&mut self.graph)
+    }
+    pub fn output(&mut self) -> Result<Vec<f32>> {
+        self.engine.read_f32(&self.output)
+    }
+}
+
 pub struct DeltaBenchmark {
     graph: GraphExec,
     engine: Engine,
@@ -36,7 +81,7 @@ impl DeltaBenchmark {
         let output = if fused {
             engine.delta_norm(&x, &w, &z)?
         } else {
-            let norm = engine.norm(&x, &w, None, 1e-6, false)?;
+            let norm = engine.norm_impl::<false>(&x, &w, None, 1e-6, false)?;
             let gate = engine.unary(&z, "silu")?;
             engine.binary(&norm, &gate, "mulf")?
         };

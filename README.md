@@ -120,6 +120,7 @@ checkpoint for the full-model test and benchmark.
 ```sh
 cargo bench --locked --bench preprocessing
 cargo bench --locked --features bench-internals --bench kernels
+cargo bench --locked --features bench-internals --bench normalization
 CLEF_BENCH_FULL_MODEL=1 cargo bench --locked --bench inference
 ```
 
@@ -127,6 +128,13 @@ The full-model benchmark reports load and first-request timings separately, then
 measures exact-input graph replay and alternating equal-length requests. The
 alternating case includes graph rebuilding and uploads with warm kernel
 specializations; new token lengths can also incur compilation costs.
+
+The normalization benchmark alternates the serial reference and parallel kernels
+and reports paired timings. For full-model per-kernel diagnostics, run
+`cargo run --release --locked --features bench-internals --example profile_inference`.
+It accepts an optional request JSON path and uses the cached checkpoint with a
+1,536-token limit. Diagnostic timings include serialization barriers; use the
+inference benchmark for end-to-end latency.
 
 Kernel benchmarks include paired reference/optimized measurements. Check them
 with `cargo run --locked --example check_benches -- target/criterion paired`;
