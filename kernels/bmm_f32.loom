@@ -1,0 +1,119 @@
+// bmm_f32. Shapes and storage types are compiler specializations.
+// Four output rows per lane reuse each B load and provide independent FP32
+// accumulator chains. The reduction order within each output is unchanged.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.a_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.a_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.b_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.b_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.k : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.kn : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.mk : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.mn : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.m : %value: index where [range(%value, 1, 64)]
+config.decl @clef.tilesn : %value: index where [range(%value, 1, 8192)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%a_buffer: buffer, %b_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %a_len = config.get @clef.a_len : index
+ %a_dtype = config.get @clef.a_dtype : index
+ %b_len = config.get @clef.b_len : index
+ %b_dtype = config.get @clef.b_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%n = config.get @clef.n : index
+%k = config.get @clef.k : index
+%mn = config.get @clef.mn : index
+%mk = config.get @clef.mk : index
+%kn = config.get @clef.kn : index
+%m = config.get @clef.m : index
+%tilesn = config.get @clef.tilesn : index
+%four = index.constant 4 : index
+%two = index.constant 2 : index
+%three = index.constant 3 : index
+%batch = index.div %id, %tilesn : index
+%within = index.rem %id, %tilesn : index
+%tile = index.div %within, %n : index
+%row = index.mul %tile, %four : index
+%col = index.rem %within, %n : index
+%row1 = index.add %row, %one : index
+%row2 = index.add %row, %two : index
+%row3 = index.add %row, %three : index
+%ok1 = index.cmp ult, %row1, %m : index
+%ok2 = index.cmp ult, %row2, %m : index
+%ok3 = index.cmp ult, %row3, %m : index
+%ab0 = index.mul %batch, %mk : index
+%ab1 = index.mul %row, %k : index
+%ab = index.add %ab0, %ab1 : index
+%a1 = index.add %ab, %k : index
+%a2 = index.add %a1, %k : index
+%a3 = index.add %a2, %k : index
+%bb0 = index.mul %batch, %kn : index
+%bb = index.add %bb0, %col : index
+%sum0, %sum1, %sum2, %sum3 = scf.for %j = [%zero to %k step %one](%acc0 = %fzero : f32, %acc1 = %fzero : f32, %acc2 = %fzero : f32, %acc3 = %fzero : f32) -> (f32, f32, f32, f32) {
+ %ai = index.add %ab, %j : index
+ %bj = index.mul %j, %n : index
+ %bi = index.add %bb, %bj : index
+ %a = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %ai) : (index, buffer, index, index) -> (f32)
+%b = template.apply<@clef.load>(%b_dtype, %b_buffer, %b_len, %bi) : (index, buffer, index, index) -> (f32)
+ %ai1 = index.add %a1, %j : index
+ %ai2 = index.add %a2, %j : index
+ %ai3 = index.add %a3, %j : index
+ %av1 = scf.if %ok1 -> (f32) {
+  %v1 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %ai1) : (index, buffer, index, index) -> (f32)
+  scf.yield %v1 : f32
+ } else {scf.yield %fzero : f32}
+ %av2 = scf.if %ok2 -> (f32) {
+  %v2 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %ai2) : (index, buffer, index, index) -> (f32)
+  scf.yield %v2 : f32
+ } else {scf.yield %fzero : f32}
+ %av3 = scf.if %ok3 -> (f32) {
+  %v3 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %ai3) : (index, buffer, index, index) -> (f32)
+  scf.yield %v3 : f32
+ } else {scf.yield %fzero : f32}
+ %next0 = scalar.fmaf %a, %b, %acc0 : f32
+ %next1 = scalar.fmaf %av1, %b, %acc1 : f32
+ %next2 = scalar.fmaf %av2, %b, %acc2 : f32
+ %next3 = scalar.fmaf %av3, %b, %acc3 : f32
+ scf.yield %next0, %next1, %next2, %next3 : f32, f32, f32, f32
+}
+%ob = index.mul %batch, %mn : index
+%orow = index.mul %row, %n : index
+%or0 = index.add %ob, %orow : index
+%o0 = index.add %or0, %col : index
+%o1 = index.add %o0, %n : index
+%o2 = index.add %o1, %n : index
+%o3 = index.add %o2, %n : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %o0, %sum0) : (index, buffer, index, index, f32) -> ()
+scf.if %ok1 {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %o1, %sum1) : (index, buffer, index, index, f32) -> ()}
+scf.if %ok2 {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %o2, %sum2) : (index, buffer, index, index, f32) -> ()}
+scf.if %ok3 {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %o3, %sum3) : (index, buffer, index, index, f32) -> ()}
+
+
+ }
+ kernel.return
+}

@@ -1,0 +1,67 @@
+// residual_features. Shapes and storage types are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.f_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.f_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.o_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.o_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.stride : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.width : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%f_buffer: buffer, %o_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %f_len = config.get @clef.f_len : index
+ %f_dtype = config.get @clef.f_dtype : index
+ %o_len = config.get @clef.o_len : index
+ %o_dtype = config.get @clef.o_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%width = config.get @clef.width : index
+%stride = config.get @clef.stride : index
+%two = index.constant 2 : index
+%row = index.div %id, %stride : index
+%col0 = index.rem %id, %stride : index
+%part = index.div %col0, %width : index
+%col = index.rem %col0, %width : index
+%rb = index.mul %row, %width : index
+%p = index.add %rb, %col : index
+%f = template.apply<@clef.load>(%f_dtype, %f_buffer, %f_len, %p) : (index, buffer, index, index) -> (f32)
+%o = template.apply<@clef.load>(%o_dtype, %o_buffer, %o_len, %p) : (index, buffer, index, index) -> (f32)
+
+%prod = scalar.mulf %f, %o : f32
+%diff = scalar.subf %f, %o : f32
+%abs = scalar.absf %diff : f32
+%is0 = index.cmp eq, %part, %zero : index
+%is1 = index.cmp eq, %part, %one : index
+%is2 = index.cmp eq, %part, %two : index
+%p2 = scf.select %is2, %prod, %abs : f32
+%p1 = scf.select %is1, %o, %p2 : f32
+%r = scf.select %is0, %f, %p1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %id, %r) : (index, buffer, index, index, f32) -> ()
+
+
+ }
+ kernel.return
+}

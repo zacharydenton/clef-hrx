@@ -1,0 +1,9 @@
+{
+  "target": "gfx1151",
+  "allocation_limit_bytes": 268435456,
+  "gates": [
+    {"benchmark": "delta_prefill/chunked/65", "max_ratio": 1.05},
+    {"benchmark": "delta_prefill/chunked/260", "max_ratio": 0.80},
+    {"benchmark": "delta_prefill/chunked/1024", "max_ratio": 0.80}
+  ]
+}

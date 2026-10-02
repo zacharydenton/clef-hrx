@@ -1,0 +1,1 @@
+{"model": "clef", "state": "The attached video changes color over time.", "videos": ["tests/fixtures/corpus/colors.mkv"], "media_kwargs": {"do_sample_frames": false}, "questions": {"change": {"type": "noul", "instructions": "Does the video change color?"}}}

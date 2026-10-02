@@ -1,0 +1,42 @@
+// Shared typed accessors. Dtype 0 = BF16; dtype 1 = FP32.
+// Tensor extents and dtypes are fixed by Rust before compiler specialization.
+template.decl @clef.load(%dtype: index, %buf: buffer, %len: index, %at: index) -> (f32)
+template.def<@clef.load> @clef.load_bf16(%dtype: index, %buf: buffer, %len: index, %at: index) -> (f32) where [eq(%dtype, 0)] {
+ %offset = index.constant 0 : offset
+ %v = buffer.view %buf[%offset] : buffer -> view<[%len]xbf16>
+ %i = index.assume %at [range(%at, 0, 4294967294), lt(%at, %len)] : index
+ %b = view.load %v[%i] : view<[%len]xbf16> -> bf16
+ %f = scalar.extf %b : bf16 to f32
+ template.return %f : f32
+}
+template.def<@clef.load> @clef.load_f32(%dtype: index, %buf: buffer, %len: index, %at: index) -> (f32) where [eq(%dtype, 1)] {
+ %offset = index.constant 0 : offset
+ %v = buffer.view %buf[%offset] : buffer -> view<[%len]xf32>
+ %i = index.assume %at [range(%at, 0, 4294967294), lt(%at, %len)] : index
+ %f = view.load %v[%i] : view<[%len]xf32> -> f32
+ template.return %f : f32
+}
+template.decl @clef.load_u32(%buf: buffer, %len: index, %at: index) -> (i32)
+template.def<@clef.load_u32> @clef.load_index(%buf: buffer, %len: index, %at: index) -> (i32) {
+ %offset = index.constant 0 : offset
+ %v = buffer.view %buf[%offset] : buffer -> view<[%len]xi32>
+ %i = index.assume %at [range(%at, 0, 4294967294), lt(%at, %len)] : index
+ %f = view.load %v[%i] : view<[%len]xi32> -> i32
+ template.return %f : i32
+}
+template.decl @clef.store(%dtype: index, %buf: buffer, %len: index, %at: index, %value: f32) -> ()
+template.def<@clef.store> @clef.store_bf16(%dtype: index, %buf: buffer, %len: index, %at: index, %value: f32) -> () where [eq(%dtype, 0)] {
+ %offset = index.constant 0 : offset
+ %v = buffer.view %buf[%offset] : buffer -> view<[%len]xbf16>
+ %i = index.assume %at [range(%at, 0, 4294967294), lt(%at, %len)] : index
+ %b = scalar.fptrunc %value : f32 to bf16
+ view.store %b, %v[%i] : bf16, view<[%len]xbf16>
+ template.return
+}
+template.def<@clef.store> @clef.store_f32(%dtype: index, %buf: buffer, %len: index, %at: index, %value: f32) -> () where [eq(%dtype, 1)] {
+ %offset = index.constant 0 : offset
+ %v = buffer.view %buf[%offset] : buffer -> view<[%len]xf32>
+ %i = index.assume %at [range(%at, 0, 4294967294), lt(%at, %len)] : index
+ view.store %value, %v[%i] : f32, view<[%len]xf32>
+ template.return
+}

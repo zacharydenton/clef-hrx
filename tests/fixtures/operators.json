@@ -1,0 +1,6 @@
+{
+  "torch": "2.14.0",
+  "transformers": "5.10.2",
+  "seed": 713,
+  "reference": "torch_chunk_gated_delta_rule, CPU BF16 SDPA/GEMM"
+}

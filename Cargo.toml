@@ -1,0 +1,53 @@
+[package]
+name = "clef-hrx"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "Apache-2.0"
+description = "Cloudflare CLEF typed decisions with native Rust/HRX inference"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+half = { version = "2", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+hrx = { package = "hrx-rs", path = "../hrx-rs" }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "arbitrary_precision"] }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+sha2 = "0.10"
+
+[features]
+bench-internals = []
+
+[dev-dependencies]
+tempfile = "3"
+safetensors = "0.8"
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "preprocessing"
+harness = false
+
+[[bench]]
+name = "kernels"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "inference"
+harness = false
+
+[[bin]]
+name = "clef"
+path = "src/main.rs"
+
+[[example]]
+name = "profile_delta"
+required-features = ["bench-internals"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

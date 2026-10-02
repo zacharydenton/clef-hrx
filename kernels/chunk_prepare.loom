@@ -1,0 +1,175 @@
+// chunk_prepare. Shapes and storage types are compiler specializations.
+// One wave owns a token/head. The gate prefix is accumulated by lane zero;
+// normalization and patch writes cooperate across all 32 lanes.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.qkv_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.qkv_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.a_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.a_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.b_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.b_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.al_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.al_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.dt_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.dt_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%qkv_buffer: buffer, %a_buffer: buffer, %b_buffer: buffer, %al_buffer: buffer, %dt_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %qkv_len = config.get @clef.qkv_len : index
+ %qkv_dtype = config.get @clef.qkv_dtype : index
+ %a_len = config.get @clef.a_len : index
+ %a_dtype = config.get @clef.a_dtype : index
+ %b_len = config.get @clef.b_len : index
+ %b_dtype = config.get @clef.b_dtype : index
+ %al_len = config.get @clef.al_len : index
+ %al_dtype = config.get @clef.al_dtype : index
+ %dt_len = config.get @clef.dt_len : index
+ %dt_dtype = config.get @clef.dt_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%seq = config.get @clef.n : index
+%heads = index.constant 48 : index
+%three = index.constant 3 : index
+%dim = index.constant 128 : index
+%width = index.constant 641 : index
+%qwidth = index.constant 10240 : index
+%koff = index.constant 2048 : index
+%voff = index.constant 4096 : index
+%vwidth = index.constant 6144 : index
+%wave_width = index.constant 32 : index
+%record = index.div %id, %wave_width : index
+%ll = index.rem %id, %wave_width : index
+%leader = index.cmp eq, %ll, %zero : index
+%head = index.div %record, %seq : index
+%t = index.rem %record, %seq : index
+%kh = index.div %head, %three : index
+%kb0 = index.mul %kh, %dim : index
+%qb0 = index.mul %t, %qwidth : index
+%qb = index.add %qb0, %kb0 : index
+%kb = index.add %qb, %koff : index
+%vb0 = index.add %qb0, %voff : index
+%vh = index.mul %head, %dim : index
+%vb = index.add %vb0, %vh : index
+%ab0 = index.mul %t, %heads : index
+%ai = index.add %ab0, %head : index
+%ob = index.mul %record, %width : index
+%eps = scalar.constant 1.0e-6 : f32
+%scale = scalar.constant 0.08838834764831845 : f32
+%al = template.apply<@clef.load>(%al_dtype, %al_buffer, %al_len, %head) : (index, buffer, index, index) -> (f32)
+%dt = template.apply<@clef.load>(%dt_dtype, %dt_buffer, %dt_len, %head) : (index, buffer, index, index) -> (f32)
+%b = template.apply<@clef.load>(%b_dtype, %b_buffer, %b_len, %ai) : (index, buffer, index, index) -> (f32)
+
+%ea = scalar.expf<afn> %al : f32
+%nb = scalar.negf %b : f32
+%eb = scalar.expf<afn> %nb : f32
+%den = scalar.addf %fone, %eb : f32
+%beta0 = scalar.divf %fone, %den : f32
+%betab = scalar.fptrunc %beta0 : f32 to bf16
+%beta = scalar.extf %betab : bf16 to f32
+%end = index.add %t, %one : index
+%local_g = scf.if %leader -> (f32) {
+%prefix = scf.for %tt = [%zero to %end step %one](%accg = %fzero : f32) -> (f32) {
+ %ab1 = index.mul %tt, %heads : index
+ %ai1 = index.add %ab1, %head : index
+ %a = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %ai1) : (index, buffer, index, index) -> (f32)
+
+ %z = scalar.addf %a, %dt : f32
+ %az = scalar.absf %z : f32
+ %naz = scalar.negf %az : f32
+ %ez = scalar.expf<afn> %naz : f32
+ %ep = scalar.addf %fone, %ez : f32
+ %log = scalar.logf<afn> %ep : f32
+ %positive = scalar.cmpf ogt, %z, %fzero : f32
+ %zp = scf.select %positive, %z, %fzero : f32
+ %sp = scalar.addf %zp, %log : f32
+ %gpos = scalar.mulf %ea, %sp : f32
+ %gnext = scalar.subf %accg, %gpos : f32
+ scf.yield %gnext : f32
+}
+scf.yield %prefix : f32
+} else {scf.yield %fzero : f32}
+%lane_zero = scalar.constant 0 : i32
+%wave_i32 = scalar.constant 32 : i32
+%g, %g_valid = kernel.subgroup.shuffle<index> %local_g, %lane_zero, %wave_i32 : f32, i32, i32
+%eg = scalar.expf<afn> %g : f32
+%four = index.constant 4 : index
+%qn_lane, %kn_lane = scf.for %part = [%zero to %four step %one](%qa = %fzero : f32, %ka = %fzero : f32) -> (f32,f32) unroll {
+ %part_base = index.mul %part, %wave_width : index
+ %j = index.add %part_base, %ll : index
+ %qi = index.add %qb, %j : index
+ %ki = index.add %kb, %j : index
+ %q = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %qi) : (index, buffer, index, index) -> (f32)
+%k = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %ki) : (index, buffer, index, index) -> (f32)
+
+ %qs = scalar.fmaf %q, %q, %qa : f32
+ %ks = scalar.fmaf %k, %k, %ka : f32
+ scf.yield %qs, %ks : f32,f32
+}
+%qn = kernel.subgroup.reduce<addf> %qn_lane : f32
+%kn = kernel.subgroup.reduce<addf> %kn_lane : f32
+%qe = scalar.addf %qn, %eps : f32
+%ke = scalar.addf %kn, %eps : f32
+%qinv = scalar.rsqrtf %qe : f32
+%kinv = scalar.rsqrtf %ke : f32
+%c128 = index.constant 128 : index
+%c256 = index.constant 256 : index
+%c384 = index.constant 384 : index
+%c512 = index.constant 512 : index
+%c640 = index.constant 640 : index
+%gi = index.add %ob, %c640 : index
+scf.if %leader {view.store %g, %outv[%gi] : f32, view<[%out_len]xf32>}
+scf.for %part1 = [%zero to %four step %one] unroll {
+ %part1_base = index.mul %part1, %wave_width : index
+ %j1 = index.add %part1_base, %ll : index
+ %qi1 = index.add %qb, %j1 : index
+ %ki1 = index.add %kb, %j1 : index
+ %vi1 = index.add %vb, %j1 : index
+ %q1 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %qi1) : (index, buffer, index, index) -> (f32)
+%k1 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %ki1) : (index, buffer, index, index) -> (f32)
+%v1 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vi1) : (index, buffer, index, index) -> (f32)
+
+ %qnorm = scalar.mulf %q1, %qinv : f32
+ %knorm = scalar.mulf %k1, %kinv : f32
+ %qs1 = scalar.mulf %qnorm, %scale : f32
+ %vbeta = scalar.mulf %v1, %beta : f32
+ %kbeta = scalar.mulf %knorm, %beta : f32
+ %kexp = scalar.mulf %kbeta, %eg : f32
+ %o0 = index.add %ob, %j1 : index
+ %o1 = index.add %o0, %c128 : index
+ %o2 = index.add %o0, %c256 : index
+ %o3 = index.add %o0, %c384 : index
+ %o4 = index.add %o0, %c512 : index
+ view.store %qs1, %outv[%o0] : f32, view<[%out_len]xf32>
+ view.store %knorm, %outv[%o1] : f32, view<[%out_len]xf32>
+ view.store %vbeta, %outv[%o2] : f32, view<[%out_len]xf32>
+ view.store %kbeta, %outv[%o3] : f32, view<[%out_len]xf32>
+ view.store %kexp, %outv[%o4] : f32, view<[%out_len]xf32>
+}
+
+ }
+ kernel.return
+}

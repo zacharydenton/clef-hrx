@@ -1,0 +1,1 @@
+{"model": "clef", "state": "Review the image and video.", "images": ["tests/fixtures/corpus/blue.png"], "videos": ["tests/fixtures/corpus/colors.mkv"], "media_kwargs": {"do_sample_frames": false}, "questions": {"blue": {"type": "noul", "instructions": "Is the still image blue?"}, "change": {"type": "noul", "instructions": "Does the video change color?"}}}

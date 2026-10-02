@@ -1,0 +1,1 @@
+{"model": "clef", "state": "Compare both images.", "images": ["tests/fixtures/corpus/blue.png", "tests/fixtures/corpus/red.png"], "questions": {"same": {"type": "noul", "instructions": "Are both images the same color?"}}}

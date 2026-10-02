@@ -1,0 +1,84 @@
+// chunk_state. Shapes and storage types are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.state_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.state_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.k_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.k_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.v_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.v_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.g_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.g_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.last : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%state_buffer: buffer, %k_buffer: buffer, %v_buffer: buffer, %g_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %state_len = config.get @clef.state_len : index
+ %state_dtype = config.get @clef.state_dtype : index
+ %k_len = config.get @clef.k_len : index
+ %k_dtype = config.get @clef.k_dtype : index
+ %v_len = config.get @clef.v_len : index
+ %v_dtype = config.get @clef.v_dtype : index
+ %g_len = config.get @clef.g_len : index
+ %g_dtype = config.get @clef.g_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%dim = index.constant 128 : index
+%dd = index.constant 16384 : index
+%n = config.get @clef.n : index
+%last = config.get @clef.last : index
+%head = index.div %id, %dd : index
+%within = index.rem %id, %dd : index
+%key = index.div %within, %dim : index
+%value = index.rem %within, %dim : index
+%gb = index.mul %head, %n : index
+%gl = index.add %gb, %last : index
+%last_g = template.apply<@clef.load>(%g_dtype, %g_buffer, %g_len, %gl) : (index, buffer, index, index) -> (f32)
+%state = template.apply<@clef.load>(%state_dtype, %state_buffer, %state_len, %id) : (index, buffer, index, index) -> (f32)
+
+%decay = scalar.expf<afn> %last_g : f32
+%initial = scalar.mulf %state, %decay : f32
+%sum = scf.for %j = [%zero to %n step %one](%acc = %initial : f32) -> (f32) {
+ %gi = index.add %gb, %j : index
+ %rb = index.mul %gi, %dim : index
+ %ki = index.add %rb, %key : index
+ %vi = index.add %rb, %value : index
+ %k = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki) : (index, buffer, index, index) -> (f32)
+%v = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %vi) : (index, buffer, index, index) -> (f32)
+%g = template.apply<@clef.load>(%g_dtype, %g_buffer, %g_len, %gi) : (index, buffer, index, index) -> (f32)
+
+ %diff = scalar.subf %last_g, %g : f32
+ %ex = scalar.expf<afn> %diff : f32
+ %ke = scalar.mulf %k, %ex : f32
+ %next = scalar.fmaf %ke, %v, %acc : f32
+ scf.yield %next : f32
+}
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %id, %sum) : (index, buffer, index, index, f32) -> ()
+
+
+ }
+ kernel.return
+}

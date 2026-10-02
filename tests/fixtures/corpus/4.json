@@ -1,0 +1,1 @@
+{"model": "clef", "state": {"text": "Mottaget: åäö 中文 🐈", "status": "approved", "amount": 1250.0}, "questions": {"approved": {"type": "noul", "instructions": "Is the status approved?"}}}

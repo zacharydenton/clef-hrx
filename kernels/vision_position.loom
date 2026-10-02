@@ -1,0 +1,66 @@
+// vision_position. Shapes and storage types are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ids_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ids_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.weights_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.weights_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.table_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.table_dtype : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%ids_buffer: buffer, %weights_buffer: buffer, %table_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %ids_len = config.get @clef.ids_len : index
+ %ids_dtype = config.get @clef.ids_dtype : index
+ %weights_len = config.get @clef.weights_len : index
+ %weights_dtype = config.get @clef.weights_dtype : index
+ %table_len = config.get @clef.table_len : index
+ %table_dtype = config.get @clef.table_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%width = index.constant 1152 : index
+%four = index.constant 4 : index
+%row = index.div %id, %width : index
+%col = index.rem %id, %width : index
+%ib = index.mul %row, %four : index
+%sum = scf.for %j = [%zero to %four step %one](%acc = %fzero : f32) -> (f32) {
+ %ii = index.add %ib, %j : index
+ %index = template.apply<@clef.load_u32>(%ids_buffer, %ids_len, %ii) : (buffer, index, index) -> (i32)
+%weight = template.apply<@clef.load>(%weights_dtype, %weights_buffer, %weights_len, %ii) : (index, buffer, index, index) -> (f32)
+
+ %idx = index.cast %index : i32 to index
+ %rb = index.mul %idx, %width : index
+ %p = index.add %rb, %col : index
+ %v = template.apply<@clef.load>(%table_dtype, %table_buffer, %table_len, %p) : (index, buffer, index, index) -> (f32)
+
+ %next = scalar.fmaf %v, %weight, %acc : f32
+ scf.yield %next : f32
+}
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %id, %sum) : (index, buffer, index, index, f32) -> ()
+
+
+ }
+ kernel.return
+}

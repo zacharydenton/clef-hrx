@@ -1,0 +1,234 @@
+{
+  "tokens": 65,
+  "allocated_bytes": 81392000,
+  "sample_size": 40,
+  "samples": [
+    {
+      "iterations": 1,
+      "reference_ns": 43427267,
+      "optimized_ns": 28263980
+    },
+    {
+      "iterations": 2,
+      "reference_ns": 38252325,
+      "optimized_ns": 19692448
+    },
+    {
+      "iterations": 4,
+      "reference_ns": 94494982,
+      "optimized_ns": 104972874
+    },
+    {
+      "iterations": 8,
+      "reference_ns": 104291302,
+      "optimized_ns": 259098054
+    },
+    {
+      "iterations": 16,
+      "reference_ns": 246157647,
+      "optimized_ns": 111821232
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 173535445,
+      "optimized_ns": 90514228
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 89731527,
+      "optimized_ns": 135879025
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 80702099,
+      "optimized_ns": 184892223
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 45344977,
+      "optimized_ns": 20288002
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 53384323,
+      "optimized_ns": 30430892
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 143731915,
+      "optimized_ns": 56576050
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 199080827,
+      "optimized_ns": 79726554
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 86835096,
+      "optimized_ns": 122284934
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 81059799,
+      "optimized_ns": 182443618
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 25448684,
+      "optimized_ns": 19354047
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 48197931,
+      "optimized_ns": 31575832
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 108389643,
+      "optimized_ns": 69592314
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 258550657,
+      "optimized_ns": 105667867
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 110206527,
+      "optimized_ns": 118799316
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 77920752,
+      "optimized_ns": 171477109
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 44370271,
+      "optimized_ns": 21457182
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 49460556,
+      "optimized_ns": 29583356
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 159242631,
+      "optimized_ns": 27370756
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 207274190,
+      "optimized_ns": 90278003
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 133037369,
+      "optimized_ns": 91617409
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 156752970,
+      "optimized_ns": 222047607
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 47794630,
+      "optimized_ns": 10676638
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 52307501,
+      "optimized_ns": 25789226
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 72216214,
+      "optimized_ns": 35449449
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 169629749,
+      "optimized_ns": 126735246
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 122785451,
+      "optimized_ns": 82071032
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 80364217,
+      "optimized_ns": 85442253
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 99689305,
+      "optimized_ns": 209713313
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 36569880,
+      "optimized_ns": 9983045
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 44182038,
+      "optimized_ns": 25775256
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 51718737,
+      "optimized_ns": 31890324
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 97556001,
+      "optimized_ns": 40098365
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 48976391,
+      "optimized_ns": 14342209
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 50016671,
+      "optimized_ns": 28333819
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 65395316,
+      "optimized_ns": 25998289
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 71584342,
+      "optimized_ns": 21301453
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 49478707,
+      "optimized_ns": 21863460
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 44376752,
+      "optimized_ns": 22959471
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 66468886,
+      "optimized_ns": 80504945
+    },
+    {
+      "iterations": 6,
+      "reference_ns": 31158283,
+      "optimized_ns": 15444601
+    }
+  ],
+  "run_id": "1790906463975946024",
+  "fingerprint": "7c05b0bfc2a0b58e8e34da684094caa3ac8689fad5184ceaff73d2161c04cf30"
+}

@@ -1,0 +1,75 @@
+// triangular_inverse. Shapes and storage types are compiler specializations.
+// One head per workgroup, one inverse column per lane.
+// Each lane owns its shared-memory column: no lane reads another lane's
+// stores, so the sequential row solve requires no workgroup barriers.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.l_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.l_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.nn : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%l_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %l_len = config.get @clef.l_len : index
+ %l_dtype = config.get @clef.l_dtype : index
+ %n = config.get @clef.n : index
+ %active = index.cmp ult, %lane, %n : index
+ %shared_bytes = index.constant 16384 : offset
+ %shared = buffer.alloca<workgroup> align(16) %shared_bytes : buffer
+ %sv = buffer.view %shared[%offset] : buffer -> view<4096xf32>
+ scf.if %active {
+
+%nn = config.get @clef.nn : index
+%head = index.add %wg, %zero : index
+%col = index.add %lane, %zero : index
+%base = index.mul %head, %nn : index
+%stride = index.constant 64 : index
+scf.for %i = [%zero to %n step %one] {
+ %rb0 = index.mul %i, %n : index
+ %rb = index.add %base, %rb0 : index
+ %diagonal = index.cmp eq, %i, %col : index
+ %initial = scf.select %diagonal, %fone, %fzero : f32
+ %sum = scf.for %j = [%col to %i step %one](%acc = %initial : f32) -> (f32) {
+  %lp = index.add %rb, %j : index
+  %jb = index.mul %j, %stride : index
+  %bi = index.add %jb, %col : index
+  %si = index.assume %bi [range(%bi, 0, 4095)] : index
+  %l = template.apply<@clef.load>(%l_dtype, %l_buffer, %l_len, %lp) : (index, buffer, index, index) -> (f32)
+
+  %v = view.load %sv[%si] : view<4096xf32> -> f32
+  %next = scalar.fmaf %l, %v, %acc : f32
+  scf.yield %next : f32
+ }
+ %oi = index.add %rb, %col : index
+ %sb = index.mul %i, %stride : index
+ %si0 = index.add %sb, %col : index
+ %si1 = index.assume %si0 [range(%si0, 0, 4095)] : index
+ view.store %sum, %sv[%si1] : f32, view<4096xf32>
+ view.store %sum, %outv[%oi] : f32, view<[%out_len]xf32>
+}
+
+ }
+ kernel.return
+}

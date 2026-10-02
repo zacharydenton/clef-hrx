@@ -1,0 +1,67 @@
+// gelu. Shapes and storage types are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+%x_len = config.get @clef.x_len : index
+%x_dtype = config.get @clef.x_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+%x = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %id) : (index, buffer, index, index) -> (f32)
+%half = scalar.constant 0.5 : f32
+%isqrt2 = scalar.constant 0.7071067811865476 : f32
+%z = scalar.mulf %x, %isqrt2 : f32
+%az = scalar.absf %z : f32
+%p = scalar.constant 0.3275911 : f32
+%den = scalar.fmaf %p, %az, %fone : f32
+%t = scalar.divf %fone, %den : f32
+%a1 = scalar.constant 0.254829592 : f32
+%a2 = scalar.constant -0.284496736 : f32
+%a3 = scalar.constant 1.421413741 : f32
+%a4 = scalar.constant -1.453152027 : f32
+%a5 = scalar.constant 1.061405429 : f32
+%p4 = scalar.fmaf %a5, %t, %a4 : f32
+%p3 = scalar.fmaf %p4, %t, %a3 : f32
+%p2 = scalar.fmaf %p3, %t, %a2 : f32
+%p1 = scalar.fmaf %p2, %t, %a1 : f32
+%poly = scalar.mulf %p1, %t : f32
+%zz = scalar.mulf %z, %z : f32
+%nzz = scalar.negf %zz : f32
+%ex = scalar.expf<afn> %nzz : f32
+%tail = scalar.mulf %poly, %ex : f32
+%erfa = scalar.subf %fone, %tail : f32
+%nerfa = scalar.negf %erfa : f32
+%positive = scalar.cmpf oge, %z, %fzero : f32
+%erf = scf.select %positive, %erfa, %nerfa : f32
+%sum = scalar.addf %fone, %erf : f32
+%hx = scalar.mulf %half, %x : f32
+%r = scalar.mulf %hx, %sum : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %id, %r) : (index, buffer, index, index, f32) -> ()
+
+ }
+ kernel.return
+}

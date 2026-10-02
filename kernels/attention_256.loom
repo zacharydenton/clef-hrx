@@ -1,0 +1,301 @@
+// attention_256. Shapes and storage types are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.q_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.q_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.k_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.k_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.v_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.v_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.heads : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ratio : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.qw : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.kw : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.scale : f32
+config.decl @clef.causal : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.keys : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%q_buffer: buffer, %k_buffer: buffer, %v_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+%q_len = config.get @clef.q_len : index
+%q_dtype = config.get @clef.q_dtype : index
+%k_len = config.get @clef.k_len : index
+%k_dtype = config.get @clef.k_dtype : index
+%v_len = config.get @clef.v_len : index
+%v_dtype = config.get @clef.v_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%thirtytwo = index.constant 32 : index
+%heads = config.get @clef.heads : index
+%ratio = config.get @clef.ratio : index
+%dim = index.constant 256 : index
+%qw = config.get @clef.qw : index
+%kw = config.get @clef.kw : index
+%wave = index.div %id, %thirtytwo : index
+%ll = index.rem %id, %thirtytwo : index
+%row = index.div %wave, %heads : index
+%head = index.rem %wave, %heads : index
+%kh = index.div %head, %ratio : index
+%rb = index.mul %row, %qw : index
+%hb = index.mul %head, %dim : index
+%qb = index.add %rb, %hb : index
+%khb = index.mul %kh, %dim : index
+%scale = config.get @clef.scale : f32
+%negative = scalar.constant -3.402823466e38 : f32
+%c0 = index.constant 0 : index
+%dim0 = index.add %ll, %c0 : index
+%ok0 = index.cmp ult, %dim0, %dim : index
+%qi0 = index.add %qb, %dim0 : index
+%q0 = scf.if %ok0 -> (f32) {
+%qq0 = template.apply<@clef.load>(%q_dtype, %q_buffer, %q_len, %qi0) : (index, buffer, index, index) -> (f32)
+scf.yield %qq0 : f32
+} else {scf.yield %fzero : f32}
+%c1 = index.constant 32 : index
+%dim1 = index.add %ll, %c1 : index
+%ok1 = index.cmp ult, %dim1, %dim : index
+%qi1 = index.add %qb, %dim1 : index
+%q1 = scf.if %ok1 -> (f32) {
+%qq1 = template.apply<@clef.load>(%q_dtype, %q_buffer, %q_len, %qi1) : (index, buffer, index, index) -> (f32)
+scf.yield %qq1 : f32
+} else {scf.yield %fzero : f32}
+%c2 = index.constant 64 : index
+%dim2 = index.add %ll, %c2 : index
+%ok2 = index.cmp ult, %dim2, %dim : index
+%qi2 = index.add %qb, %dim2 : index
+%q2 = scf.if %ok2 -> (f32) {
+%qq2 = template.apply<@clef.load>(%q_dtype, %q_buffer, %q_len, %qi2) : (index, buffer, index, index) -> (f32)
+scf.yield %qq2 : f32
+} else {scf.yield %fzero : f32}
+%c3 = index.constant 96 : index
+%dim3 = index.add %ll, %c3 : index
+%ok3 = index.cmp ult, %dim3, %dim : index
+%qi3 = index.add %qb, %dim3 : index
+%q3 = scf.if %ok3 -> (f32) {
+%qq3 = template.apply<@clef.load>(%q_dtype, %q_buffer, %q_len, %qi3) : (index, buffer, index, index) -> (f32)
+scf.yield %qq3 : f32
+} else {scf.yield %fzero : f32}
+%c4 = index.constant 128 : index
+%dim4 = index.add %ll, %c4 : index
+%ok4 = index.cmp ult, %dim4, %dim : index
+%qi4 = index.add %qb, %dim4 : index
+%q4 = scf.if %ok4 -> (f32) {
+%qq4 = template.apply<@clef.load>(%q_dtype, %q_buffer, %q_len, %qi4) : (index, buffer, index, index) -> (f32)
+scf.yield %qq4 : f32
+} else {scf.yield %fzero : f32}
+%c5 = index.constant 160 : index
+%dim5 = index.add %ll, %c5 : index
+%ok5 = index.cmp ult, %dim5, %dim : index
+%qi5 = index.add %qb, %dim5 : index
+%q5 = scf.if %ok5 -> (f32) {
+%qq5 = template.apply<@clef.load>(%q_dtype, %q_buffer, %q_len, %qi5) : (index, buffer, index, index) -> (f32)
+scf.yield %qq5 : f32
+} else {scf.yield %fzero : f32}
+%c6 = index.constant 192 : index
+%dim6 = index.add %ll, %c6 : index
+%ok6 = index.cmp ult, %dim6, %dim : index
+%qi6 = index.add %qb, %dim6 : index
+%q6 = scf.if %ok6 -> (f32) {
+%qq6 = template.apply<@clef.load>(%q_dtype, %q_buffer, %q_len, %qi6) : (index, buffer, index, index) -> (f32)
+scf.yield %qq6 : f32
+} else {scf.yield %fzero : f32}
+%c7 = index.constant 224 : index
+%dim7 = index.add %ll, %c7 : index
+%ok7 = index.cmp ult, %dim7, %dim : index
+%qi7 = index.add %qb, %dim7 : index
+%q7 = scf.if %ok7 -> (f32) {
+%qq7 = template.apply<@clef.load>(%q_dtype, %q_buffer, %q_len, %qi7) : (index, buffer, index, index) -> (f32)
+scf.yield %qq7 : f32
+} else {scf.yield %fzero : f32}
+
+%causal = config.get @clef.causal : index
+%is_causal = index.cmp ne, %causal, %zero : index
+%query_end = index.add %row, %one : index
+%keys = config.get @clef.keys : index
+%end = scf.select %is_causal, %query_end, %keys : index
+%result0, %result1, %result2, %result3, %result4, %result5, %result6, %result7, %result8, %result9 = scf.for %t = [%zero to %end step %one](%max = %negative : f32, %denom = %fzero : f32, %a0 = %fzero : f32, %a1 = %fzero : f32, %a2 = %fzero : f32, %a3 = %fzero : f32, %a4 = %fzero : f32, %a5 = %fzero : f32, %a6 = %fzero : f32, %a7 = %fzero : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+ %tb = index.mul %t, %kw : index
+ %kb = index.add %tb, %khb : index
+ %ki0 = index.add %kb, %dim0 : index
+%k0 = scf.if %ok0 -> (f32) {
+%kk0 = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki0) : (index, buffer, index, index) -> (f32)
+scf.yield %kk0 : f32
+} else {scf.yield %fzero : f32}
+%prod0 = scalar.mulf %q0, %k0 : f32
+%dot0 = scalar.addf %prod0, %fzero : f32
+%ki1 = index.add %kb, %dim1 : index
+%k1 = scf.if %ok1 -> (f32) {
+%kk1 = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki1) : (index, buffer, index, index) -> (f32)
+scf.yield %kk1 : f32
+} else {scf.yield %fzero : f32}
+%prod1 = scalar.mulf %q1, %k1 : f32
+%dot1 = scalar.addf %dot0, %prod1 : f32
+%ki2 = index.add %kb, %dim2 : index
+%k2 = scf.if %ok2 -> (f32) {
+%kk2 = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki2) : (index, buffer, index, index) -> (f32)
+scf.yield %kk2 : f32
+} else {scf.yield %fzero : f32}
+%prod2 = scalar.mulf %q2, %k2 : f32
+%dot2 = scalar.addf %dot1, %prod2 : f32
+%ki3 = index.add %kb, %dim3 : index
+%k3 = scf.if %ok3 -> (f32) {
+%kk3 = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki3) : (index, buffer, index, index) -> (f32)
+scf.yield %kk3 : f32
+} else {scf.yield %fzero : f32}
+%prod3 = scalar.mulf %q3, %k3 : f32
+%dot3 = scalar.addf %dot2, %prod3 : f32
+%ki4 = index.add %kb, %dim4 : index
+%k4 = scf.if %ok4 -> (f32) {
+%kk4 = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki4) : (index, buffer, index, index) -> (f32)
+scf.yield %kk4 : f32
+} else {scf.yield %fzero : f32}
+%prod4 = scalar.mulf %q4, %k4 : f32
+%dot4 = scalar.addf %dot3, %prod4 : f32
+%ki5 = index.add %kb, %dim5 : index
+%k5 = scf.if %ok5 -> (f32) {
+%kk5 = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki5) : (index, buffer, index, index) -> (f32)
+scf.yield %kk5 : f32
+} else {scf.yield %fzero : f32}
+%prod5 = scalar.mulf %q5, %k5 : f32
+%dot5 = scalar.addf %dot4, %prod5 : f32
+%ki6 = index.add %kb, %dim6 : index
+%k6 = scf.if %ok6 -> (f32) {
+%kk6 = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki6) : (index, buffer, index, index) -> (f32)
+scf.yield %kk6 : f32
+} else {scf.yield %fzero : f32}
+%prod6 = scalar.mulf %q6, %k6 : f32
+%dot6 = scalar.addf %dot5, %prod6 : f32
+%ki7 = index.add %kb, %dim7 : index
+%k7 = scf.if %ok7 -> (f32) {
+%kk7 = template.apply<@clef.load>(%k_dtype, %k_buffer, %k_len, %ki7) : (index, buffer, index, index) -> (f32)
+scf.yield %kk7 : f32
+} else {scf.yield %fzero : f32}
+%prod7 = scalar.mulf %q7, %k7 : f32
+%dot7 = scalar.addf %dot6, %prod7 : f32
+
+ %sum = kernel.subgroup.reduce<addf> %dot7 : f32
+ %score = scalar.mulf %sum, %scale : f32
+ %greater = scalar.cmpf ogt, %score, %max : f32
+ %nm = scf.select %greater, %score, %max : f32
+ %old_delta = scalar.subf %max, %nm : f32
+ %new_delta = scalar.subf %score, %nm : f32
+ %alpha = scalar.expf<afn> %old_delta : f32
+ %p = scalar.expf<afn> %new_delta : f32
+ %nd = scalar.fmaf %alpha, %denom, %p : f32
+ %v0 = scf.if %ok0 -> (f32) {
+%vv0 = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %ki0) : (index, buffer, index, index) -> (f32)
+scf.yield %vv0 : f32
+} else {scf.yield %fzero : f32}
+%scaled0 = scalar.mulf %a0, %alpha : f32
+%next0 = scalar.fmaf %p, %v0, %scaled0 : f32
+%v1 = scf.if %ok1 -> (f32) {
+%vv1 = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %ki1) : (index, buffer, index, index) -> (f32)
+scf.yield %vv1 : f32
+} else {scf.yield %fzero : f32}
+%scaled1 = scalar.mulf %a1, %alpha : f32
+%next1 = scalar.fmaf %p, %v1, %scaled1 : f32
+%v2 = scf.if %ok2 -> (f32) {
+%vv2 = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %ki2) : (index, buffer, index, index) -> (f32)
+scf.yield %vv2 : f32
+} else {scf.yield %fzero : f32}
+%scaled2 = scalar.mulf %a2, %alpha : f32
+%next2 = scalar.fmaf %p, %v2, %scaled2 : f32
+%v3 = scf.if %ok3 -> (f32) {
+%vv3 = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %ki3) : (index, buffer, index, index) -> (f32)
+scf.yield %vv3 : f32
+} else {scf.yield %fzero : f32}
+%scaled3 = scalar.mulf %a3, %alpha : f32
+%next3 = scalar.fmaf %p, %v3, %scaled3 : f32
+%v4 = scf.if %ok4 -> (f32) {
+%vv4 = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %ki4) : (index, buffer, index, index) -> (f32)
+scf.yield %vv4 : f32
+} else {scf.yield %fzero : f32}
+%scaled4 = scalar.mulf %a4, %alpha : f32
+%next4 = scalar.fmaf %p, %v4, %scaled4 : f32
+%v5 = scf.if %ok5 -> (f32) {
+%vv5 = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %ki5) : (index, buffer, index, index) -> (f32)
+scf.yield %vv5 : f32
+} else {scf.yield %fzero : f32}
+%scaled5 = scalar.mulf %a5, %alpha : f32
+%next5 = scalar.fmaf %p, %v5, %scaled5 : f32
+%v6 = scf.if %ok6 -> (f32) {
+%vv6 = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %ki6) : (index, buffer, index, index) -> (f32)
+scf.yield %vv6 : f32
+} else {scf.yield %fzero : f32}
+%scaled6 = scalar.mulf %a6, %alpha : f32
+%next6 = scalar.fmaf %p, %v6, %scaled6 : f32
+%v7 = scf.if %ok7 -> (f32) {
+%vv7 = template.apply<@clef.load>(%v_dtype, %v_buffer, %v_len, %ki7) : (index, buffer, index, index) -> (f32)
+scf.yield %vv7 : f32
+} else {scf.yield %fzero : f32}
+%scaled7 = scalar.mulf %a7, %alpha : f32
+%next7 = scalar.fmaf %p, %v7, %scaled7 : f32
+
+ scf.yield %nm, %nd, %next0, %next1, %next2, %next3, %next4, %next5, %next6, %next7 : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
+}
+scf.if %ok0 {
+%r0 = scalar.divf %result2, %result1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %qi0, %r0) : (index, buffer, index, index, f32) -> ()
+
+}
+scf.if %ok1 {
+%r1 = scalar.divf %result3, %result1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %qi1, %r1) : (index, buffer, index, index, f32) -> ()
+
+}
+scf.if %ok2 {
+%r2 = scalar.divf %result4, %result1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %qi2, %r2) : (index, buffer, index, index, f32) -> ()
+
+}
+scf.if %ok3 {
+%r3 = scalar.divf %result5, %result1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %qi3, %r3) : (index, buffer, index, index, f32) -> ()
+
+}
+scf.if %ok4 {
+%r4 = scalar.divf %result6, %result1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %qi4, %r4) : (index, buffer, index, index, f32) -> ()
+
+}
+scf.if %ok5 {
+%r5 = scalar.divf %result7, %result1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %qi5, %r5) : (index, buffer, index, index, f32) -> ()
+
+}
+scf.if %ok6 {
+%r6 = scalar.divf %result8, %result1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %qi6, %r6) : (index, buffer, index, index, f32) -> ()
+
+}
+scf.if %ok7 {
+%r7 = scalar.divf %result9, %result1 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %qi7, %r7) : (index, buffer, index, index, f32) -> ()
+
+}
+
+
+ }
+ kernel.return
+}

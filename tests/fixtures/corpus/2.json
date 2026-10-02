@@ -1,0 +1,1 @@
+{"model": "clef", "state": "Review the attached image.", "images": ["tests/fixtures/corpus/blue.png"], "questions": {"color": {"type": "choice", "instructions": "What is the dominant color?", "criteria": {"blue": "Blue", "red": "Red", "green": "Green"}}}}

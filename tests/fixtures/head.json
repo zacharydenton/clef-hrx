@@ -1,0 +1,103 @@
+{
+  "torch": "2.14.0",
+  "revision": "2f3de3dd85f379784083b0814d997ab627200f0c",
+  "input_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23
+  ],
+  "questions": [
+    {
+      "question_id": "a",
+      "question_type": 0,
+      "question_span": [
+        2,
+        4
+      ],
+      "option_spans": [
+        [
+          4,
+          6
+        ],
+        [
+          6,
+          8
+        ]
+      ],
+      "option_ids": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "question_id": "b",
+      "question_type": 1,
+      "question_span": [
+        8,
+        10
+      ],
+      "option_spans": [
+        [
+          10,
+          12
+        ],
+        [
+          12,
+          14
+        ],
+        [
+          14,
+          16
+        ]
+      ],
+      "option_ids": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "question_id": "c",
+      "question_type": 2,
+      "question_span": [
+        16,
+        18
+      ],
+      "option_spans": [
+        [
+          18,
+          20
+        ],
+        [
+          20,
+          22
+        ]
+      ],
+      "option_ids": [
+        "0",
+        "1"
+      ]
+    }
+  ]
+}

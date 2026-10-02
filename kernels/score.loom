@@ -1,0 +1,130 @@
+// score. Shapes and storage types are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.anchors_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.anchors_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.lexical_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.lexical_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.fields_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.fields_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.options_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.options_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.residual_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.residual_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ps_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ps_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.js_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.js_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.gate_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.gate_dtype : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%anchors_buffer: buffer, %lexical_buffer: buffer, %fields_buffer: buffer, %options_buffer: buffer, %residual_buffer: buffer, %ps_buffer: buffer, %js_buffer: buffer, %gate_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %anchors_len = config.get @clef.anchors_len : index
+ %anchors_dtype = config.get @clef.anchors_dtype : index
+ %lexical_len = config.get @clef.lexical_len : index
+ %lexical_dtype = config.get @clef.lexical_dtype : index
+ %fields_len = config.get @clef.fields_len : index
+ %fields_dtype = config.get @clef.fields_dtype : index
+ %options_len = config.get @clef.options_len : index
+ %options_dtype = config.get @clef.options_dtype : index
+ %residual_len = config.get @clef.residual_len : index
+ %residual_dtype = config.get @clef.residual_dtype : index
+ %ps_len = config.get @clef.ps_len : index
+ %ps_dtype = config.get @clef.ps_dtype : index
+ %js_len = config.get @clef.js_len : index
+ %js_dtype = config.get @clef.js_dtype : index
+ %gate_len = config.get @clef.gate_len : index
+ %gate_dtype = config.get @clef.gate_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%h = index.constant 5120 : index
+%w = index.constant 1024 : index
+%hb = index.mul %id, %h : index
+%wb = index.mul %id, %w : index
+%eps = scalar.constant 1.0e-24 : f32
+%cos_eps = scalar.constant 1.0e-16 : f32
+%maximum = scalar.constant 4.605170185988092 : f32
+%ps = template.apply<@clef.load>(%ps_dtype, %ps_buffer, %ps_len, %zero) : (index, buffer, index, index) -> (f32)
+%js = template.apply<@clef.load>(%js_dtype, %js_buffer, %js_len, %zero) : (index, buffer, index, index) -> (f32)
+%gate = template.apply<@clef.load>(%gate_dtype, %gate_buffer, %gate_len, %zero) : (index, buffer, index, index) -> (f32)
+
+%pc = scalar.cmpf ogt, %ps, %maximum : f32
+%jc = scalar.cmpf ogt, %js, %maximum : f32
+%pl = scf.select %pc, %maximum, %ps : f32
+%jl = scf.select %jc, %maximum, %js : f32
+%pscale = scalar.expf<afn> %pl : f32
+%jscale = scalar.expf<afn> %jl : f32
+%ng = scalar.negf %gate : f32
+%eg = scalar.expf<afn> %ng : f32
+%gd = scalar.addf %fone, %eg : f32
+%g = scalar.divf %fone, %gd : f32
+%prior0, %prior1, %prior2 = scf.for %i = [%zero to %h step %one](%dot = %fzero : f32, %aa = %fzero : f32, %ll = %fzero : f32) -> (f32,f32,f32) {
+ %p = index.add %hb, %i : index
+ %a = template.apply<@clef.load>(%anchors_dtype, %anchors_buffer, %anchors_len, %p) : (index, buffer, index, index) -> (f32)
+%l = template.apply<@clef.load>(%lexical_dtype, %lexical_buffer, %lexical_len, %p) : (index, buffer, index, index) -> (f32)
+
+ %nd = scalar.fmaf %a, %l, %dot : f32
+ %na = scalar.fmaf %a, %a, %aa : f32
+ %nl = scalar.fmaf %l, %l, %ll : f32
+ scf.yield %nd, %na, %nl : f32,f32,f32
+}
+%ac = scalar.cmpf ogt, %prior1, %eps : f32
+%lc = scalar.cmpf ogt, %prior2, %eps : f32
+%an = scf.select %ac, %prior1, %eps : f32
+%ln = scf.select %lc, %prior2, %eps : f32
+%ai = scalar.rsqrtf %an : f32
+%li = scalar.rsqrtf %ln : f32
+%p0 = scalar.mulf %prior0, %ai : f32
+%p1 = scalar.mulf %p0, %li : f32
+%p2 = scalar.mulf %p1, %pscale : f32
+%joint0, %joint1, %joint2 = scf.for %j = [%zero to %w step %one](%dot1 = %fzero : f32, %ff = %fzero : f32, %oo = %fzero : f32) -> (f32,f32,f32) {
+ %p3 = index.add %wb, %j : index
+ %f = template.apply<@clef.load>(%fields_dtype, %fields_buffer, %fields_len, %p3) : (index, buffer, index, index) -> (f32)
+%o = template.apply<@clef.load>(%options_dtype, %options_buffer, %options_len, %p3) : (index, buffer, index, index) -> (f32)
+
+ %nd1 = scalar.fmaf %f, %o, %dot1 : f32
+ %nf = scalar.fmaf %f, %f, %ff : f32
+ %no = scalar.fmaf %o, %o, %oo : f32
+ scf.yield %nd1, %nf, %no : f32,f32,f32
+}
+%fc = scalar.cmpf ogt, %joint1, %cos_eps : f32
+%oc = scalar.cmpf ogt, %joint2, %cos_eps : f32
+%fn = scf.select %fc, %joint1, %cos_eps : f32
+%on = scf.select %oc, %joint2, %cos_eps : f32
+%fi = scalar.rsqrtf %fn : f32
+%oi = scalar.rsqrtf %on : f32
+%j0 = scalar.mulf %joint0, %fi : f32
+%j1 = scalar.mulf %j0, %oi : f32
+%residual = template.apply<@clef.load>(%residual_dtype, %residual_buffer, %residual_len, %id) : (index, buffer, index, index) -> (f32)
+
+%j2 = scalar.fmaf %j1, %jscale, %residual : f32
+%r = scalar.fmaf %j2, %g, %p2 : f32
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %id, %r) : (index, buffer, index, index, f32) -> ()
+
+
+ }
+ kernel.return
+}
