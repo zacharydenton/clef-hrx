@@ -55,6 +55,17 @@ about 46.5 GiB plus workspace. Use `--model-dir PATH` for a local snapshot or
 `--offline` for cached files. `--memory-gib` sets the allocation budget (default
 80 GiB); `--max-length` limits input tokens (default 16,384).
 
+## Evaluation
+
+On all 231 public JevBench cases, CLEF-HRX scored **201/231 (87.0%)**, compared
+with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
+completed with valid probabilities and no input truncation.
+
+On AMD Strix Halo, resident latency was **1.78 s median / 9.90 s p95**, with
+**19.4 decisions/minute** throughput. Another GPU application was present during
+this single sequential run; model loading is excluded from these speed figures.
+[Results, measurement details and reproduction instructions](docs/evaluation.md).
+
 ## Library
 
 `ClefModel` exposes inference and `load_in` accepts an existing HRX `ModelContext`.

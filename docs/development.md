@@ -73,3 +73,8 @@ with `cargo run --locked --example check_benches -- target/criterion paired`;
 thresholds are in [benches/criteria.json](../benches/criteria.json). Use an idle GPU.
 `CLEF_TRACE_DIR=/path` dumps FP32 intermediates for debugging and increases memory
 use. Leave it unset for benchmarks.
+
+## JevBench public evaluation
+
+See [evaluation results and reproduction instructions](evaluation.md) for the
+231-case public suite, pinned inputs, scoring rules and speed measurements.
