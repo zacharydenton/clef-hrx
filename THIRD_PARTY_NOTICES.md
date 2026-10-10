@@ -19,6 +19,9 @@
 - `benches/kernels/gemm_integer.loom` adapts h3-hrx's `gemm_packed_256.loom`
   at the same revision (Apache-2.0), retaining its INT4/INT8 exports and changing
   FP16 outputs and saturation bounds to BF16 for benchmark experiments.
+- `benches/kernels/prepare_integer.loom` adapts h3-hrx's
+  `prepare_plain_tiled.loom` at that revision (Apache-2.0), accepting BF16 input
+  and placing packed codes and FP32 row scales in one output allocation.
 - Resize coefficient quantization follows PyTorch's
   `aten/src/ATen/native/cpu/UpSampleKernel.cpp` algorithm. PyTorch is BSD-3-Clause
   (see `licenses/pytorch-BSD.txt`); the bicubic filter and resampling algorithm

@@ -257,6 +257,41 @@ impl Engine {
                 && dt.len() == 48,
             "persistent DeltaNet shape"
         );
+        #[cfg(feature = "bench-internals")]
+        if n >= 128 && n <= self.prepared_delta_max {
+            let prepared = self.alloc(n, 4192, DType::F32)?;
+            self.dispatch(
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../benches/kernels/delta_prepare.loom")
+                ),
+                n * 16 * 32,
+                &[("qkv", qkv), ("a", a), ("b", b), ("al", alog), ("dt", dt)],
+                &prepared,
+                &[
+                    ("n", n.to_string()),
+                    ("output_len", prepared.len().to_string()),
+                ],
+            )?;
+            let out = self.alloc(n, 6144, DType::Bf16)?;
+            self.dispatch(
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../benches/kernels/delta_segmented_prepared.loom")
+                ),
+                48 * 32 * 32,
+                &[
+                    ("qkv", qkv),
+                    ("a", &prepared),
+                    ("b", b),
+                    ("al", alog),
+                    ("dt", dt),
+                ],
+                &out,
+                &[("n", n.to_string()), ("output_len", out.len().to_string())],
+            )?;
+            return Ok(out);
+        }
         let out = self.alloc(n, 6144, DType::Bf16)?;
         self.dispatch(
             concat!(

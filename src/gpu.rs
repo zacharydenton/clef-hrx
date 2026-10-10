@@ -35,6 +35,15 @@ pub(crate) struct Tensor {
     _lease: Rc<()>,
 }
 impl Tensor {
+    #[cfg(feature = "bench-internals")]
+    pub(crate) fn same_view(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self._lease, &other._lease)
+            && self.slot == other.slot
+            && self.offset == other.offset
+            && self.rows == other.rows
+            && self.cols == other.cols
+            && self.dtype == other.dtype
+    }
     pub fn len(&self) -> usize {
         self.rows * self.cols
     }
@@ -82,6 +91,10 @@ struct CompiledKernel {
 pub(crate) struct Engine {
     #[cfg(feature = "bench-internals")]
     pub reference_kernels: crate::benchmarking::ReferenceKernels,
+    #[cfg(feature = "bench-internals")]
+    pub quantized: crate::benchmarking::quantized::QuantizedExperiment,
+    #[cfg(feature = "bench-internals")]
+    pub prepared_delta_max: usize,
     stream: Stream,
     compiler: Compiler,
     compile_reports: Option<std::path::PathBuf>,
@@ -161,6 +174,14 @@ impl Engine {
         Ok(Self {
             #[cfg(feature = "bench-internals")]
             reference_kernels: Default::default(),
+            #[cfg(feature = "bench-internals")]
+            quantized: crate::benchmarking::quantized::QuantizedExperiment::from_env()?,
+            #[cfg(feature = "bench-internals")]
+            prepared_delta_max: std::env::var("CLEF_EXPERIMENT_DELTA_PREPARED_MAX")
+                .ok()
+                .map(|s| s.parse())
+                .transpose()?
+                .unwrap_or(0),
             stream,
             compiler,
             compile_reports,
@@ -444,6 +465,8 @@ impl Engine {
         }
         let executable = graph.finish()?;
         self.commands.clear();
+        #[cfg(feature = "bench-internals")]
+        self.quantized.clear_activation();
         Ok(executable)
     }
     #[cfg(feature = "bench-internals")]
@@ -480,6 +503,7 @@ impl Engine {
         }
         let graph = graph.finish_profiled(&labels)?;
         self.commands.clear();
+        self.quantized.clear_activation();
         Ok(graph)
     }
     #[cfg(feature = "bench-internals")]
@@ -516,6 +540,8 @@ impl Engine {
     }
     pub fn reset_plan(&mut self) -> Result<()> {
         self.stream.synchronize()?;
+        #[cfg(feature = "bench-internals")]
+        self.quantized.clear_activation();
         self.commands.clear();
         self.retained.clear();
         self.traces.clear();

@@ -1,0 +1,290 @@
+// Experimental register-resident DeltaNet: four value columns per wave,
+// eight lanes per column, sixteen state elements per lane.
+// The a binding carries shared FP32 preparation from delta_prepare.loom.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.qkv_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.qkv_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.a_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.a_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.b_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.b_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.al_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.al_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.dt_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.dt_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.output_len : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%qkv_buffer: buffer, %a_buffer: buffer, %b_buffer: buffer, %al_buffer: buffer, %dt_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %qkv_len = config.get @clef.qkv_len : index
+ %qkv_dtype = config.get @clef.qkv_dtype : index
+ %a_len = config.get @clef.a_len : index
+ %a_dtype = config.get @clef.a_dtype : index
+ %b_len = config.get @clef.b_len : index
+ %b_dtype = config.get @clef.b_dtype : index
+ %al_len = config.get @clef.al_len : index
+ %al_dtype = config.get @clef.al_dtype : index
+ %dt_len = config.get @clef.dt_len : index
+ %dt_dtype = config.get @clef.dt_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%dim = index.constant 128 : index
+%wave_width = index.constant 32 : index
+%values = index.constant 4 : index
+%waves_head = index.constant 32 : index
+%wave = index.div %id, %wave_width : index
+%ll = index.rem %id, %wave_width : index
+%segment_width = index.constant 8 : index
+%column_lane = index.div %ll, %segment_width : index
+%key_lane = index.rem %ll, %segment_width : index
+%i1 = scalar.constant 1 : i32
+%i2 = scalar.constant 2 : i32
+%i4 = scalar.constant 4 : i32
+%i32 = scalar.constant 32 : i32
+%leader = index.cmp eq, %key_lane, %zero : index
+%head = index.div %wave, %waves_head : index
+%part = index.rem %wave, %waves_head : index
+%channel = index.mul %part, %values : index
+%vwidth = index.constant 6144 : index
+%qwidth = index.constant 10240 : index
+%heads = index.constant 48 : index
+%three = index.constant 3 : index
+%keyoff = index.constant 2048 : index
+%valueoff = index.constant 4096 : index
+%seq = config.get @clef.n : index
+%keyhead = index.div %head, %three : index
+%keybase = index.mul %keyhead, %dim : index
+%valuebase = index.mul %head, %dim : index
+%vchannel0 = index.add %valuebase, %channel : index
+%vchannel = index.add %vchannel0, %column_lane : index
+%eps = scalar.constant 1.0e-6 : f32
+%qscale = scalar.constant 0.08838834764831845 : f32
+%j0 = index.constant 0 : index
+%dim0 = index.add %key_lane, %j0 : index
+%j1 = index.constant 8 : index
+%dim1 = index.add %key_lane, %j1 : index
+%j2 = index.constant 16 : index
+%dim2 = index.add %key_lane, %j2 : index
+%j3 = index.constant 24 : index
+%dim3 = index.add %key_lane, %j3 : index
+%j4 = index.constant 32 : index
+%dim4 = index.add %key_lane, %j4 : index
+%j5 = index.constant 40 : index
+%dim5 = index.add %key_lane, %j5 : index
+%j6 = index.constant 48 : index
+%dim6 = index.add %key_lane, %j6 : index
+%j7 = index.constant 56 : index
+%dim7 = index.add %key_lane, %j7 : index
+%j8 = index.constant 64 : index
+%dim8 = index.add %key_lane, %j8 : index
+%j9 = index.constant 72 : index
+%dim9 = index.add %key_lane, %j9 : index
+%j10 = index.constant 80 : index
+%dim10 = index.add %key_lane, %j10 : index
+%j11 = index.constant 88 : index
+%dim11 = index.add %key_lane, %j11 : index
+%j12 = index.constant 96 : index
+%dim12 = index.add %key_lane, %j12 : index
+%j13 = index.constant 104 : index
+%dim13 = index.add %key_lane, %j13 : index
+%j14 = index.constant 112 : index
+%dim14 = index.add %key_lane, %j14 : index
+%j15 = index.constant 120 : index
+%dim15 = index.add %key_lane, %j15 : index
+%vc0 = index.constant 0 : index
+%vi0 = index.add %vchannel, %vc0 : index
+%last0_0, %last0_1, %last0_2, %last0_3, %last0_4, %last0_5, %last0_6, %last0_7, %last0_8, %last0_9, %last0_10, %last0_11, %last0_12, %last0_13, %last0_14, %last0_15 = scf.for %t = [%zero to %seq step %one](%s0_0 = %fzero : f32, %s0_1 = %fzero : f32, %s0_2 = %fzero : f32, %s0_3 = %fzero : f32, %s0_4 = %fzero : f32, %s0_5 = %fzero : f32, %s0_6 = %fzero : f32, %s0_7 = %fzero : f32, %s0_8 = %fzero : f32, %s0_9 = %fzero : f32, %s0_10 = %fzero : f32, %s0_11 = %fzero : f32, %s0_12 = %fzero : f32, %s0_13 = %fzero : f32, %s0_14 = %fzero : f32, %s0_15 = %fzero : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+%qb0 = index.mul %t, %qwidth : index
+%qb = index.add %qb0, %keybase : index
+%kb = index.add %qb, %keyoff : index
+%vb = index.add %qb0, %valueoff : index
+%ob = index.mul %t, %vwidth : index
+%ab0 = index.mul %t, %heads : index
+%ai = index.add %ab0, %head : index
+%pwidth = index.constant 4192 : index
+%gateoff = index.constant 4096 : index
+%two = index.constant 2 : index
+%pb0 = index.mul %t, %pwidth : index
+%pb = index.add %pb0, %keybase : index
+%pkb = index.add %pb, %keyoff : index
+%gatebase = index.add %pb0, %gateoff : index
+%head2 = index.mul %head, %two : index
+%gi = index.add %gatebase, %head2 : index
+%bi = index.add %gi, %one : index
+%decay = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %gi) : (index, buffer, index, index) -> (f32)
+%beta = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %bi) : (index, buffer, index, index) -> (f32)
+%pq0 = index.add %pb, %dim0 : index
+%qn0 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq0) : (index, buffer, index, index) -> (f32)
+%pk0 = index.add %pkb, %dim0 : index
+%kn0 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk0) : (index, buffer, index, index) -> (f32)
+%pq1 = index.add %pb, %dim1 : index
+%qn1 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq1) : (index, buffer, index, index) -> (f32)
+%pk1 = index.add %pkb, %dim1 : index
+%kn1 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk1) : (index, buffer, index, index) -> (f32)
+%pq2 = index.add %pb, %dim2 : index
+%qn2 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq2) : (index, buffer, index, index) -> (f32)
+%pk2 = index.add %pkb, %dim2 : index
+%kn2 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk2) : (index, buffer, index, index) -> (f32)
+%pq3 = index.add %pb, %dim3 : index
+%qn3 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq3) : (index, buffer, index, index) -> (f32)
+%pk3 = index.add %pkb, %dim3 : index
+%kn3 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk3) : (index, buffer, index, index) -> (f32)
+%pq4 = index.add %pb, %dim4 : index
+%qn4 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq4) : (index, buffer, index, index) -> (f32)
+%pk4 = index.add %pkb, %dim4 : index
+%kn4 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk4) : (index, buffer, index, index) -> (f32)
+%pq5 = index.add %pb, %dim5 : index
+%qn5 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq5) : (index, buffer, index, index) -> (f32)
+%pk5 = index.add %pkb, %dim5 : index
+%kn5 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk5) : (index, buffer, index, index) -> (f32)
+%pq6 = index.add %pb, %dim6 : index
+%qn6 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq6) : (index, buffer, index, index) -> (f32)
+%pk6 = index.add %pkb, %dim6 : index
+%kn6 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk6) : (index, buffer, index, index) -> (f32)
+%pq7 = index.add %pb, %dim7 : index
+%qn7 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq7) : (index, buffer, index, index) -> (f32)
+%pk7 = index.add %pkb, %dim7 : index
+%kn7 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk7) : (index, buffer, index, index) -> (f32)
+%pq8 = index.add %pb, %dim8 : index
+%qn8 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq8) : (index, buffer, index, index) -> (f32)
+%pk8 = index.add %pkb, %dim8 : index
+%kn8 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk8) : (index, buffer, index, index) -> (f32)
+%pq9 = index.add %pb, %dim9 : index
+%qn9 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq9) : (index, buffer, index, index) -> (f32)
+%pk9 = index.add %pkb, %dim9 : index
+%kn9 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk9) : (index, buffer, index, index) -> (f32)
+%pq10 = index.add %pb, %dim10 : index
+%qn10 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq10) : (index, buffer, index, index) -> (f32)
+%pk10 = index.add %pkb, %dim10 : index
+%kn10 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk10) : (index, buffer, index, index) -> (f32)
+%pq11 = index.add %pb, %dim11 : index
+%qn11 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq11) : (index, buffer, index, index) -> (f32)
+%pk11 = index.add %pkb, %dim11 : index
+%kn11 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk11) : (index, buffer, index, index) -> (f32)
+%pq12 = index.add %pb, %dim12 : index
+%qn12 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq12) : (index, buffer, index, index) -> (f32)
+%pk12 = index.add %pkb, %dim12 : index
+%kn12 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk12) : (index, buffer, index, index) -> (f32)
+%pq13 = index.add %pb, %dim13 : index
+%qn13 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq13) : (index, buffer, index, index) -> (f32)
+%pk13 = index.add %pkb, %dim13 : index
+%kn13 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk13) : (index, buffer, index, index) -> (f32)
+%pq14 = index.add %pb, %dim14 : index
+%qn14 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq14) : (index, buffer, index, index) -> (f32)
+%pk14 = index.add %pkb, %dim14 : index
+%kn14 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk14) : (index, buffer, index, index) -> (f32)
+%pq15 = index.add %pb, %dim15 : index
+%qn15 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pq15) : (index, buffer, index, index) -> (f32)
+%pk15 = index.add %pkb, %dim15 : index
+%kn15 = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %pk15) : (index, buffer, index, index) -> (f32)
+%vidx0 = index.add %vb, %vi0 : index
+%value0 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx0) : (index, buffer, index, index) -> (f32)
+%sd0_0 = scalar.mulf %s0_0, %decay : f32
+%pred0_0 = scalar.fmaf %sd0_0, %kn0, %fzero : f32
+%sd0_1 = scalar.mulf %s0_1, %decay : f32
+%pred0_1 = scalar.fmaf %sd0_1, %kn1, %pred0_0 : f32
+%sd0_2 = scalar.mulf %s0_2, %decay : f32
+%pred0_2 = scalar.fmaf %sd0_2, %kn2, %pred0_1 : f32
+%sd0_3 = scalar.mulf %s0_3, %decay : f32
+%pred0_3 = scalar.fmaf %sd0_3, %kn3, %pred0_2 : f32
+%sd0_4 = scalar.mulf %s0_4, %decay : f32
+%pred0_4 = scalar.fmaf %sd0_4, %kn4, %pred0_3 : f32
+%sd0_5 = scalar.mulf %s0_5, %decay : f32
+%pred0_5 = scalar.fmaf %sd0_5, %kn5, %pred0_4 : f32
+%sd0_6 = scalar.mulf %s0_6, %decay : f32
+%pred0_6 = scalar.fmaf %sd0_6, %kn6, %pred0_5 : f32
+%sd0_7 = scalar.mulf %s0_7, %decay : f32
+%pred0_7 = scalar.fmaf %sd0_7, %kn7, %pred0_6 : f32
+%sd0_8 = scalar.mulf %s0_8, %decay : f32
+%pred0_8 = scalar.fmaf %sd0_8, %kn8, %pred0_7 : f32
+%sd0_9 = scalar.mulf %s0_9, %decay : f32
+%pred0_9 = scalar.fmaf %sd0_9, %kn9, %pred0_8 : f32
+%sd0_10 = scalar.mulf %s0_10, %decay : f32
+%pred0_10 = scalar.fmaf %sd0_10, %kn10, %pred0_9 : f32
+%sd0_11 = scalar.mulf %s0_11, %decay : f32
+%pred0_11 = scalar.fmaf %sd0_11, %kn11, %pred0_10 : f32
+%sd0_12 = scalar.mulf %s0_12, %decay : f32
+%pred0_12 = scalar.fmaf %sd0_12, %kn12, %pred0_11 : f32
+%sd0_13 = scalar.mulf %s0_13, %decay : f32
+%pred0_13 = scalar.fmaf %sd0_13, %kn13, %pred0_12 : f32
+%sd0_14 = scalar.mulf %s0_14, %decay : f32
+%pred0_14 = scalar.fmaf %sd0_14, %kn14, %pred0_13 : f32
+%sd0_15 = scalar.mulf %s0_15, %decay : f32
+%pred0_15 = scalar.fmaf %sd0_15, %kn15, %pred0_14 : f32
+%predsum0_shuffle1, %predsum0_shuffle1_valid = kernel.subgroup.shuffle<xor> %pred0_15, %i1, %i32 : f32, i32, i32
+%predsum0_sum1 = scalar.addf %pred0_15, %predsum0_shuffle1 : f32
+%predsum0_shuffle2, %predsum0_shuffle2_valid = kernel.subgroup.shuffle<xor> %predsum0_sum1, %i2, %i32 : f32, i32, i32
+%predsum0_sum2 = scalar.addf %predsum0_sum1, %predsum0_shuffle2 : f32
+%predsum0_shuffle4, %predsum0_shuffle4_valid = kernel.subgroup.shuffle<xor> %predsum0_sum2, %i4, %i32 : f32, i32, i32
+%predsum0 = scalar.addf %predsum0_sum2, %predsum0_shuffle4 : f32
+%err0 = scalar.subf %value0, %predsum0 : f32
+%delta0 = scalar.mulf %err0, %beta : f32
+%sn0_0 = scalar.fmaf %delta0, %kn0, %sd0_0 : f32
+%out0_0 = scalar.fmaf %sn0_0, %qn0, %fzero : f32
+%sn0_1 = scalar.fmaf %delta0, %kn1, %sd0_1 : f32
+%out0_1 = scalar.fmaf %sn0_1, %qn1, %out0_0 : f32
+%sn0_2 = scalar.fmaf %delta0, %kn2, %sd0_2 : f32
+%out0_2 = scalar.fmaf %sn0_2, %qn2, %out0_1 : f32
+%sn0_3 = scalar.fmaf %delta0, %kn3, %sd0_3 : f32
+%out0_3 = scalar.fmaf %sn0_3, %qn3, %out0_2 : f32
+%sn0_4 = scalar.fmaf %delta0, %kn4, %sd0_4 : f32
+%out0_4 = scalar.fmaf %sn0_4, %qn4, %out0_3 : f32
+%sn0_5 = scalar.fmaf %delta0, %kn5, %sd0_5 : f32
+%out0_5 = scalar.fmaf %sn0_5, %qn5, %out0_4 : f32
+%sn0_6 = scalar.fmaf %delta0, %kn6, %sd0_6 : f32
+%out0_6 = scalar.fmaf %sn0_6, %qn6, %out0_5 : f32
+%sn0_7 = scalar.fmaf %delta0, %kn7, %sd0_7 : f32
+%out0_7 = scalar.fmaf %sn0_7, %qn7, %out0_6 : f32
+%sn0_8 = scalar.fmaf %delta0, %kn8, %sd0_8 : f32
+%out0_8 = scalar.fmaf %sn0_8, %qn8, %out0_7 : f32
+%sn0_9 = scalar.fmaf %delta0, %kn9, %sd0_9 : f32
+%out0_9 = scalar.fmaf %sn0_9, %qn9, %out0_8 : f32
+%sn0_10 = scalar.fmaf %delta0, %kn10, %sd0_10 : f32
+%out0_10 = scalar.fmaf %sn0_10, %qn10, %out0_9 : f32
+%sn0_11 = scalar.fmaf %delta0, %kn11, %sd0_11 : f32
+%out0_11 = scalar.fmaf %sn0_11, %qn11, %out0_10 : f32
+%sn0_12 = scalar.fmaf %delta0, %kn12, %sd0_12 : f32
+%out0_12 = scalar.fmaf %sn0_12, %qn12, %out0_11 : f32
+%sn0_13 = scalar.fmaf %delta0, %kn13, %sd0_13 : f32
+%out0_13 = scalar.fmaf %sn0_13, %qn13, %out0_12 : f32
+%sn0_14 = scalar.fmaf %delta0, %kn14, %sd0_14 : f32
+%out0_14 = scalar.fmaf %sn0_14, %qn14, %out0_13 : f32
+%sn0_15 = scalar.fmaf %delta0, %kn15, %sd0_15 : f32
+%out0_15 = scalar.fmaf %sn0_15, %qn15, %out0_14 : f32
+%result0_shuffle1, %result0_shuffle1_valid = kernel.subgroup.shuffle<xor> %out0_15, %i1, %i32 : f32, i32, i32
+%result0_sum1 = scalar.addf %out0_15, %result0_shuffle1 : f32
+%result0_shuffle2, %result0_shuffle2_valid = kernel.subgroup.shuffle<xor> %result0_sum1, %i2, %i32 : f32, i32, i32
+%result0_sum2 = scalar.addf %result0_sum1, %result0_shuffle2 : f32
+%result0_shuffle4, %result0_shuffle4_valid = kernel.subgroup.shuffle<xor> %result0_sum2, %i4, %i32 : f32, i32, i32
+%result0 = scalar.addf %result0_sum2, %result0_shuffle4 : f32
+%oi0 = index.add %ob, %vi0 : index
+scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0, %result0) : (index, buffer, index, index, f32) -> ()}
+scf.yield %sn0_0, %sn0_1, %sn0_2, %sn0_3, %sn0_4, %sn0_5, %sn0_6, %sn0_7, %sn0_8, %sn0_9, %sn0_10, %sn0_11, %sn0_12, %sn0_13, %sn0_14, %sn0_15 : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
+}
+}
+kernel.return
+}

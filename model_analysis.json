@@ -1,0 +1,112 @@
+{
+  "analysis_status": "partial",
+  "model": {
+    "model_path": "/home/zach/code/clef-hrx/artifacts/model",
+    "model_type": "qwen3_5",
+    "source_type": "local",
+    "source_repository": "Cloudflare/clef",
+    "checkpoint_revision": "2f3de3dd85f379784083b0814d997ab627200f0c",
+    "architectures": [
+      "Qwen3_5ForConditionalGeneration"
+    ],
+    "trust_remote_code": false,
+    "transformers_version": "5.10.2",
+    "hidden_layers": 64,
+    "hidden_size": 5120,
+    "intermediate_size": 17408,
+    "layer_types": {
+      "linear_attention": 48,
+      "full_attention": 16
+    },
+    "multimodal": true,
+    "modality_configs": [
+      "text_config",
+      "vision_config"
+    ],
+    "moe": false,
+    "dtype": "bfloat16",
+    "safetensors_bytes": 54969731792,
+    "custom_files": [
+      "joint_head.safetensors",
+      "joint_head_config.json"
+    ],
+    "tokenizer_present": true
+  },
+  "quantization_targets": {
+    "linear_layer_count": 496,
+    "estimate_scope": "Text backbone only: 48 DeltaNet blocks \u00d7 (5 attention + 3 MLP projections), 16 full-attention blocks \u00d7 (4 attention + 3 MLP projections); verified projection names in checkpoint index, without loading weights.",
+    "exclude_defaults": [],
+    "exclude_defaults_status": "Unknown until installed Quark template inspection; empty list does not mean no exclusions.",
+    "has_non_linear_experts": false,
+    "preservation_requirements": [
+      "CLEF joint decision head and its configuration",
+      "vision weights/configuration",
+      "tokenizer",
+      "lm_head unless supported plan explicitly selects it"
+    ]
+  },
+  "environment": {
+    "active_python": "/usr/bin/python3",
+    "active_python_version": "3.14.7",
+    "active_transformers": "5.7.0.dev0",
+    "quark_installed": false,
+    "host_rocm": "7.2.4",
+    "gpu": "Radeon 8060S gfx1151",
+    "available_supported_python": "/home/zach/.local/share/uv/python/cpython-3.13.11-linux-x86_64-gnu/bin/python3.13",
+    "planned_environment_scope": "Fresh isolated environment; no changes performed.",
+    "active_torch": "2.14.0",
+    "active_torch_hip": "7.2.53211",
+    "gpu_tensor_check": {
+      "passed": true,
+      "device": "AMD Radeon 8060S Graphics",
+      "gcnArchName": "gfx1151",
+      "sum_1024_ones": 1024.0
+    }
+  },
+  "risks": [
+    {
+      "severity": "high",
+      "message": "Quark is not installed in the active environment, so Qwen3.5 template/loader support and actual default exclusions are unverified.",
+      "recovery_hint": "Verify an accelerator-matched Python 3.13 environment and the installed public CLI/template APIs."
+    },
+    {
+      "severity": "high",
+      "message": "Active Python 3.14.7 is outside the skill-supported 3.11\u20133.13 range; installed Transformers 5.7.0.dev0 differs from checkpoint declaration 5.10.2."
+    },
+    {
+      "severity": "high",
+      "message": "CLEF has a separate joint_head.safetensors; generic Hugging Face export must preserve this head and its configuration for the native classifier."
+    },
+    {
+      "severity": "high",
+      "message": "Quark export format is not yet proven compatible with the native Loom Hadamard/per-row packed INT4 path; Quark export alone does not establish native throughput."
+    },
+    {
+      "severity": "medium",
+      "message": "GPU is shared with an unrelated resident workload. Calibration must run after the current JevBench evaluation and within observed memory headroom."
+    }
+  ],
+  "acceptance": {
+    "target_resident_input_tokens_per_second": 1000,
+    "minimum_correct": 202,
+    "cases": 231,
+    "strict_valid_required": true,
+    "unchanged_dataset_checkpoint_token_counts": true
+  },
+  "checkpoint": {
+    "id": 1,
+    "status": "awaiting_model_analysis_confirmation"
+  },
+  "documentation_evidence": [
+    {
+      "url": "https://quark.docs.amd.com/latest/release_notes.html",
+      "observed_release": "0.13",
+      "facts": [
+        "Documents Qwen3.5 family support additions, but does not by itself establish installed template support for CLEF.",
+        "Documents a fix to offline-rotation RMSNorm fusion for architectures using 1 + weight, including Qwen3.5.",
+        "Documents a public torch-llm-ptq --template_file option for custom JSON templates."
+      ],
+      "limitation": "Installed package and CLI remain unverified; no quantization plan selected."
+    }
+  ]
+}

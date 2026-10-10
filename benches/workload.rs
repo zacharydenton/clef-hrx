@@ -33,6 +33,11 @@ fn gemm(c: &mut Criterion) {
     let integer_bits = std::env::var("CLEF_BENCH_INTEGER_BITS")
         .map(|s| s.parse::<usize>().unwrap())
         .unwrap_or(8);
+    let integer_prepare = std::env::var("CLEF_BENCH_INTEGER_PREPARE").as_deref() == Ok("1");
+    assert!(
+        !integer_prepare || integer_source.is_some(),
+        "integer preparation requires an integer source"
+    );
     assert!(
         [4, 8].contains(&integer_bits),
         "integer bits must be 4 or 8"
@@ -84,15 +89,12 @@ fn gemm(c: &mut Criterion) {
                         };
                         let mut graph =
                             if let Some(source) = integer_source.as_ref().filter(|_| compatible) {
-                                GemmBenchmark::packed_integer(
-                                    m,
-                                    k,
-                                    n,
-                                    source,
-                                    integer_bits,
-                                    integer_padded,
-                                    minimum_bytes,
-                                )
+                                let build = if integer_prepare {
+                                    GemmBenchmark::rotated_integer
+                                } else {
+                                    GemmBenchmark::packed_integer
+                                };
+                                build(m, k, n, source, integer_bits, integer_padded, minimum_bytes)
                             } else {
                                 GemmBenchmark::with_working_set(m, k, n, kernel, minimum_bytes)
                             }
@@ -100,7 +102,7 @@ fn gemm(c: &mut Criterion) {
                         let actual = graph.output().unwrap();
                         assert!(actual.iter().all(|x| x.is_finite()));
                         if (source.is_some() || padded || integer_source.is_some()) && compatible {
-                            let expected = if integer_source.is_some() {
+                            let expected = if integer_source.is_some() && !integer_prepare {
                                 GemmBenchmark::quantized_reference(m, k, n, integer_bits)
                             } else {
                                 GemmBenchmark::new(m, k, n, true)
@@ -114,10 +116,23 @@ fn gemm(c: &mut Criterion) {
                                 .map(|(a, b)| (a - b).abs())
                                 .fold(0f32, f32::max);
                             eprintln!("GEMM {m}x{k}x{n}: maximum output change={error}");
+                            if integer_prepare {
+                                let squared_error: f64 = actual
+                                    .iter()
+                                    .zip(&expected)
+                                    .map(|(a, b)| f64::from(a - b).powi(2))
+                                    .sum();
+                                let squared_norm: f64 =
+                                    expected.iter().map(|x| f64::from(*x).powi(2)).sum();
+                                eprintln!(
+                                    "Rotated INT{integer_bits}: relative L2 error={}",
+                                    (squared_error / squared_norm.max(f64::MIN_POSITIVE)).sqrt()
+                                );
+                            }
                             if padded {
                                 assert_eq!(actual, expected, "stride padding changed arithmetic");
                             }
-                            if integer_source.is_some() {
+                            if integer_source.is_some() && !integer_prepare {
                                 assert!(
                                     actual.iter().zip(&expected).all(|(a, b)| (a - b).abs()
                                         <= a.abs().max(b.abs()) / 128. + 1e-6),
@@ -145,6 +160,12 @@ fn gemm(c: &mut Criterion) {
 fn delta(c: &mut Criterion) {
     let source =
         std::env::var_os("CLEF_BENCH_DELTA_SOURCE").map(|p| std::fs::read_to_string(p).unwrap());
+    let prepare_source = std::env::var_os("CLEF_BENCH_DELTA_PREPARE_SOURCE")
+        .map(|p| std::fs::read_to_string(p).unwrap());
+    assert!(
+        prepare_source.is_none() || source.is_some(),
+        "preparation requires CLEF_BENCH_DELTA_SOURCE"
+    );
     let values = std::env::var("CLEF_BENCH_DELTA_VALUES")
         .map(|s| s.parse().unwrap())
         .unwrap_or(8);
@@ -161,7 +182,11 @@ fn delta(c: &mut Criterion) {
                     let mut graph = if name == "chunked" {
                         DeltaBenchmark::new(tokens, true)
                     } else if let Some(source) = &source {
-                        DeltaBenchmark::persistent(tokens, source, values)
+                        if let Some(prepare) = &prepare_source {
+                            DeltaBenchmark::persistent_prepared(tokens, prepare, source, values)
+                        } else {
+                            DeltaBenchmark::persistent(tokens, source, values)
+                        }
                     } else {
                         DeltaBenchmark::resident(tokens)
                     }
@@ -179,9 +204,7 @@ fn delta(c: &mut Criterion) {
                         eprintln!(
                             "persistent DeltaNet tokens={tokens}: maximum output change={error}"
                         );
-                        if source.is_none() {
-                            assert!(error < 0.002, "DeltaNet output error {error}");
-                        }
+                        assert!(error < 0.002, "DeltaNet output error {error}");
                     }
                     allocated = graph.allocated_bytes();
                     graph

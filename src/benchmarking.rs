@@ -4,6 +4,7 @@ use crate::{
     gpu::{DType, Engine, Tensor},
 };
 use hrx::{GraphExec, inference::ModelContext};
+pub(crate) mod quantized;
 
 /// Development-only switches for paired full-model comparisons.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -408,7 +409,32 @@ impl DeltaBenchmark {
             [4, 8, 16].contains(&values_per_wave),
             "unsupported values per wave"
         );
-        Self::build(tokens, false, false, true, Some((source, values_per_wave)))
+        Self::build(
+            tokens,
+            false,
+            false,
+            true,
+            Some((source, values_per_wave, None)),
+        )
+    }
+    /// Time Q/K and gate preparation together with the recurrent kernel.
+    pub fn persistent_prepared(
+        tokens: usize,
+        prepare_source: &str,
+        source: &str,
+        values_per_wave: usize,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            [4, 8, 16].contains(&values_per_wave),
+            "unsupported values per wave"
+        );
+        Self::build(
+            tokens,
+            false,
+            false,
+            true,
+            Some((source, values_per_wave, Some(prepare_source))),
+        )
     }
     pub fn resident(tokens: usize) -> Result<Self> {
         Self::persistent(tokens, include_str!("../kernels/delta_persistent.loom"), 8)
@@ -418,7 +444,7 @@ impl DeltaBenchmark {
         chunked: bool,
         profile: bool,
         optimized: bool,
-        persistent: Option<(&str, usize)>,
+        persistent: Option<(&str, usize, Option<&str>)>,
     ) -> Result<Self> {
         anyhow::ensure!(
             (1..=4096).contains(&tokens),
@@ -440,7 +466,30 @@ impl DeltaBenchmark {
             DType::Bf16,
             bytemuck::cast_slice(&[half::bf16::ZERO; 48]),
         )?;
-        let output = if let Some((source, values_per_wave)) = persistent {
+        let output = if let Some((source, values_per_wave, prepare_source)) = persistent {
+            let prepared = if let Some(source) = prepare_source {
+                let prepared = engine.alloc(tokens, 4192, DType::F32)?;
+                let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
+                engine.dispatch(
+                    &source,
+                    tokens * 16 * 32,
+                    &[
+                        ("qkv", &qkv),
+                        ("a", &a),
+                        ("b", &a),
+                        ("al", &al),
+                        ("dt", &al),
+                    ],
+                    &prepared,
+                    &[
+                        ("n", tokens.to_string()),
+                        ("output_len", (tokens * 4192).to_string()),
+                    ],
+                )?;
+                Some(prepared)
+            } else {
+                None
+            };
             let out = engine.alloc(tokens, 6144, DType::Bf16)?;
             let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
             engine.dispatch(
@@ -448,7 +497,7 @@ impl DeltaBenchmark {
                 48 * 128 / values_per_wave * 32,
                 &[
                     ("qkv", &qkv),
-                    ("a", &a),
+                    ("a", prepared.as_ref().unwrap_or(&a)),
                     ("b", &a),
                     ("al", &al),
                     ("dt", &al),

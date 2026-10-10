@@ -452,7 +452,15 @@ mod tests {
     fn persistent_comparison() -> Result<()> {
         let context = hrx::inference::ModelContext::new(Default::default())?;
         let mut e = Engine::new(&context)?;
-        for (n, log_decay) in [(1, 0.), (65, -1.), (260, 0.), (1024, -6.), (4032, -3.)] {
+        for (n, log_decay) in [
+            (1, 0.),
+            (65, -1.),
+            (158, -1.),
+            (260, 0.),
+            (620, -6.),
+            (1024, -6.),
+            (4032, -3.),
+        ] {
             let values: Vec<_> = (0..n * 10240)
                 .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 64.))
                 .collect();

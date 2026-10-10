@@ -104,7 +104,7 @@ def main():
         "scoring": "Upstream score_task and summarize; raw native probabilities; score uses argmax",
         "latency_note": "Sequential local CLI; first call includes model loading. No warmup. Compilation included.",
         "cache_before": kernel_cache_snapshot(),
-        "environment": {k: os.environ[k] for k in ("XDG_CACHE_HOME", "HRX_RUNTIME_DIR", "HRX_BUNDLE_MANIFEST", "HRX_OFFLINE") if k in os.environ},
+        "environment": {k: v for k, v in os.environ.items() if k.startswith("CLEF_EXPERIMENT_") or k in ("XDG_CACHE_HOME", "HRX_RUNTIME_DIR", "HRX_BUNDLE_MANIFEST", "HRX_OFFLINE")},
     }
     (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (args.output / "working-tree.diff").write_bytes(subprocess.check_output(["git", "diff", "HEAD"]))

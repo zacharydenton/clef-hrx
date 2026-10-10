@@ -53,19 +53,42 @@ fn paired(c: &mut Criterion) {
         .sample_size(40)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(measurement_seconds));
-    for (name, tokens) in [
+    let candidate_source = std::env::var_os("CLEF_BENCH_DELTA_SOURCE")
+        .map(|path| std::fs::read_to_string(path).unwrap());
+    let reference_source = std::env::var_os("CLEF_BENCH_DELTA_REFERENCE_SOURCE")
+        .map(|path| std::fs::read_to_string(path).unwrap());
+    let prepare_source = std::env::var_os("CLEF_BENCH_DELTA_PREPARE_SOURCE")
+        .map(|path| std::fs::read_to_string(path).unwrap());
+    assert!(prepare_source.is_none() || candidate_source.is_some());
+    let values = std::env::var("CLEF_BENCH_DELTA_VALUES")
+        .map(|value| value.parse::<usize>().unwrap())
+        .unwrap_or(8);
+    let mut cases = vec![
         ("chunked", 65),
         ("chunked", 260),
         ("chunked", 1024),
         ("persistent", 235),
         ("persistent", 620),
         ("persistent", 1024),
+        ("prepared", 158),
+        ("prepared", 235),
+        ("prepared", 620),
+        ("prepared", 1024),
+        ("prepared", 2048),
         ("gated_norm", 260),
         ("gated_norm", 1024),
-    ] {
+    ];
+    if candidate_source.is_some() {
+        cases.extend([158, 235, 620, 1024, 2048].map(|tokens| ("candidate", tokens)));
+    }
+    for (name, tokens) in cases {
         let norm = name == "gated_norm";
         let mut reference = if norm {
             DeltaBenchmark::gated_norm(tokens, false)
+        } else if name == "candidate" && reference_source.is_some() {
+            DeltaBenchmark::persistent(tokens, reference_source.as_ref().unwrap(), 8)
+        } else if matches!(name, "prepared" | "candidate") {
+            DeltaBenchmark::resident(tokens)
         } else if name == "persistent" {
             DeltaBenchmark::new(tokens, true)
         } else {
@@ -74,6 +97,24 @@ fn paired(c: &mut Criterion) {
         .unwrap();
         let mut optimized = if norm {
             DeltaBenchmark::gated_norm(tokens, true)
+        } else if name == "candidate" {
+            if let Some(prepare_source) = &prepare_source {
+                DeltaBenchmark::persistent_prepared(
+                    tokens,
+                    prepare_source,
+                    candidate_source.as_ref().unwrap(),
+                    values,
+                )
+            } else {
+                DeltaBenchmark::persistent(tokens, candidate_source.as_ref().unwrap(), values)
+            }
+        } else if name == "prepared" {
+            DeltaBenchmark::persistent_prepared(
+                tokens,
+                include_str!("kernels/delta_prepare.loom"),
+                include_str!("kernels/delta_segmented_prepared.loom"),
+                4,
+            )
         } else if name == "persistent" {
             DeltaBenchmark::resident(tokens)
         } else {
@@ -85,7 +126,7 @@ fn paired(c: &mut Criterion) {
             allocated <= allocation_limit(),
             "combined old/new allocation exceeds budget"
         );
-        {
+        let (max_abs_error, identical) = {
             let before = reference.output().unwrap();
             let after = optimized.output().unwrap();
             assert_eq!(before.len(), after.len());
@@ -99,7 +140,18 @@ fn paired(c: &mut Criterion) {
                     } else {
                         0.002
                     }));
-        }
+            (
+                before
+                    .iter()
+                    .zip(&after)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0f32, f32::max),
+                before
+                    .iter()
+                    .zip(&after)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+            )
+        };
         let mut samples = Vec::new();
         let mut sequence = 0u64;
         group.throughput(Throughput::Elements(tokens as u64));
@@ -151,6 +203,8 @@ fn paired(c: &mut Criterion) {
             root.join("paired.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "tokens": tokens,
+                "max_abs_error": max_abs_error,
+                "bitwise_identical": identical,
                 "allocated_bytes": allocated,
                 "sample_size": 40,
                 "samples": samples,

@@ -197,7 +197,7 @@ kernel.def target(@clef_target) export("clef_op") @clef_op() {
 %out0_3 = scalar.fmaf %sn0_3, %qn3, %out0_2 : f32
 %result0 = kernel.subgroup.reduce<addf> %out0_3 : f32
 %oi0 = index.add %ob, %vi0 : index
-scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0, %result0) : (index, buffer, index, index, f32) -> ()}
+
 %vidx1 = index.add %vb, %vi1 : index
 %value1 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx1) : (index, buffer, index, index) -> (f32)
 %sd1_0 = scalar.mulf %s1_0, %decay : f32
@@ -221,7 +221,7 @@ scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %
 %out1_3 = scalar.fmaf %sn1_3, %qn3, %out1_2 : f32
 %result1 = kernel.subgroup.reduce<addf> %out1_3 : f32
 %oi1 = index.add %ob, %vi1 : index
-scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1, %result1) : (index, buffer, index, index, f32) -> ()}
+
 %vidx2 = index.add %vb, %vi2 : index
 %value2 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx2) : (index, buffer, index, index) -> (f32)
 %sd2_0 = scalar.mulf %s2_0, %decay : f32
@@ -245,7 +245,7 @@ scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %
 %out2_3 = scalar.fmaf %sn2_3, %qn3, %out2_2 : f32
 %result2 = kernel.subgroup.reduce<addf> %out2_3 : f32
 %oi2 = index.add %ob, %vi2 : index
-scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2, %result2) : (index, buffer, index, index, f32) -> ()}
+
 %vidx3 = index.add %vb, %vi3 : index
 %value3 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx3) : (index, buffer, index, index) -> (f32)
 %sd3_0 = scalar.mulf %s3_0, %decay : f32
@@ -269,7 +269,7 @@ scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %
 %out3_3 = scalar.fmaf %sn3_3, %qn3, %out3_2 : f32
 %result3 = kernel.subgroup.reduce<addf> %out3_3 : f32
 %oi3 = index.add %ob, %vi3 : index
-scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3, %result3) : (index, buffer, index, index, f32) -> ()}
+
 %vidx4 = index.add %vb, %vi4 : index
 %value4 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx4) : (index, buffer, index, index) -> (f32)
 %sd4_0 = scalar.mulf %s4_0, %decay : f32
@@ -293,7 +293,7 @@ scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %
 %out4_3 = scalar.fmaf %sn4_3, %qn3, %out4_2 : f32
 %result4 = kernel.subgroup.reduce<addf> %out4_3 : f32
 %oi4 = index.add %ob, %vi4 : index
-scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4, %result4) : (index, buffer, index, index, f32) -> ()}
+
 %vidx5 = index.add %vb, %vi5 : index
 %value5 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx5) : (index, buffer, index, index) -> (f32)
 %sd5_0 = scalar.mulf %s5_0, %decay : f32
@@ -317,7 +317,7 @@ scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %
 %out5_3 = scalar.fmaf %sn5_3, %qn3, %out5_2 : f32
 %result5 = kernel.subgroup.reduce<addf> %out5_3 : f32
 %oi5 = index.add %ob, %vi5 : index
-scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5, %result5) : (index, buffer, index, index, f32) -> ()}
+
 %vidx6 = index.add %vb, %vi6 : index
 %value6 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx6) : (index, buffer, index, index) -> (f32)
 %sd6_0 = scalar.mulf %s6_0, %decay : f32
@@ -341,7 +341,7 @@ scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %
 %out6_3 = scalar.fmaf %sn6_3, %qn3, %out6_2 : f32
 %result6 = kernel.subgroup.reduce<addf> %out6_3 : f32
 %oi6 = index.add %ob, %vi6 : index
-scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6, %result6) : (index, buffer, index, index, f32) -> ()}
+
 %vidx7 = index.add %vb, %vi7 : index
 %value7 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx7) : (index, buffer, index, index) -> (f32)
 %sd7_0 = scalar.mulf %s7_0, %decay : f32
@@ -365,7 +365,18 @@ scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %
 %out7_3 = scalar.fmaf %sn7_3, %qn3, %out7_2 : f32
 %result7 = kernel.subgroup.reduce<addf> %out7_3 : f32
 %oi7 = index.add %ob, %vi7 : index
-scf.if %leader {template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7, %result7) : (index, buffer, index, index, f32) -> ()}
+
+// Group stores after all value-channel arithmetic to avoid repeated lane masking.
+scf.if %leader {
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0, %result0) : (index, buffer, index, index, f32) -> ()
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1, %result1) : (index, buffer, index, index, f32) -> ()
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2, %result2) : (index, buffer, index, index, f32) -> ()
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3, %result3) : (index, buffer, index, index, f32) -> ()
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4, %result4) : (index, buffer, index, index, f32) -> ()
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5, %result5) : (index, buffer, index, index, f32) -> ()
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6, %result6) : (index, buffer, index, index, f32) -> ()
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7, %result7) : (index, buffer, index, index, f32) -> ()
+}
 scf.yield %sn0_0, %sn0_1, %sn0_2, %sn0_3, %sn1_0, %sn1_1, %sn1_2, %sn1_3, %sn2_0, %sn2_1, %sn2_2, %sn2_3, %sn3_0, %sn3_1, %sn3_2, %sn3_3, %sn4_0, %sn4_1, %sn4_2, %sn4_3, %sn5_0, %sn5_1, %sn5_2, %sn5_3, %sn6_0, %sn6_1, %sn6_2, %sn6_3, %sn7_0, %sn7_1, %sn7_2, %sn7_3 : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
 }
 }

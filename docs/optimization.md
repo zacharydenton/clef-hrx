@@ -19,6 +19,7 @@ reference tests; do not loosen their tolerances to qualify a candidate.
 | `workload` / `workload_gemm` | Nine projection families; 1, 65, 127, 128, 158, 235, 260, 620, 1,024, 2,048, 4,032 rows; repeated weights and a rotating working set of at least 64 MiB | Completed dispatch, excluding allocation, compilation, upload and readback |
 | `workload` / `workload_delta` | Chunked and register-resident recurrence at every listed length; deterministic reset and allocation checks | Completed graph replay |
 | `kernels` / `paired_delta_prefill/persistent` | Alternating-order chunked/register comparisons at 235, 620 and 1,024 tokens; raw paired timing totals | Completed graph replay, with both variants resident |
+| `kernels` / `paired_delta_prefill/prepared` and `/candidate` | Prepared or external DeltaNet kernels at 158, 235, 620, 1,024 and 2,048 tokens; alternating order, maximum error and bitwise equality | Completed graph replay, including preparation when selected |
 | `workload` / `workload_attention` | Causal 24-query/4-KV-head attention, 256 dimensions; 16 through 4,032 tokens | Completed graph, including GPU value transpose/padding and the selected attention kernel |
 | `normalization`, `preprocessing` | Normalization shapes and CPU request processing | Existing suite-specific boundaries |
 | `workload_inference` | Seven representative requests selected by nearest token length from an actual request corpus; exact-input replay and graph rebuilding | Complete `infer` calls, including preparation in rebuild cases |
@@ -92,6 +93,16 @@ For kernel experiments without rebuilding Rust, set `CLEF_BENCH_GEMM_SOURCE`,
 `CLEF_BENCH_DELTA_SOURCE`, or `CLEF_BENCH_ATTENTION_SOURCE` to a Loom file matching
 the corresponding harness contract. DeltaNet also accepts
 `CLEF_BENCH_DELTA_VALUES=4|8|16`. Candidate sources are copied into the run record.
+The paired `kernels` suite accepts the same DeltaNet overrides under
+`paired_delta_prefill/candidate`. Its optional `CLEF_BENCH_DELTA_REFERENCE_SOURCE`
+selects an archived eight-values-per-wave reference, allowing comparisons after
+the production kernel changes. Both sources are copied into the run record.
+`CLEF_BENCH_DELTA_PREPARE_SOURCE` adds a preparation dispatch inside the timed
+DeltaNet graph. Its output is FP32 `[tokens, 4192]`: normalized/scaled Q (2,048),
+normalized K (2,048), then interleaved decay/beta (96). The recurrent source
+receives that buffer in its `a` binding; the other bindings keep their original
+layout. It requires `CLEF_BENCH_DELTA_SOURCE` and preserves the 0.002 maximum
+output-error check against the chunked reference for experimental sources too.
 The GEMM source override applies only to compatible pipelined shapes; the remaining
 shapes still exercise automatic selection. Attention sources use the current native
 ABI with runtime query/key lengths and padded V capacity, as in
@@ -121,6 +132,70 @@ dispatch performance; it does not measure model quantization error or
 activation-packing cost. Candidate sources are archived, and the complete
 evaluation is required before using integer kernels in inference. The older
 `CLEF_BENCH_INT8_SOURCE` and `CLEF_BENCH_INT8_PADDED` names remain aliases.
+
+`CLEF_BENCH_INTEGER_PREPARE=1` additionally rotates and packs BF16 activations
+on the GPU inside each replay, using 256-element orthogonal Hadamard groups and
+per-row scales. Weights are transformed once outside timing. This mode compares
+outputs with the original BF16 inputs and reports relative L2 error; it does not
+use the exactly representable input check from the raw integer probe. A separate
+GPU test compares packed codes and scales with a CPU oracle. Model accuracy
+still requires the full evaluation.
+
+For checkpoint qualification only, a binary built with `--features bench-internals`
+accepts `CLEF_EXPERIMENT_MLP_BITS=4|8`. Selected language-model MLP weights are
+rotated and packed once during loading; activations are prepared inside each
+inference graph. `CLEF_EXPERIMENT_MLP_PROJECTIONS=up,gate,down` chooses the
+projections (all three by default). Dense selected weights are replaced, and packed
+weights remain leased across graph resets. Ordinary builds have no such switch.
+`CLEF_EXPERIMENT_BACKBONE_BITS=4|8` also selects other large text-backbone
+projections (at least 4,096 outputs and 1,024 inputs, both divisible by 256).
+An explicit MLP precision overrides the backbone precision for selected MLP
+projections. The full INT4 backbone trial failed the accuracy gate below.
+`CLEF_EXPERIMENT_SHARE_PACKING=1` reuses the most recent packed activation when
+the next quantized projection reads the exact same tensor view with matching
+precision and stride. The source lease prevents allocation reuse from producing
+a false cache hit; completing or resetting a graph clears the cache. It targets
+the shared inputs of MLP gate/up and DeltaNet QKV/Z projections. This experimental
+switch still needs end-to-end timing and accuracy qualification.
+The evaluation recorder saves these environment variables. This is an experiment,
+not a qualified inference configuration; require the complete accuracy gate.
+
+With `CLEF_EXPERIMENT_BACKBONE_BITS=4`, all 368 eligible projections were packed.
+The full `jevbench-20261010-int4-backbone` run reached **747.7 input tokens/s**
+(222.54 s resident), but only **194/231** correct: 48 easy, 71 standard and 75
+hard. All 231 requests were strictly valid with unchanged token counts. Against
+the grouped-store BF16 baseline it gained one decision and lost nine; maximum
+probability drift was 0.7170, Brier 0.2021 and ECE 0.0576. This configuration is
+**rejected**. The 1.83× observed speed gain does not meet the 1,000-token/s target
+and cannot compensate for the accuracy regression. The archived binary is
+`artifacts/throughput-1000/clef-int4-backbone`, SHA-256
+`842cc995af321a1363de3df1029b6e40127316f23467e4ff416e15191e6c0fa5`.
+This run includes grouped DeltaNet stores but does not enable packing reuse.
+Its `comparison.json` records every changed decision. Reproduce using the
+commands below with `CLEF_EXPERIMENT_BACKBONE_BITS=4` instead of the MLP flag,
+and use `tests/results/jevbench-20261010-delta-stores` as the comparison baseline.
+
+```sh
+cargo build --release --locked --features bench-internals --bin clef
+CLEF_EXPERIMENT_MLP_BITS=4 python3 scripts/eval_jevbench.py \
+  --model-dir artifacts/model --output tests/results/jevbench-int4-mlp
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261010-persistent tests/results/jevbench-int4-mlp
+```
+
+The first complete INT4 MLP run (`jevbench-20261010-int4-mlp`) reached
+**625.3 resident input tokens/s**, but scored **199/231**, below the 202/231
+floor. All requests were strictly valid with identical token counts. It gained
+two decisions and lost five versus the accepted attention baseline; maximum
+probability drift was 0.5063, Brier 0.1653 and ECE 0.0499. This configuration is
+**rejected** despite the observed 55.6% speed gain. The 256-element rotation and
+per-row max scaling did not preserve sufficient checkpoint accuracy.
+The archived binary is `artifacts/throughput-1000/clef-int4-mlp`, SHA-256
+`e8e1fa0a004659008d513e3fddb25c45fe63d468158004ae8eb4a974e51e8b79`;
+the exact source diff and GPU telemetry are retained alongside it.
+
+See [llama.cpp kernel findings](llama-kernel-notes.md) for the pinned source
+observations behind the next GEMM and DeltaNet experiments.
 
 ## Evaluation gate
 
@@ -224,9 +299,20 @@ The full evaluation retained 202/231, no changed decisions, at 401.9 input token
 (`jevbench-20261010-attention-long`). Its compiler cache was populated. The earlier
 345.3-token/s run had substantially higher preparation time even on unchanged
 short requests, so the recorded 16.4% end-to-end difference is not a controlled
-kernel speedup. See [measurement details](evaluation.md). An earlier candidate
+kernel speedup. Repeating baseline source `0f79e8b` with the cache populated
+produced 381.5 tokens/s and exactly reproduced the baseline probabilities;
+the candidate is 5.3% faster against that run. See [measurement details](evaluation.md). An earlier candidate
 using tiled attention from 64 tokens scored 201/231 at 351.4 tokens/s and was
 rejected (`jevbench-20261010-attention`).
+
+Grouping DeltaNet's eight output stores at the end of each token iteration then
+improved paired kernel throughput by 1.15–1.32× at 158 through 2,048 tokens,
+with bitwise-identical outputs. The complete JevBench run retained 202/231 and
+identical probabilities, reaching **407.8 input tokens/s**, up 1.5% from 401.9.
+This is the current production path; the end-to-end comparison is sequential
+on a shared machine. The target of 1,000 tokens/s remains unmet. See
+[the llama.cpp investigation](llama-kernel-notes.md) for the scheduling sweep,
+paired intervals, rejected candidates, and reproduction commands.
 
 Packed integer kernels remain benchmark-only. The h3-derived implementation is
 checked in at `benches/kernels/gemm_integer.loom`; it supports both INT4 and INT8

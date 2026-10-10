@@ -9,10 +9,10 @@ leaderboard result or a fresh Jev API run.
 
 | Public tier | CLEF-HRX correct | Accuracy | Published Jev correct | Median latency | p95 latency |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Easy | 48/48 | 100.0% | 48/48 | 0.82 s | 0.89 s |
-| Standard (`original`) | 71/72 | 98.6% | 71/72 | 0.84 s | 0.91 s |
-| Hard | 83/111 | 74.8% | 81/111 | 1.55 s | 7.21 s |
-| All | 202/231 | 87.4% | 200/231 | 0.91 s | 5.63 s |
+| Easy | 48/48 | 100.0% | 48/48 | 0.81 s | 0.88 s |
+| Standard (`original`) | 71/72 | 98.6% | 71/72 | 0.83 s | 0.89 s |
+| Hard | 83/111 | 74.8% | 81/111 | 1.55 s | 7.10 s |
+| All | 202/231 | 87.4% | 200/231 | 0.90 s | 5.54 s |
 
 All 231 requests completed with strictly valid probability distributions and
 no input truncation. Inputs ranged from 158 to 4,032 tokens, totaling 166,629.
@@ -25,14 +25,29 @@ recurrent state in registers increased resident throughput by 1.48×, gained
 change was 0.04375. The numerical comparison and full-suite gate are described in
 [Performance experiments](optimization.md).
 
-The current run adds tiled attention for inputs of at least 1,024 tokens and
+The preceding run added tiled attention for inputs of at least 1,024 tokens and
 uses runtime sequence lengths to share compiled attention code. It retained
 202/231 with no changed decisions; maximum probability change was 0.01727 against
 the register-resident baseline. Brier changed from 0.1668 to 0.1669 and ECE from
 0.0228 to 0.0282. The observed throughput increased from 345.3 to 401.9 tokens/s,
 but these runs did not control compiler-cache warmth. Preparation also improved
 on unchanged short requests, so the full 16.4% difference cannot be attributed
-to the attention kernel. A matched warm-cache baseline comparison remains pending.
+to the attention kernel. A repeat of baseline source `0f79e8b` with the shared
+cache populated scored the same 202/231 at **381.5 tokens/s**. Against that run,
+the candidate's observed gain is **5.3%**: resident wall time fell from 436.1 to
+414.1 s, GPU time from 420.4 to 397.2 s, while preparation rose from 15.1 to
+16.3 s. This remains a sequential shared-machine comparison rather than a paired
+statistical estimate. The repeat's probabilities exactly match the earlier
+register-resident baseline.
+
+The current run groups DeltaNet's eight leader-lane stores at the end of each
+token iteration. Arithmetic and storage precision are unchanged. All 231
+probability distributions exactly match the attention run, retaining 202/231.
+Resident throughput increased from 401.9 to **407.8 tokens/s** (1.5%); GPU time
+fell from 397.2 to 388.9 s while preparation rose from 16.3 to 18.5 s. This is
+another sequential shared-machine comparison. Separate alternating-order
+Criterion runs measured 1.15–1.32× kernel speedups, with bitwise-identical outputs.
+See [the kernel investigation](llama-kernel-notes.md) for those results and repro.
 
 ## Speed and measurement conditions
 
@@ -45,18 +60,18 @@ this is not a cold-cache measurement. Use an idle GPU and matching cache
 conditions for isolated speed comparisons.
 
 The latency table excludes the first request from the easy and overall rows.
-The remaining **230 requests took 414.1 s** in total measured request time:
+The remaining **230 requests took 408.0 s** in total measured request time:
 
 | Resident measurement | Result |
 | --- | ---: |
-| Mean wall latency | 1.80 s |
-| Throughput | 0.555 decisions/s (33.3/min) |
-| Input-token throughput | 401.9 tokens/s |
-| GPU execution median / p95 | 0.87 s / 5.51 s |
-| Graph preparation median / p95 | 0.056 s / 0.141 s |
+| Mean wall latency | 1.77 s |
+| Throughput | 0.564 decisions/s (33.8/min) |
+| Input-token throughput | 407.8 tokens/s |
+| GPU execution median / p95 | 0.84 s / 5.41 s |
+| Graph preparation median / p95 | 0.067 s / 0.159 s |
 
-The first request, including model loading, took **37.2 s**. The complete
-inference run took **451.9 s (7.5 minutes)**. These measurements exclude model
+The first request, including model loading, took **34.1 s**. The complete
+inference run took **453.3 s (7.6 minutes)**. These measurements exclude model
 download, release compilation and token-length preflight. Request wall time
 includes encoding, kernel compilation, graph preparation, GPU execution and
 readback. There was no separate warmup. GPU execution timings include launch and
@@ -64,8 +79,8 @@ synchronization; they are not isolated per-kernel profiler measurements.
 
 ## Pinned inputs and scoring
 
-- Inference: register-resident DeltaNet and runtime-length tiled long-sequence attention shipped with this document.
-- Evaluated CLI SHA-256: `b815843053eaf5db2629371d6e8d0a0e35d404e77785812bc5f394f655eaa430`.
+- Inference: register-resident DeltaNet with grouped stores and runtime-length tiled long-sequence attention shipped with this document.
+- Evaluated CLI SHA-256: `c530e47d460081cc18128ecc51e92c1c2df044ce773b480d63eeaf582e785a15`.
 - Earlier chunked baseline source: `afa40e389de0336b0bfa61bd05a390f85009e437`.
 - [JevBench source](https://github.com/fstandhartinger/jevbench/tree/7625ecb1b075cfe4d09d34141d353325825eea1d): `7625ecb1b075cfe4d09d34141d353325825eea1d`.
 - [Cloudflare/CLEF checkpoint](https://huggingface.co/Cloudflare/clef/tree/2f3de3dd85f379784083b0814d997ab627200f0c): `2f3de3dd85f379784083b0814d997ab627200f0c`.
@@ -130,7 +145,13 @@ The output directory contains:
 - `stderr.log`: CLI diagnostics.
 
 Generated outputs and downloaded artifacts are Git-ignored. The recorded run
-is stored locally in `tests/results/jevbench-20261010-attention-long/`; prior
-baselines are in `tests/results/jevbench-20261010-persistent/` and
-`tests/results/jevbench-20261010-full/`. A fresh checkout
+is stored locally in `tests/results/jevbench-20261010-delta-stores/`; its
+`comparison.json` records the complete accuracy and speed gate. The archived
+executable is `artifacts/throughput-1000/clef-delta-stores`. Prior baselines are in
+`tests/results/jevbench-20261010-attention-long/`,
+`tests/results/jevbench-20261010-persistent/` and
+`tests/results/jevbench-20261010-full/`. The warm baseline repeat is in
+`tests/results/jevbench-20261010-persistent-warm/`; its binary SHA-256 is
+`0b45482678f225acbfc11e14e7c4a5082aa36f1956171ada23b3f44382312405`.
+A fresh checkout
 must run the commands above to produce its own artifacts.

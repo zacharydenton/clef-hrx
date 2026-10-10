@@ -208,6 +208,19 @@ impl Engine {
         }
     }
     pub fn project(&mut self, x: &Tensor, name: &str, bias: bool) -> Result<Tensor> {
+        #[cfg(feature = "bench-internals")]
+        if let Some(weight) = self
+            .quantized
+            .weights
+            .get(&format!("{name}.weight"))
+            .cloned()
+        {
+            ensure!(
+                !bias,
+                "experimental integer projection does not support bias"
+            );
+            return self.project_quantized(x, &weight);
+        }
         let w = self.w(&format!("{name}.weight"))?;
         let b = if bias {
             Some(self.w(&format!("{name}.bias"))?)

@@ -110,9 +110,16 @@ impl ClefModel {
             let tensor = checkpoint.tensor(name)?;
             let rows = tensor.shape.first().copied().unwrap_or(1);
             let cols = tensor.shape.iter().skip(1).product::<usize>();
+            #[cfg(feature = "bench-internals")]
+            if engine.load_quantized_weight(name, rows, cols, tensor.bytes)? {
+                checkpoint.done_with(name)?;
+                continue;
+            }
             engine.weight(name.to_string(), rows, cols, tensor.bytes)?;
             checkpoint.done_with(name)?;
         }
+        #[cfg(feature = "bench-internals")]
+        engine.quantized.validate_loaded()?;
         Ok(Self {
             encoder,
             native: unsafe {
