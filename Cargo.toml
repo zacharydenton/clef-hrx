@@ -12,7 +12,7 @@ categories = ["science"]
 include = [
     "/src/**", "/kernels/**", "/reference/**", "/tests/**", "/benches/**",
     "/examples/**", "/licenses/**", "/LICENSE", "/THIRD_PARTY_NOTICES.md",
-    "/README.md", "/Cargo.lock", "!/benches/results/**", "!/tests/results/**",
+    "/README.md", "/docs/**", "/Cargo.lock", "!/benches/results/**", "!/tests/results/**",
 ]
 
 [package.metadata.docs.rs]
@@ -23,7 +23,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 half = { version = "2", features = ["bytemuck"] }
 bytemuck = "1"
-hrx = { package = "hrx-rs", version = "=0.8.16" }
+hrx = { package = "hrx-rs", version = "=0.10.1" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

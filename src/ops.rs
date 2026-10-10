@@ -131,7 +131,7 @@ impl Engine {
             },
             spec,
             constants,
-            [n.div_ceil(64) as u32, m.div_ceil(64) as u32, 1],
+            &[(m * n) as u64],
             &[x, w],
             &out,
         )?;
@@ -177,7 +177,7 @@ impl Engine {
             include_str!("../kernels/gemm_bf16_pipelined.loom"),
             spec,
             constants,
-            [(n / 256) as u32, m.div_ceil(128) as u32, 1],
+            &[m as u64],
             &[x, w],
             &out,
         )?;

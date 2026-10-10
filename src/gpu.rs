@@ -7,6 +7,7 @@ use hrx::{
     inference::ModelContext,
     loom::{Compiler, Specialization},
 };
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     rc::{Rc, Weak},
@@ -74,13 +75,18 @@ struct Command {
     grid: [u32; 3],
     bindings: Vec<Binding>,
 }
+struct CompiledKernel {
+    kernel: Kernel,
+    grids: HashMap<Vec<u64>, [u32; 3]>,
+}
 pub(crate) struct Engine {
     #[cfg(feature = "bench-internals")]
     pub reference_kernels: crate::benchmarking::ReferenceKernels,
     stream: Stream,
     compiler: Compiler,
+    compile_reports: Option<std::path::PathBuf>,
     allocations: Vec<Allocation>,
-    kernels: HashMap<String, Kernel>,
+    kernels: HashMap<String, CompiledKernel>,
     commands: Vec<Command>,
     pub weights: HashMap<String, Tensor>,
     pub embedding_rows: HashMap<String, crate::embedding::EmbeddingRows>,
@@ -121,27 +127,29 @@ impl Engine {
             source,
             spec,
             Constants::new(),
-            [work.div_ceil(64) as u32, 1, 1],
+            &[],
             &inputs.iter().map(|(_, tensor)| *tensor).collect::<Vec<_>>(),
             output,
         )
     }
     pub fn new(context: &ModelContext) -> Result<Self> {
-        let gpu = context.runtime().gpu()?;
-        let mut stream = hrx::Device::open(gpu.index())?.stream()?;
-        if let Some(budget) = context.runtime().memory_budget() {
-            stream = stream.with_memory_budget(budget.clone());
-        }
+        let stream = context.runtime().stream(None)?;
         ensure!(
             stream.target().as_str() == "gfx1151",
             "CLEF currently requires gfx1151"
         );
         let compiler = Compiler::for_stream(None, &stream)?;
+        let compile_reports =
+            std::env::var_os("CLEF_COMPILE_REPORT_DIR").map(std::path::PathBuf::from);
+        if let Some(path) = &compile_reports {
+            std::fs::create_dir_all(path)?;
+        }
         Ok(Self {
             #[cfg(feature = "bench-internals")]
             reference_kernels: Default::default(),
             stream,
             compiler,
+            compile_reports,
             allocations: Vec::new(),
             kernels: HashMap::new(),
             commands: Vec::new(),
@@ -202,16 +210,12 @@ impl Engine {
             bytes.len() == t.len() * t.dtype.bytes(),
             "upload shape mismatch"
         );
-        const CHUNK: usize = 16 << 20;
-        for (i, chunk) in bytes.chunks(CHUNK).enumerate() {
-            let view = self.allocations[t.slot]
-                .buffer
-                .binding()
-                .slice(t.offset + i * CHUNK, chunk.len())?;
-            self.stream.upload(view, chunk)?;
-            // Bound staging even during a full 55 GB checkpoint load.
-            self.stream.synchronize()?;
-        }
+        let view = self.allocations[t.slot]
+            .buffer
+            .binding()
+            .slice(t.offset, bytes.len())?;
+        // HRX bounds reusable staging and splits large transfers internally.
+        self.stream.upload(view, bytes)?;
         self.uploaded += bytes.len() as u64;
         Ok(())
     }
@@ -266,9 +270,33 @@ impl Engine {
         Ok(t)
     }
     pub fn weight(&mut self, name: String, rows: usize, cols: usize, bytes: &[u8]) -> Result<()> {
-        let t = self.alloc(rows, cols, DType::Bf16)?;
-        self.upload(&t, bytes)?;
-        self.allocations[t.slot].permanent = true;
+        let elements = rows.checked_mul(cols).context("weight size overflow")?;
+        ensure!(
+            elements > 0
+                && elements <= u32::MAX as usize
+                && elements.checked_mul(DType::Bf16.bytes()) == Some(bytes.len()),
+            "invalid weight extent"
+        );
+        crate::memory::before_allocation(bytes.len())?;
+        // Immutable weights can initialize their final allocation directly.
+        // No zero fill, temporary upload buffer, or per-chunk fence is needed.
+        let buffer = self.stream.allocate_from(bytes)?;
+        let lease = Rc::new(());
+        let t = Tensor {
+            slot: self.allocations.len(),
+            offset: 0,
+            rows,
+            cols,
+            dtype: DType::Bf16,
+            _lease: lease.clone(),
+        };
+        self.allocations.push(Allocation {
+            buffer,
+            lease: Rc::downgrade(&lease),
+            permanent: true,
+            host_input: false,
+        });
+        self.uploaded += bytes.len() as u64;
         self.weights.insert(name, t);
         Ok(())
     }
@@ -281,29 +309,62 @@ impl Engine {
     pub fn emit_special(
         &mut self,
         source: &str,
-        spec: Specialization,
+        mut spec: Specialization,
         constants: Constants,
-        grid: [u32; 3],
+        workload: &[u64],
         inputs: &[&Tensor],
         output: &Tensor,
     ) -> Result<()> {
         let key = format!("{}{:?}", source, spec.configuration());
-        let kernel = if let Some(k) = self.kernels.get(&key) {
-            k.clone()
-        } else {
+        if !self.kernels.contains_key(&key) {
+            if self.compile_reports.is_some() {
+                spec.set_report(hrx::loom::ReportMode::Details);
+            }
             let artifact = self
                 .compiler
                 .module(source)
                 .compile(&spec)
                 .context("compiling CLEF kernel")?;
+            if let Some(directory) = &self.compile_reports {
+                let identity = format!("{:x}", Sha256::digest(key.as_bytes()));
+                let report = serde_json::json!({
+                    "source_sha256":format!("{:x}", Sha256::digest(source.as_bytes())),
+                    "configuration":spec.configuration(),
+                    "artifact":artifact.path(),
+                    "compiler":artifact.compiler_identity(),
+                    "target":artifact.target(),
+                    "report":artifact.report(),
+                });
+                std::fs::write(
+                    directory.join(format!("{identity}.json")),
+                    serde_json::to_vec_pretty(&report)?,
+                )?;
+            }
             // Safety: sources are crate-owned; all binding extents are recorded below.
             let k = unsafe { self.stream.load_artifact(&artifact)? };
             if self.kernels.len() >= 512 {
                 self.kernels.clear();
             }
-            self.kernels.insert(key, k.clone());
-            k
+            self.kernels.insert(
+                key.clone(),
+                CompiledKernel {
+                    kernel: k,
+                    grids: HashMap::new(),
+                },
+            );
+        }
+        let compiled = self.kernels.get_mut(&key).unwrap();
+        let grid = if let Some(grid) = compiled.grids.get(workload) {
+            *grid
+        } else {
+            let grid = compiled.kernel.launch_config(workload)?.workgroup_count;
+            if compiled.grids.len() >= 128 {
+                compiled.grids.clear();
+            }
+            compiled.grids.insert(workload.to_vec(), grid);
+            grid
         };
+        let kernel = compiled.kernel.clone();
         let mut bindings: Vec<_> = inputs
             .iter()
             .map(|t| Binding {
@@ -489,6 +550,57 @@ mod tests {
         let mut g = e.finish()?;
         e.run(&mut g)?;
         e.read_f32(t)
+    }
+    #[test]
+    #[ignore = "requires gfx1151; checks shared-context accounting for initialized weights"]
+    fn initialized_weights_share_context_budget() -> Result<()> {
+        let manager = hrx::residency::ResidencyManager::new(16)?;
+        let budget = manager.budget();
+        let context = ModelContext::new(hrx::execution::RuntimeOptions {
+            memory_budget: Some(budget.clone()),
+            ..Default::default()
+        })?;
+        let mut e = Engine::new(&context)?;
+        e.weight("first".into(), 1, 8, &[0; 16])?;
+        assert_eq!(budget.reserved_bytes(), 16);
+        assert!(e.weight("second".into(), 1, 1, &[0; 2]).is_err());
+        assert_eq!(budget.reserved_bytes(), 16);
+        drop(e);
+        assert_eq!(budget.reserved_bytes(), 0);
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires gfx1151; checks direct weights, large uploads and subview offsets"]
+    fn weight_and_input_transfers_preserve_bytes() -> Result<()> {
+        let mut e = engine()?;
+        let cols = (32 << 20) + 129;
+        let data: Vec<_> = (0..cols * 2).map(|i| (i * 37 + 11) as u8).collect();
+        e.weight("test".into(), 1, cols, &data)?;
+        let weight = e.w("test")?;
+        let mut actual = vec![0; data.len()];
+        e.stream
+            .read_blocking(e.allocations[weight.slot].buffer.binding(), &mut actual)?;
+        assert_eq!(actual, data);
+        let host = e.input(1, cols, DType::Bf16, &data)?;
+        e.stream
+            .read_blocking(e.allocations[host.slot].buffer.binding(), &mut actual)?;
+        assert_eq!(actual, data);
+        assert_eq!(e.uploaded, (data.len() * 2) as u64);
+
+        let small = e.input(3, 4, DType::Bf16, &[0x33; 24])?;
+        let row = small.slice_rows(1, 1);
+        e.upload(&row, &[0x77; 8])?;
+        let mut actual = [0; 24];
+        e.stream
+            .read_blocking(e.allocations[small.slot].buffer.binding(), &mut actual)?;
+        assert_eq!(
+            actual,
+            [vec![0x33; 8], vec![0x77; 8], vec![0x33; 8]].concat()[..]
+        );
+        assert!(e.weight("invalid".into(), usize::MAX, 2, &[]).is_err());
+        assert!(e.weight("invalid".into(), 1, 2, &[0; 3]).is_err());
+        assert!(e.weight("invalid".into(), 0, 2, &[]).is_err());
+        Ok(())
     }
     #[test]
     #[ignore = "requires gfx1151 and HRX native bundle"]
