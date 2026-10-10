@@ -33,7 +33,7 @@ kernel.def target(@clef_target) export("clef_op") @clef_op(%query_rows: index, %
  %lane = kernel.workitem.id<x> : index
  %base = index.mul %wg, %threads : index
  %id = index.add %base, %lane : index
- %queries = index.assume %query_rows [range(%query_rows, 1, 16384)] : index
+ %queries = index.assume %query_rows [range(%query_rows, 1, 65536)] : index
  %qw_outer = config.get @clef.qw : index
  %out_len = index.mul %queries, %qw_outer : index
  %out_dtype = index.constant 0 : index
@@ -70,8 +70,8 @@ kernel.def target(@clef_target) export("clef_op") @clef_op(%query_rows: index, %
 %ratio = config.get @clef.ratio : index
 %qw = config.get @clef.qw : index
 %kw = config.get @clef.kw : index
-%keys = index.assume %key_rows [range(%key_rows, 1, 16384), le(%key_rows, %v_capacity)] : index
-%vstride = index.assume %v_capacity [range(%v_capacity, 64, 16384), mul(%v_capacity, 64)] : index
+%keys = index.assume %key_rows [range(%key_rows, 1, 65536), le(%key_rows, %v_capacity)] : index
+%vstride = index.assume %v_capacity [range(%v_capacity, 64, 65536), mul(%v_capacity, 64)] : index
 %scale = config.get @clef.scale : f32
 %scalev = vector.splat %scale : vector<8xf32>
 %wave = index.add %waveid, %zero : index

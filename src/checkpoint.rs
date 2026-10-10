@@ -109,7 +109,7 @@ impl Source {
             resident_weight_bytes: index.metadata.total_size + head_bytes as u64
                 - crate::embedding::TABLE_BYTES,
             files,
-            workspace_estimate_bytes: workspace_estimate(16384),
+            workspace_estimate_bytes: workspace_estimate(crate::encoding::MAX_CONTEXT_TOKENS),
             qualification:
                 "experimental; full corpus has a known BF16-reference probability deviation".into(),
         })

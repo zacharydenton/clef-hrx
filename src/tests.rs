@@ -468,7 +468,7 @@ fn full_checkpoint_corpus() -> crate::Result<()> {
 
 #[test]
 fn invalid_length_fails_before_model_loading() {
-    for max_length in [0, 16385, usize::MAX] {
+    for max_length in [0, crate::encoding::MAX_CONTEXT_TOKENS + 1, usize::MAX] {
         let result = crate::ClefModel::load(crate::LoadOptions {
             encoding: EncodeOptions {
                 max_length,

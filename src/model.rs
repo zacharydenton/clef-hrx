@@ -89,11 +89,12 @@ impl ClefModel {
     pub fn load_in(context: &ModelContext, options: LoadOptions) -> Result<Self> {
         options.encoding.validate()?;
         let info = options.source.inspect()?;
-        let required = info.resident_weight_bytes
-            + crate::checkpoint::workspace_estimate(options.encoding.max_length);
+        // Context capacity is not an allocation request. HRX enforces the budget
+        // and Engine checks available RAM as actual request buffers are allocated.
+        let required = info.resident_weight_bytes + crate::checkpoint::workspace_estimate(0);
         ensure!(
             required <= options.memory_budget_bytes as u64,
-            "memory budget cannot fit weights and configured workspace"
+            "memory budget cannot fit weights and minimum workspace"
         );
         crate::memory::require(required)?;
         let mut engine = Engine::new(context)?;

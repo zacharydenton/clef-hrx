@@ -20,8 +20,8 @@ struct Args {
     /// GPU allocation budget in GiB.
     #[arg(long, global = true, default_value_t = 80)]
     memory_gib: usize,
-    /// Maximum input tokens, including schema and media (1–16384).
-    #[arg(long, global = true, default_value_t = 16384)]
+    /// Maximum input tokens, including schema and media (1–65536).
+    #[arg(long, global = true, default_value_t = clef_hrx::encoding::MAX_CONTEXT_TOKENS)]
     max_length: usize,
     /// Additional limit on state text tokens.
     #[arg(long, global = true)]
@@ -77,8 +77,8 @@ fn main() -> Result<()> {
         max_state_tokens: args.max_state_tokens,
     };
     ensure!(
-        (1..=16384).contains(&encoding.max_length),
-        "max_length must be 1..=16384"
+        (1..=clef_hrx::encoding::MAX_CONTEXT_TOKENS).contains(&encoding.max_length),
+        "max_length must be 1..=65536"
     );
     let options = LoadOptions {
         source: source.clone(),

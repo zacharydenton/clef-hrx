@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
+/// Supported input capacity, within the checkpoint’s native 262,144 positions.
+pub const MAX_CONTEXT_TOKENS: usize = 65_536;
+
 pub const SYSTEM_PROMPT: &str = "Read the complete state and schema. Decide every field jointly. Each answer must be exactly one of that field's allowed options.";
 #[derive(Debug, Clone, Copy)]
 pub struct EncodeOptions {
@@ -17,7 +20,7 @@ pub struct EncodeOptions {
 impl Default for EncodeOptions {
     fn default() -> Self {
         Self {
-            max_length: 16384,
+            max_length: MAX_CONTEXT_TOKENS,
             max_state_tokens: None,
         }
     }
@@ -25,8 +28,8 @@ impl Default for EncodeOptions {
 impl EncodeOptions {
     pub(crate) fn validate(self) -> Result<()> {
         ensure!(
-            (1..=16384).contains(&self.max_length),
-            "max_length must be 1..=16384"
+            (1..=MAX_CONTEXT_TOKENS).contains(&self.max_length),
+            "max_length must be 1..={MAX_CONTEXT_TOKENS}"
         );
         Ok(())
     }
@@ -254,5 +257,35 @@ pub fn canonical_json(value: &Value) -> String {
             }
         }
         _ => serde_json::to_string(value).unwrap(),
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    #[test]
+    fn native_context_bounds() {
+        assert_eq!(EncodeOptions::default().max_length, 65_536);
+        for max_length in [1, 16_385, 64_000, MAX_CONTEXT_TOKENS] {
+            assert!(
+                EncodeOptions {
+                    max_length,
+                    max_state_tokens: None
+                }
+                .validate()
+                .is_ok()
+            );
+        }
+        for max_length in [0, MAX_CONTEXT_TOKENS + 1, usize::MAX] {
+            assert!(
+                EncodeOptions {
+                    max_length,
+                    max_state_tokens: None
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 }

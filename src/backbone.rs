@@ -50,8 +50,8 @@ impl Engine {
         );
         if TILED
             && d == 256
-            && (1024..=16384).contains(&q.rows)
-            && k.rows <= 16384
+            && (1024..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&q.rows)
+            && k.rows <= crate::encoding::MAX_CONTEXT_TOKENS
             && (!causal || q.rows == k.rows)
             && q.dtype == DType::Bf16
             && k.dtype == DType::Bf16
@@ -129,8 +129,8 @@ impl Engine {
         source: &str,
     ) -> Result<Tensor> {
         ensure!(
-            (1..=16384).contains(&q.rows)
-                && (1..=16384).contains(&k.rows)
+            (1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&q.rows)
+                && (1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&k.rows)
                 && (256..=65536).contains(&q.cols)
                 && (256..=65536).contains(&k.cols)
                 && q.cols.is_multiple_of(256)
@@ -175,7 +175,7 @@ impl Engine {
     }
     pub(crate) fn transpose_attention_v(&mut self, v: &Tensor) -> Result<Tensor> {
         ensure!(
-            (1..=16384).contains(&v.rows)
+            (1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&v.rows)
                 && (64..=65536).contains(&v.cols)
                 && v.cols.is_multiple_of(64)
                 && v.dtype == DType::Bf16,
@@ -446,12 +446,18 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             e.project(&d, &format!("{p}.out_proj"), false)?
         };
         x = e.binary(&x, &attn, "addf")?;
+        if n > 16_384 {
+            drop(attn);
+            drop(norm);
+        }
         let norm = e.named_norm(&x, &format!("{p}.post_attention_layernorm"), false, 1e-6)?;
-        let gate = e.project(&norm, &format!("{p}.mlp.gate_proj"), false)?;
-        let up = e.project(&norm, &format!("{p}.mlp.up_proj"), false)?;
-        let gate = e.unary(&gate, "silu")?;
-        let gate = e.binary(&gate, &up, "mulf")?;
-        let down = e.project(&gate, &format!("{p}.mlp.down_proj"), false)?;
+        let down = if n > 16_384 {
+            // MLP rows are independent. Bound the wide activations and keep all
+            // kernel extents below u32::MAX throughout the supported context.
+            mlp_chunked(e, &norm, &format!("{p}.mlp"), 8192)?
+        } else {
+            mlp(e, &norm, &format!("{p}.mlp"))?
+        };
         x = e.binary(&x, &down, "addf")?;
         e.trace(format!("layer_{i}"), &x);
     }
@@ -460,9 +466,101 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
     Ok(x)
 }
 
+fn mlp(e: &mut Engine, x: &Tensor, prefix: &str) -> Result<Tensor> {
+    let gate = e.project(x, &format!("{prefix}.gate_proj"), false)?;
+    let up = e.project(x, &format!("{prefix}.up_proj"), false)?;
+    let gate = e.unary(&gate, "silu")?;
+    let gate = e.binary(&gate, &up, "mulf")?;
+    e.project(&gate, &format!("{prefix}.down_proj"), false)
+}
+
+fn mlp_chunked(e: &mut Engine, x: &Tensor, prefix: &str, chunk: usize) -> Result<Tensor> {
+    ensure!(chunk > 0, "MLP chunk must be positive");
+    let out = e.alloc(x.rows, x.cols, x.dtype)?;
+    for start in (0..x.rows).step_by(chunk) {
+        let rows = chunk.min(x.rows - start);
+        let part = mlp(e, &x.slice_rows(start, rows), prefix)?;
+        e.copy_into(&part, &out.slice_rows(start, rows))?;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151; checks long attention indexing against uniform-softmax oracle"]
+    fn native_context_attention() -> Result<()> {
+        for (queries, keys) in [
+            (17, 16_385),
+            (17, crate::encoding::MAX_CONTEXT_TOKENS),
+            (crate::encoding::MAX_CONTEXT_TOKENS, 17),
+        ] {
+            let mut e = Engine::new(&hrx::inference::ModelContext::new(Default::default())?)?;
+            // Include a nonzero slice offset, a partial query tile and key tail.
+            let q = e
+                .input(
+                    queries + 1,
+                    256,
+                    DType::Bf16,
+                    &vec![0; (queries + 1) * 256 * 2],
+                )?
+                .slice_rows(1, queries);
+            let k = e.input(keys, 256, DType::Bf16, &vec![0; keys * 256 * 2])?;
+            let values: Vec<_> = (0..keys * 256)
+                .map(|i| half::bf16::from_f32(if i / 256 >= 16_384 { 2. } else { 1. }))
+                .collect();
+            let v = e.input(keys, 256, DType::Bf16, bytemuck::cast_slice(&values))?;
+            let output = e.attention_tiled(&q, &k, &v, 1, 1, false)?;
+            let mut graph = e.finish()?;
+            e.run(&mut graph)?;
+            let prefix = keys.min(16_384);
+            let expected = (prefix as f32 + (keys - prefix) as f32 * 2.) / keys as f32;
+            for value in e.read_f32(&output)? {
+                assert!(
+                    (value - expected).abs() < 0.008,
+                    "keys={keys}: {value} != {expected}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151; checks chunk boundaries, tails and graph buffer reuse"]
+    fn chunked_mlp_parity() -> Result<()> {
+        let mut e = Engine::new(&hrx::inference::ModelContext::new(Default::default())?)?;
+        for (name, rows, cols) in [
+            ("gate_proj", 256, 128),
+            ("up_proj", 256, 128),
+            ("down_proj", 128, 256),
+        ] {
+            let values: Vec<_> = (0..rows * cols)
+                .map(|i| half::bf16::from_f32((i as i32 % 17 - 8) as f32 / 128.))
+                .collect();
+            e.weight(
+                format!("test.{name}.weight"),
+                rows,
+                cols,
+                bytemuck::cast_slice(&values),
+            )?;
+        }
+        let values: Vec<_> = (0usize..131 * 128)
+            .map(|i| half::bf16::from_f32((i as i32 % 23 - 11) as f32 / 32.))
+            .collect();
+        let x = e
+            .input(131, 128, DType::Bf16, bytemuck::cast_slice(&values))?
+            .slice_rows(1, 130);
+        let expected = mlp(&mut e, &x, "test")?;
+        let actual = mlp_chunked(&mut e, &x, "test", 64)?;
+        let mut graph = e.finish()?;
+        for _ in 0..2 {
+            e.run(&mut graph)?;
+            assert_eq!(e.read_f32(&actual)?, e.read_f32(&expected)?);
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires gfx1151; compares fused gated RMSNorm with an FP64 oracle"]

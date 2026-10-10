@@ -50,9 +50,16 @@ requests, keep the model loaded and pass newline-delimited JSON:
 First use downloads roughly 51.2 GiB of BF16 weights. Resident weights occupy
 about 46.5 GiB plus workspace. Use `--model-dir PATH` for a local snapshot or
 `--offline` for cached files. `--memory-gib` sets the allocation budget (default
-80 GiB); `--max-length` limits input tokens (default 16,384).
+80 GiB); `--max-length` limits input tokens (default and maximum 65,536).
+The checkpoint supports 262,144 positions; this build uses a 64k operating limit
+without changing RoPE. Workspace is allocated for each actual request, with
+8,192-row MLP chunks above 16k tokens. Available RAM and the allocation budget
+still determine whether a request fits.
 
 ## Evaluation
+
+The [WorkflowEvals runner and reproduction notes](docs/workflowevals.md) cover
+all four workflows in the pinned public collection. Full results are pending.
 
 On all 231 public JevBench cases, CLEF-HRX scored **202/231 (87.4%)**, compared
 with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
