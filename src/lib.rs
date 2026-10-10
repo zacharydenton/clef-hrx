@@ -11,6 +11,7 @@ pub mod media;
 mod memory;
 pub mod model;
 mod ops;
+mod quantized;
 pub mod schema;
 mod vision;
 
@@ -22,6 +23,6 @@ pub mod benchmarking;
 mod tests;
 
 pub use encoding::{EncodeOptions, EncodedQuestion, EncodedRecord, Encoder};
-pub use model::{ClefModel, LoadOptions, Prediction};
+pub use model::{ClefModel, LoadOptions, Precision, Prediction};
 pub use schema::{Question, QuestionType, Request, Response};
 pub type Result<T> = anyhow::Result<T>;

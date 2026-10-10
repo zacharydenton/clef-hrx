@@ -146,19 +146,19 @@ accepts `CLEF_EXPERIMENT_MLP_BITS=4|8`. Selected language-model MLP weights are
 rotated and packed once during loading; activations are prepared inside each
 inference graph. `CLEF_EXPERIMENT_MLP_PROJECTIONS=up,gate,down` chooses the
 projections (all three by default). Dense selected weights are replaced, and packed
-weights remain leased across graph resets. Ordinary builds have no such switch.
+weights remain leased across graph resets. Ordinary builds expose `--precision int4-mlp` and `--precision int4`; the environment switches remain benchmark-only.
 `CLEF_EXPERIMENT_BACKBONE_BITS=4|8` also selects other large text-backbone
 projections (at least 4,096 outputs and 1,024 inputs, both divisible by 256).
 An explicit MLP precision overrides the backbone precision for selected MLP
-projections. The full INT4 backbone trial failed the accuracy gate below.
+projections. The full INT4 backbone trial missed the BF16 accuracy floor below; it remains available as an explicit speed/accuracy tradeoff.
 `CLEF_EXPERIMENT_SHARE_PACKING=1` reuses the most recent packed activation when
 the next quantized projection reads the exact same tensor view with matching
 precision and stride. The source lease prevents allocation reuse from producing
 a false cache hit; completing or resetting a graph clears the cache. It targets
 the shared inputs of MLP gate/up and DeltaNet QKV/Z projections. This experimental
 switch still needs end-to-end timing and accuracy qualification.
-The evaluation recorder saves these environment variables. This is an experiment,
-not a qualified inference configuration; require the complete accuracy gate.
+The evaluation recorder saves these environment variables. Packing reuse still
+requires end-to-end qualification; it is off in the public INT4 modes.
 
 With `CLEF_EXPERIMENT_BACKBONE_BITS=4`, all 368 eligible projections were packed.
 The full `jevbench-20261010-int4-backbone` run reached **747.7 input tokens/s**
@@ -166,8 +166,9 @@ The full `jevbench-20261010-int4-backbone` run reached **747.7 input tokens/s**
 hard. All 231 requests were strictly valid with unchanged token counts. Against
 the grouped-store BF16 baseline it gained one decision and lost nine; maximum
 probability drift was 0.7170, Brier 0.2021 and ECE 0.0576. This configuration is
-**rejected**. The 1.83× observed speed gain does not meet the 1,000-token/s target
-and cannot compensate for the accuracy regression. The archived binary is
+**not selected as the default**. The 1.83× observed speed gain remains below
+the 1,000-token/s target. It is available through `--precision int4` for users
+who accept the measured accuracy tradeoff. The archived binary is
 `artifacts/throughput-1000/clef-int4-backbone`, SHA-256
 `842cc995af321a1363de3df1029b6e40127316f23467e4ff416e15191e6c0fa5`.
 This run includes grouped DeltaNet stores but does not enable packing reuse.
@@ -188,8 +189,9 @@ The first complete INT4 MLP run (`jevbench-20261010-int4-mlp`) reached
 floor. All requests were strictly valid with identical token counts. It gained
 two decisions and lost five versus the accepted attention baseline; maximum
 probability drift was 0.5063, Brier 0.1653 and ECE 0.0499. This configuration is
-**rejected** despite the observed 55.6% speed gain. The 256-element rotation and
-per-row max scaling did not preserve sufficient checkpoint accuracy.
+**not selected as the default**, but is available as `--precision int4-mlp`.
+The 256-element rotation and per-row max scaling trade three net correct
+decisions for the observed speed gain.
 The archived binary is `artifacts/throughput-1000/clef-int4-mlp`, SHA-256
 `e8e1fa0a004659008d513e3fddb25c45fe63d468158004ae8eb4a974e51e8b79`;
 the exact source diff and GPU telemetry are retained alongside it.
@@ -315,20 +317,20 @@ on a shared machine. The target of 1,000 tokens/s remains unmet. See
 paired intervals, rejected candidates, and reproduction commands.
 
 Packed integer kernels remain benchmark-only. The h3-derived implementation is
-checked in at `benches/kernels/gemm_integer.loom`; it supports both INT4 and INT8
+checked in at `kernels/gemm_integer.loom`; it supports both INT4 and INT8
 with BF16 outputs. Each precision passed all 12 padded MLP smoke cases at 235,
 620 and 4,032 tokens, including repeated and rotating weights. Reproduce a
 correctness sweep or measured experiment with
 fresh run names:
 
 ```sh
-CLEF_BENCH_INTEGER_SOURCE=benches/kernels/gemm_integer.loom \
+CLEF_BENCH_INTEGER_SOURCE=kernels/gemm_integer.loom \
   CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
   python3 scripts/bench_workload.py int4-smoke --profile quick \
   --filter 'workload_gemm/mlp_(up_gate|down)' --test
 
 # Use bits=8 to compare INT8; omit --test and supply a baseline for measurements.
-CLEF_BENCH_INTEGER_SOURCE=benches/kernels/gemm_integer.loom \
+CLEF_BENCH_INTEGER_SOURCE=kernels/gemm_integer.loom \
   CLEF_BENCH_INTEGER_BITS=8 CLEF_BENCH_INTEGER_PADDED=1 \
   python3 scripts/bench_workload.py int8-measured --profile quick \
   --filter 'workload_gemm/mlp_(up_gate|down)' --compare workload-baseline-v2

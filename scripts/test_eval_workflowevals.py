@@ -1,7 +1,27 @@
 """Contract checks for the local adapter used by the upstream workflow scorer."""
 import copy
 import unittest
-from eval_workflowevals import response_from_raw
+from eval_workflowevals import response_from_raw, next_case_ids
+
+
+class ResumableScheduling(unittest.TestCase):
+    def test_bounded_batches_cover_the_original_plan_once(self):
+        planned = ['case-a', 'case-b', 'case-c', 'case-d', 'case-e']
+        completed = set()
+        batches = []
+        for budget in [2, 1, None]:
+            selected = next_case_ids(planned, completed, budget)
+            self.assertFalse(completed.intersection(selected))
+            batches.extend(selected)
+            completed.update(selected)
+        self.assertEqual(batches, planned)
+        self.assertEqual(next_case_ids(planned, completed, 2), [])
+        self.assertEqual(planned, ['case-a', 'case-b', 'case-c', 'case-d', 'case-e'])
+
+    def test_invalid_budget_rejected(self):
+        for budget in [0, -1]:
+            with self.assertRaises(ValueError):
+                next_case_ids(['a'], set(), budget)
 
 
 class ResponseContract(unittest.TestCase):

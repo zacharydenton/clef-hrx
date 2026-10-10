@@ -239,7 +239,7 @@ Reproduce the prepared run with a fresh result name (omit `--compare` if the
 named baseline is unavailable):
 
 ```sh
-CLEF_BENCH_INTEGER_SOURCE=benches/kernels/gemm_integer.loom \
+CLEF_BENCH_INTEGER_SOURCE=kernels/gemm_integer.loom \
 CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
 CLEF_BENCH_INTEGER_PREPARE=1 \
 python3 scripts/bench_workload.py int4-mlp-prepared-repeat --profile quick \

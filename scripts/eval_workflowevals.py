@@ -167,6 +167,13 @@ def summarize_calls(calls):
                                        for phase in ('encode', 'prepare', 'inference', 'readback')}}
 
 
+def next_case_ids(planned, completed, budget):
+    """Bound scheduling without changing the full manifest or completed results."""
+    if budget is not None and budget < 1:
+        raise ValueError('new-case budget must be positive')
+    return [case_id for case_id in planned if case_id not in completed][:budget]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--benchmark', type=Path, default=Path('artifacts/WorkflowEvals'))
@@ -176,12 +183,17 @@ def main():
     parser.add_argument('--workflows', nargs='+', choices=DATASETS, default=list(DATASETS))
     parser.add_argument('--limit', type=int, help='Smoke run only; omit for the complete suite')
     parser.add_argument('--max-length', type=int, default=65536)
+    parser.add_argument('--precision', choices=('bf16', 'int4-mlp', 'int4'), default='bf16')
     parser.add_argument('--memory-gib', type=int, default=60)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--new-cases-per-workflow', type=int,
+                        help='Run at most this many additional cases per workflow; retain the full suite plan for resume')
     parser.add_argument('--dry-run', action='store_true', help='Validate pinned datasets without GPU inference')
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
         parser.error('--limit must be positive')
+    if args.new_cases_per_workflow is not None and args.new_cases_per_workflow < 1:
+        parser.error('--new-cases-per-workflow must be positive')
     if not 1 <= args.max_length <= 65536:
         parser.error('--max-length must be 1..65536')
     benchmark = args.benchmark.resolve()
@@ -192,7 +204,7 @@ def main():
     from core.contract import ModelIdentity
     from core.io import write_record
     from core.providers import ModelConfig
-    from core.runner import execute, plan
+    from core.runner import execute, plan, load_checkpoints
     from core.scoring import build_score_data
     from core.workflow import load
     from bench_workload import hardware
@@ -203,6 +215,7 @@ def main():
         checkpoint_revision: str
         runner_sha256: str
         max_length: int
+        precision: str
         experiment_environment: dict[str, str]
         batching: str = 'joint; recursively halve over-capacity schemas before inference'
         native_probability_normalization: Literal[False] = False
@@ -215,12 +228,14 @@ def main():
     config = NativeConfig(model='clef-hrx', thinking='off', question_mode='all',
                           binary_sha256=file_hash(args.binary), runner_sha256=file_hash(__file__),
                           checkpoint_revision='2f3de3dd85f379784083b0814d997ab627200f0c',
-                          max_length=args.max_length, experiment_environment=environment)
+                          max_length=args.max_length, precision=args.precision, experiment_environment=environment)
     workflows = {name: load(name, DATASETS[name]) for name in args.workflows}
     jobs = {name: plan(w, config, limit=args.limit) for name, w in workflows.items()}
     command = [str(args.binary.resolve()), '--model-dir', str(args.model_dir.resolve()),
                '--memory-gib', str(args.memory_gib), '--max-length', str(args.max_length),
                'decide', '-', '--jsonl', '--raw']
+    if args.precision != 'bf16':
+        command[1:1] = ['--precision', args.precision]
     manifest = {'workflow_commit': commit, 'dependency_lock_sha256': file_hash(benchmark / 'uv.lock'),
                 'configuration': config.model_dump(mode='json'), 'command': command,
                 'datasets': {name: {'source': w.bundle.dataset_source, 'case_ids': jobs[name].case_ids}
@@ -255,7 +270,10 @@ def main():
         for name, workflow in workflows.items():
             native.workflow = name
             output = args.output / name
-            results = execute(workflow, jobs[name], output, prices={}, workers=1, question_workers=1,
+            completed = load_checkpoints(output, {c.case_id: c.content_hash for c in workflow.bundle.cases})
+            selected = next_case_ids(jobs[name].case_ids, completed, args.new_cases_per_workflow)
+            batch = jobs[name].model_copy(update={'case_ids': selected})
+            results = execute(workflow, batch, output, prices={}, workers=1, question_workers=1,
                               run_id='clef-hrx', client_factory=lambda _: native,
                               model_factory=lambda _: 'clef', progress=progress)
             scores = build_score_data(results, policy_ids=jobs[name].policy_ids)
@@ -274,6 +292,7 @@ def main():
         report = {'workflows': summary, 'speed': summarize_calls(calls),
                   'complete': len(summary) == len(workflows) and all(s['cases'] == s['planned_cases'] for s in summary.values()),
                   'limited_smoke_run': args.limit is not None,
+                  'new_cases_per_workflow_this_invocation': args.new_cases_per_workflow,
                   'timing_note': 'Native request wall time includes encoding, compilation, preparation, GPU and readback; excludes the first request of each CLI process and the separate CPU preflight. Workflow case timing includes preflight, capacity-driven splitting and Python workflow execution. Requests at the context limit are split before inference; no accepted request is truncated.'}
         preflight = [json.loads(line) for line in (args.output / 'preflight.jsonl').read_text().splitlines()]
         report['preflight'] = {'attempts': len(preflight), 'capacity_splits': sum(r['capacity_rejected'] for r in preflight),

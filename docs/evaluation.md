@@ -155,3 +155,16 @@ executable is `artifacts/throughput-1000/clef-delta-stores`. Prior baselines are
 `0b45482678f225acbfc11e14e7c4a5082aa36f1956171ada23b3f44382312405`.
 A fresh checkout
 must run the commands above to produce its own artifacts.
+
+## 64k context regression
+
+The `5aa94a6` context implementation was rechecked over all 231 cases in
+`tests/results/jevbench-20261010-context-64k/`: **202/231**, all strictly valid,
+with input lengths unchanged. Every logit and probability matches the grouped
+DeltaNet-store baseline exactly. Resident throughput was **412.67 input tok/s**,
+median **0.887 s**, p95 **5.496 s**. This single run is a regression check, not
+paired evidence for a speed improvement. The requests themselves are 158–4,032
+tokens; this does not measure 64k-token model accuracy.
+
+Archived binary: `artifacts/throughput-1000/clef-context-64k`, SHA-256
+`672781517ce7d08ab4ab0fcfa601d226a3be83149c0d168cc150e8049dfce8fd`.

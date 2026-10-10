@@ -73,6 +73,14 @@ The default 60 GiB model allocation budget includes weights and workspace. Run
 GPU jobs sequentially. The four workflows share one model process, one case runs
 at a time, and all questions in a fitting node are evaluated jointly.
 
+For resumable GPU scheduling, add `--new-cases-per-workflow 1` to execute one
+additional case from each workflow's sorted full case list. Repeat with `--resume`
+and any positive batch size, or omit the batch option to finish every remaining
+case. The manifest keeps the full selected suite; completed case checkpoints are
+reused, partial scores show completed/planned counts, and `complete` remains false
+until all selected cases finish. This differs from `--limit`, which deliberately
+selects a smaller smoke-only suite. Do not report partial scores as full results.
+
 ## Artifacts and timing
 
 `native-manifest.json` records the binary and runner hashes, command, checkpoint

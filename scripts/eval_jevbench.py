@@ -51,6 +51,7 @@ def main():
     parser.add_argument("--benchmark", type=Path, default=Path("artifacts/jevbench"))
     parser.add_argument("--binary", type=Path, default=Path("target/release/clef"))
     parser.add_argument("--output", type=Path, default=Path("tests/results/jevbench"))
+    parser.add_argument("--precision", choices=("bf16", "int4-mlp", "int4"), default="bf16")
     parser.add_argument("--memory-gib", type=int, default=60)
     parser.add_argument("--model-dir", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
@@ -92,6 +93,8 @@ def main():
     max_length = max(lengths)
     command = [binary, *source, "--memory-gib", str(args.memory_gib),
                "--max-length", str(max_length), "decide", "-", "--jsonl", "--raw"]
+    if args.precision != "bf16":
+        command[-4:-4] = ["--precision", args.precision]
     metadata = {
         "benchmark_url": "https://github.com/fstandhartinger/jevbench",
         "benchmark_commit": subprocess.check_output(

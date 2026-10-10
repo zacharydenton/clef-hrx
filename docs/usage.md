@@ -43,10 +43,39 @@ Paths are relative to the working directory; images support PNG, JPEG, and WebP.
 `do_sample_frames`. `fps` and `num_frames` are mutually exclusive. Decoded video
 storage is capped at 1 GiB.
 
-`--max-length` limits the total input to 1–16,384 tokens (default 16,384).
+`--max-length` limits the total input to 1–65,536 tokens (default 65,536).
 State text is truncated to fit; oversized schemas and media are rejected.
 `--max-state-tokens` further limits state text. `--memory-gib` sets an allocation
 budget (default 80), not a reservation. Run full-model jobs sequentially.
+
+## Precision
+
+`--precision bf16` is the default. `--precision int4-mlp` packs the 192 MLP
+projections; `--precision int4` additionally packs eligible large attention and
+DeltaNet projections (368 matrices total). Both are available in ordinary builds.
+The Rust API accepts `LoadOptions { precision: Precision::Int4, ..Default::default() }`.
+
+Weights are rotated in 256-element groups and packed once when loading. Each
+projection prepares activations on the GPU; integer accumulation is rescaled to
+BF16 output. Vision, embeddings, small projections, normalization, recurrence and
+the trained decision head retain their existing arithmetic. Packed weights are
+prepared from the same pinned checkpoint, with no additional model download.
+
+Prior full JevBench measurements were 625 tok/s and 199/231 for MLP-only INT4,
+and 748 tok/s and 194/231 for broader INT4, versus 408 tok/s and 202/231 in BF16.
+The modes are explicit accuracy/speed choices, not replacements for the default.
+The ordinary CLI exposes the same tested packing and matrix kernels; retain the
+exact binary, flags and results when comparing subsequent builds.
+
+```sh
+cargo build --release --locked --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4
+# Use --precision int4-mlp for the narrower choice.
+```
+
+Benchmark-only environment switches remain available with `bench-internals`;
+explicit INT4 precision selects the corresponding fixed configuration.
 
 ## Library
 

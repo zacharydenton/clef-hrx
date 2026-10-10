@@ -208,7 +208,6 @@ impl Engine {
         }
     }
     pub fn project(&mut self, x: &Tensor, name: &str, bias: bool) -> Result<Tensor> {
-        #[cfg(feature = "bench-internals")]
         if let Some(weight) = self
             .quantized
             .weights

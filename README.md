@@ -56,6 +56,27 @@ without changing RoPE. Workspace is allocated for each actual request, with
 8,192-row MLP chunks above 16k tokens. Available RAM and the allocation budget
 still determine whether a request fits.
 
+## Precision
+
+BF16 is the default. Normal builds also support explicit INT4 modes:
+
+```sh
+./target/release/clef --precision int4-mlp decide examples/invoice.json
+./target/release/clef --precision int4 decide examples/invoice.json
+```
+
+| Mode | Prior full JevBench accuracy | Resident input tok/s |
+| --- | ---: | ---: |
+| BF16 | 202/231 (87.4%) | 408 |
+| INT4 MLP only | 199/231 (86.1%) | 625 |
+| INT4 eligible backbone projections | 194/231 (84.0%) | 748 |
+
+INT4 trades accuracy for speed; it is never selected automatically. These are
+archived full-suite measurements of the respective kernel configurations, before
+the CLI option was exposed. See [precision details and reproduction](docs/usage.md#precision)
+and [recorded experiments](docs/optimization.md). Vision, normalization and the
+trained decision head retain their original precision.
+
 ## Evaluation
 
 The [WorkflowEvals runner and reproduction notes](docs/workflowevals.md) cover

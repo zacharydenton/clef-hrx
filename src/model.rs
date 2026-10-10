@@ -13,12 +13,25 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use std::time::Instant;
 
+/// Projection precision. INT4 trades some accuracy for lower latency and memory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Precision {
+    #[default]
+    Bf16,
+    /// Quantize the language-model MLP projections only.
+    Int4Mlp,
+    /// Quantize MLP and other eligible large language-model projections.
+    Int4,
+}
+
 #[derive(Debug, Clone)]
 pub struct LoadOptions {
     pub source: Source,
     pub device: i32,
     pub memory_budget_bytes: usize,
     pub encoding: EncodeOptions,
+    pub precision: Precision,
 }
 impl Default for LoadOptions {
     fn default() -> Self {
@@ -27,6 +40,7 @@ impl Default for LoadOptions {
             device: 0,
             memory_budget_bytes: 80usize << 30,
             encoding: EncodeOptions::default(),
+            precision: Precision::default(),
         }
     }
 }
@@ -98,6 +112,10 @@ impl ClefModel {
         );
         crate::memory::require(required)?;
         let mut engine = Engine::new(context)?;
+        if options.precision != Precision::Bf16 {
+            engine.quantized =
+                crate::quantized::QuantizedProjections::for_precision(options.precision);
+        }
         let encoder = Encoder::load(options.source.resolve("tokenizer.json")?)?;
         // Files are only mapped while loading, before this method returns.
         let checkpoint = unsafe { Checkpoint::open(&options.source)? };
@@ -111,7 +129,6 @@ impl ClefModel {
             let tensor = checkpoint.tensor(name)?;
             let rows = tensor.shape.first().copied().unwrap_or(1);
             let cols = tensor.shape.iter().skip(1).product::<usize>();
-            #[cfg(feature = "bench-internals")]
             if engine.load_quantized_weight(name, rows, cols, tensor.bytes)? {
                 checkpoint.done_with(name)?;
                 continue;
@@ -119,7 +136,6 @@ impl ClefModel {
             engine.weight(name.to_string(), rows, cols, tensor.bytes)?;
             checkpoint.done_with(name)?;
         }
-        #[cfg(feature = "bench-internals")]
         engine.quantized.validate_loaded()?;
         Ok(Self {
             encoder,

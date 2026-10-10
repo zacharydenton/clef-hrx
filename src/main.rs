@@ -20,6 +20,9 @@ struct Args {
     /// GPU allocation budget in GiB.
     #[arg(long, global = true, default_value_t = 80)]
     memory_gib: usize,
+    /// Projection precision; INT4 is faster with some accuracy loss.
+    #[arg(long, global = true, value_enum, default_value_t = clef_hrx::Precision::Bf16)]
+    precision: clef_hrx::Precision,
     /// Maximum input tokens, including schema and media (1–65536).
     #[arg(long, global = true, default_value_t = clef_hrx::encoding::MAX_CONTEXT_TOKENS)]
     max_length: usize,
@@ -88,6 +91,7 @@ fn main() -> Result<()> {
             .checked_mul(1 << 30)
             .context("memory budget overflow")?,
         encoding,
+        precision: args.precision,
     };
     match args.command {
         Action::Inspect => println!("{}", serde_json::to_string_pretty(&source.inspect()?)?),
