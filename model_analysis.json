@@ -30,7 +30,9 @@
       "joint_head.safetensors",
       "joint_head_config.json"
     ],
-    "tokenizer_present": true
+    "tokenizer_present": true,
+    "native_context_positions": 262144,
+    "native_runtime_context_limit": 65536
   },
   "quantization_targets": {
     "linear_layer_count": 496,
@@ -91,11 +93,14 @@
     "minimum_correct": 202,
     "cases": 231,
     "strict_valid_required": true,
-    "unchanged_dataset_checkpoint_token_counts": true
+    "unchanged_dataset_checkpoint_token_counts": true,
+    "minimum_correct_applies_to": "BF16 default; optional INT4 can trade accuracy for speed per user instruction",
+    "optional_int4_policy": "Retain BF16 as default. Report full-suite speed, accuracy, strict validity and changed decisions for opt-in INT4."
   },
   "checkpoint": {
     "id": 1,
-    "status": "awaiting_model_analysis_confirmation"
+    "status": "confirmed",
+    "confirmation": "User confirmed the model analysis on 2026-10-11."
   },
   "documentation_evidence": [
     {

@@ -1,7 +1,10 @@
 //! Shape coverage for the public JevBench workload; no checkpoint required.
-use clef_hrx::benchmarking::{AttentionBenchmark, DeltaBenchmark, GemmBenchmark, GemmKernel};
+use clef_hrx::benchmarking::{
+    AttentionBenchmark, DeltaBenchmark, GemmBenchmark, GemmKernel, PackingBenchmark,
+    SwiGluBenchmark,
+};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn lengths() -> Vec<usize> {
     match std::env::var("CLEF_BENCH_PROFILE")
@@ -275,5 +278,110 @@ fn attention(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(workload, gemm, delta, attention);
+fn swiglu(c: &mut Criterion) {
+    let mut group = c.benchmark_group("paired_swiglu");
+    configure(&mut group);
+    for rows in lengths() {
+        let mut graph = None;
+        let mut samples = Vec::new();
+        let mut sequence = 0u64;
+        group.throughput(Throughput::Elements(rows as u64 * 17408));
+        group.bench_function(BenchmarkId::new("pair", format!("{rows}x17408")), |b| {
+            let graph = graph.get_or_insert_with(|| SwiGluBenchmark::new(rows, 17408).unwrap());
+            b.iter_custom(|iterations| {
+                let mut times = [Duration::ZERO; 2];
+                for _ in 0..iterations {
+                    for candidate in [sequence.is_multiple_of(2), !sequence.is_multiple_of(2)] {
+                        let started = Instant::now();
+                        graph.run(candidate).unwrap();
+                        times[usize::from(candidate)] += started.elapsed();
+                    }
+                    sequence += 1;
+                }
+                samples.push(serde_json::json!({
+                    "iterations": iterations,
+                    "reference_ns": times[0].as_nanos() as u64,
+                    "optimized_ns": times[1].as_nanos() as u64,
+                }));
+                times[1]
+            });
+        });
+        if let Some(mut graph) = graph {
+            graph.check().unwrap();
+            let root = std::path::PathBuf::from("target/criterion/paired_swiglu/pair")
+                .join(format!("{rows}x17408"));
+            std::fs::create_dir_all(&root).unwrap();
+            let measured = if samples.len() >= 20 {
+                &samples[samples.len() - 20..]
+            } else {
+                &[]
+            };
+            std::fs::write(
+                root.join("paired.json"),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "rows": rows, "width": 17408, "bitwise_identical": true,
+                    "sample_size": 20, "samples": samples, "measurement_samples": measured,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+    }
+    group.finish();
+}
+fn packing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("paired_packing");
+    configure(&mut group);
+    for width in [5120, 6144, 8192] {
+        for rows in lengths() {
+            let mut graph = None;
+            let mut samples = Vec::new();
+            let mut sequence = 0u64;
+            group.throughput(Throughput::Elements(rows as u64 * width as u64));
+            group.bench_function(BenchmarkId::new("pair", format!("{rows}x{width}")), |b| {
+                let graph =
+                    graph.get_or_insert_with(|| PackingBenchmark::new(rows, width, 4).unwrap());
+                b.iter_custom(|iterations| {
+                    let mut times = [Duration::ZERO; 2];
+                    for _ in 0..iterations {
+                        for candidate in [sequence.is_multiple_of(2), !sequence.is_multiple_of(2)] {
+                            let started = Instant::now();
+                            graph.run(candidate).unwrap();
+                            times[usize::from(candidate)] += started.elapsed();
+                        }
+                        sequence += 1;
+                    }
+                    samples.push(serde_json::json!({
+                        "iterations": iterations,
+                        "reference_ns": times[0].as_nanos() as u64,
+                        "optimized_ns": times[1].as_nanos() as u64,
+                    }));
+                    times[1]
+                });
+            });
+            if let Some(mut graph) = graph {
+                graph.check().unwrap();
+                let root = std::path::PathBuf::from("target/criterion/paired_packing/pair")
+                    .join(format!("{rows}x{width}"));
+                std::fs::create_dir_all(&root).unwrap();
+                let measured = if samples.len() >= 20 {
+                    &samples[samples.len() - 20..]
+                } else {
+                    &[]
+                };
+                std::fs::write(
+                    root.join("paired.json"),
+                    serde_json::to_vec_pretty(&serde_json::json!({
+                        "rows": rows, "width": width, "bits": 4, "bitwise_identical": true,
+                        "sample_size": 20, "samples": samples, "measurement_samples": measured,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+        }
+    }
+    group.finish();
+}
+criterion_group!(workload, gemm, delta, attention, swiglu, packing);
 criterion_main!(workload);

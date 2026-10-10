@@ -61,8 +61,12 @@ BF16 output. Vision, embeddings, small projections, normalization, recurrence an
 the trained decision head retain their existing arithmetic. Packed weights are
 prepared from the same pinned checkpoint, with no additional model download.
 
-Prior full JevBench measurements were 625 tok/s and 199/231 for MLP-only INT4,
-and 748 tok/s and 194/231 for broader INT4, versus 408 tok/s and 202/231 in BF16.
+Full JevBench measurements were 625 tok/s and 199/231 for MLP-only INT4,
+and 832 tok/s and 194/231 for broader INT4 with scratch reuse, fused SwiGLU and
+single-pass packing, versus 412 tok/s and 202/231 in BF16.
+The [latest qualification](evaluation.md#single-pass-int4-packing)
+preserves all outputs of the prior INT4 run and uses 14.51 GiB peak engine
+allocation. The MLP-only figure is from an earlier build.
 The modes are explicit accuracy/speed choices, not replacements for the default.
 The ordinary CLI exposes the same tested packing and matrix kernels; retain the
 exact binary, flags and results when comparing subsequent builds.

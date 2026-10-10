@@ -27,9 +27,43 @@ approximately 2,048-token workload; its Q8 figure is 485.26 tok/s. Those use
 GGUF K-quant formats and a generation runtime, not CLEF's decision head or our
 W4A4 algorithm. They are useful context, not an apples-to-apples speed ranking.
 
-The first follow-up is the M128 tile comparison, then register/scratch inspection
-and activation-packing reuse. INT4 remains an explicit speed/accuracy option;
-BF16 remains the default.
+The M128/N128 candidate passed all 36 shape and replay smoke checks. Its first
+12-case Criterion comparison (`benches/results/int4-m128-mlp`, against the
+previously recorded `int4-mlp-padded`) was mixed:
+
+| Input rows | MLP up/gate time change, replay / rotating | MLP down time change, replay / rotating |
+| --- | --- | --- |
+| 235 | +5.67% / +4.23% | +6.09% / +5.18% |
+| 620 | −11.92% / −12.16% | −4.68% / −4.59% |
+| 4,032 | +2.83% / +2.33% | +1.14% / +1.48% |
+
+Negative means faster. The harness classified the 235-row results as regressions,
+620-row results as improvements, and 4,032-row results as inconclusive. These
+are comparisons with an earlier run, not an interleaved paired experiment or
+full-model speed claims. The default tile remains unchanged.
+
+The scratch-reuse change releases packed activations after their last recorded
+read, while preserving leases on immutable packed weights. Previously both were
+retained for the whole graph. A 32-projection identity test verifies bounded
+allocation and exact outputs on two replays; the independent packing oracle and
+weight-lifetime tests also pass. The full 231-case JevBench run preserves every
+logit and probability of the previous INT4 backbone run, scoring 194/231 at
+775.8 resident input tok/s. Peak engine allocation falls from 38.43 to 14.73 GiB.
+See [qualification and reproduction](evaluation.md#int4-scratch-reuse).
+INT4 remains an explicit speed/accuracy option; BF16 remains the default.
+
+Removing forced unrolling from the INT4 GEMM reduced compiler-reported vector
+register use from 200 to 186 and raised the register residency tier from seven
+to eight. Neither version spilled. The four long-input Criterion cases
+(`int4-gemm-unroll-long` / `int4-gemm-rolled-long`) showed unchanged up/gate
+timings and a 3.6% slowdown for replayed down-projection; the rotating down case
+was inconclusive. The rolled loop was not selected. Register counts alone did
+not predict a speed improvement.
+
+The M128/N128 tile with a smaller K block (128 INT4 elements) passed all 36
+projection smoke cases. It used 152 vector registers and 20 KiB LDS, versus
+200 registers and 30 KiB for the production M256 tile. Its four 4,032-row MLP
+cases were still 4.6–7.9% slower (`int4-m128-k128-long`); it was not selected.
 
 ## Hosted comparison
 

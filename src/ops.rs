@@ -6,6 +6,27 @@ use anyhow::ensure;
 use hrx::{Constants, loom::Specialization};
 
 impl Engine {
+    pub fn swiglu(&mut self, gate: &Tensor, up: &Tensor) -> Result<Tensor> {
+        ensure!(
+            gate.rows == up.rows
+                && gate.cols == up.cols
+                && gate.dtype == DType::Bf16
+                && up.dtype == DType::Bf16,
+            "SwiGLU shape/dtype mismatch"
+        );
+        let out = self.alloc(gate.rows, gate.cols, DType::Bf16)?;
+        self.dispatch(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/swiglu.loom")
+            ),
+            out.len(),
+            &[("a", gate), ("b", up)],
+            &out,
+            &[],
+        )?;
+        Ok(out)
+    }
     pub fn unary(&mut self, x: &Tensor, op: &str) -> Result<Tensor> {
         let out = self.alloc(x.rows, x.cols, x.dtype)?;
         let source = match op {
@@ -346,6 +367,45 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151; checks BF16 rounding, tails, offsets and graph replay"]
+    fn swiglu_preserves_materialized_rounding() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        for (rows, width) in [(1, 1), (3, 65), (17, 256), (17, 17408)] {
+            let mut e = Engine::new(&context)?;
+            let values = |factor| {
+                (0..(rows + 1) * width)
+                    .map(|i| half::bf16::from_f32(((i * factor % 1031) as f32 - 515.) / 16.))
+                    .collect::<Vec<_>>()
+            };
+            let gate = e
+                .input(
+                    rows + 1,
+                    width,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values(17)),
+                )?
+                .slice_rows(1, rows);
+            let up = e
+                .input(
+                    rows + 1,
+                    width,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values(31)),
+                )?
+                .slice_rows(1, rows);
+            let silu = e.unary(&gate, "silu")?;
+            let expected = e.binary(&silu, &up, "mulf")?;
+            let actual = e.swiglu(&gate, &up)?;
+            let mut graph = e.finish()?;
+            for _ in 0..2 {
+                e.run(&mut graph)?;
+                assert_eq!(e.read_f32(&actual)?, e.read_f32(&expected)?);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires gfx1151; checks pipelined GEMM row tails and workgroup remapping"]

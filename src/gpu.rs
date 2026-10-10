@@ -427,8 +427,11 @@ impl Engine {
                 })
                 .unwrap_or_else(|| {
                     format!(
-                        "gemm_bf16 {}x{}x{}",
-                        output.rows, inputs[0].cols, output.cols
+                        "{} {}x{}x{}",
+                        spec.symbol(),
+                        output.rows,
+                        inputs[0].cols,
+                        output.cols
                     )
                 }),
             kernel,

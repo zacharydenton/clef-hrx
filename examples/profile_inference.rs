@@ -1,5 +1,7 @@
 use clap::Parser;
-use clef_hrx::{ClefModel, EncodeOptions, LoadOptions, Request, Result, checkpoint::Source};
+use clef_hrx::{
+    ClefModel, EncodeOptions, LoadOptions, Precision, Request, Result, checkpoint::Source,
+};
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 
 #[derive(Parser)]
@@ -10,6 +12,8 @@ struct Args {
     max_length: usize,
     #[arg(long, default_value_t = 3)]
     rounds: usize,
+    #[arg(long, value_enum, default_value_t = Precision::Bf16)]
+    precision: Precision,
 }
 
 fn main() -> Result<()> {
@@ -31,6 +35,7 @@ fn main() -> Result<()> {
             ..Default::default()
         },
         memory_budget_bytes: 60usize << 30,
+        precision: args.precision,
         ..Default::default()
     })?;
     eprintln!("Model load: {:.3} s", started.elapsed().as_secs_f64());

@@ -168,3 +168,116 @@ tokens; this does not measure 64k-token model accuracy.
 
 Archived binary: `artifacts/throughput-1000/clef-context-64k`, SHA-256
 `672781517ce7d08ab4ab0fcfa601d226a3be83149c0d168cc150e8049dfce8fd`.
+
+## INT4 scratch reuse
+
+The ordinary release CLI with `--precision int4` was checked on 11 October 2026
+in `tests/results/jevbench-20261011-int4-scratch-reuse/`. It scored **194/231**,
+with all 231 outputs strictly valid. All logits, probabilities, task IDs and
+input token counts match `jevbench-20261010-int4-backbone` exactly. BF16 remains
+the default; this check preserves the existing optional INT4 accuracy tradeoff.
+
+Resident throughput was **775.79 input tok/s**: 166,394 tokens in 214.485 seconds,
+excluding only the first request/model load. Median request latency was 0.398 s,
+p95 3.286 s. The previous INT4 run measured 747.71 tok/s; these separate runs
+do not establish a paired speed improvement. Peak engine allocation decreased
+from **38.430 to 14.725 GiB** by releasing packed activation scratch for reuse
+after its last recorded read, while retaining immutable packed weights.
+
+Reproduce with the pinned checkpoint and JevBench checkout described above:
+
+```sh
+cargo build --locked --release
+python3 scripts/eval_jevbench.py \
+  --binary target/release/clef --precision int4 \
+  --model-dir artifacts/model \
+  --output tests/results/jevbench-int4-scratch-repro
+```
+
+Archived binary: `artifacts/throughput-1000/clef-int4-scratch-reuse`, SHA-256
+`ee36cd7d229aba89603f108f87665b83ca27684be92bb7f23895db1df2cbf85e`.
+The run's `working-tree.diff` records the change over `fb1f8c8`; `comparison.json`
+records output equality and peak allocations. GPU tests additionally cover a
+32-projection graph with bounded scratch and exact identity outputs on two
+replays, packed-weight lifetime across plan resets, and an independent CPU
+packing oracle.
+
+## Fused SwiGLU
+
+The full runs in `jevbench-20261011-bf16-swiglu` and
+`jevbench-20261011-int4-swiglu` preserve all 231 logit and probability arrays
+against their respective 64k-context BF16 and shared-packing INT4 baselines.
+Both runs are strictly valid, with identical task IDs, choices and token counts.
+
+| Mode | Correct | Resident input tok/s | Resident seconds | Median / p95 request seconds | Peak engine GiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BF16 default | 202/231 | 411.94 | 403.930 | 0.904 / 5.470 | 47.773 |
+| INT4 eligible backbone | 194/231 | 814.21 | 204.364 | 0.382 / 3.130 | 14.508 |
+
+Both resident measurements cover 166,394 input tokens, excluding only the first
+request/model load. The previous respective rates were 412.67 and 780.17 tok/s;
+these full runs are not paired timing measurements. The operator's eleven-shape
+paired Criterion sweep independently showed 1.31–1.84× speedups with bitwise
+equality. BF16 remains the default, with no accuracy regression; INT4 retains
+its explicit accuracy tradeoff.
+
+Reproduce using the pinned inputs above and a fresh result directory:
+
+```sh
+cargo build --locked --release
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-swiglu-int4-repro
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --output tests/results/jevbench-swiglu-bf16-repro
+python3 scripts/bench_workload.py swiglu-paired-repro --filter paired_swiglu
+```
+
+Archived binary: `artifacts/throughput-1000/clef-swiglu`, SHA-256
+`b95f8406b8334fa68b1b842ba0be370f21116211f63e5e6bbc0a4cb3fb2f3f66`.
+`artifacts/throughput-1000/clef-swiglu-source.json` records the complete source
+snapshot from `benches/results/swiglu-paired-full/source`, including new files
+absent from `git diff`. Each eval's `comparison.json` and `output-equality.json`
+record the complete gates and exact-output checks.
+
+## Single-pass INT4 packing
+
+`jevbench-20261011-int4-single-packing` scored **194/231**, with all 231 requests
+strictly valid and all logits and probabilities identical to the fused-SwiGLU
+INT4 baseline. The checkpoint, task IDs, choices and input lengths are unchanged.
+BF16 remains the default; this change affects integer packing only.
+
+The resident run processed **166,394 input tokens in 200.085 seconds**:
+**831.62 input tok/s**, with **0.329 s median / 3.068 s p95** request latency and
+**14.508 GiB** peak engine allocation. Timing includes encoding, preparation,
+compilation, GPU execution and readback, excluding only the first request/model
+load. The preceding run measured 814.21 tok/s; these are separate full-suite
+measurements. The 1,000 tok/s target has not been reached.
+
+Packing keeps transformed FP32 values in local memory until the row scale is
+known, avoiding a second transform for widths up to 6,144. Wider operands retain
+the original implementation. The 22-pair Criterion sweep over 5,120/6,144 columns
+and all eleven workload lengths preserved exact codes/scales and measured
+1.30–1.95× operator speedups, with all 99% paired intervals above 1.0. An 8,192
+column candidate lacked a consistent win and was excluded from selection.
+
+Reproduce with the pinned inputs above, running GPU jobs sequentially:
+
+```sh
+cargo build --locked --release
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-single-packing-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-swiglu \
+  tests/results/jevbench-single-packing-repro
+python3 scripts/bench_workload.py packing-paired-repro \
+  --filter 'paired_packing/pair/.*x(5120|6144)$'
+```
+
+Archived binary: `artifacts/throughput-1000/clef-int4-single-packing`, SHA-256
+`b28bccfcb1be76a544eb641ad330e49fb579674d92cb3381bc5ec280d4aa0dad`.
+`artifacts/throughput-1000/clef-int4-single-packing-source.json` records every
+source hash in `benches/results/single-packing-paired-full/source`, including new
+kernel files. The run's `comparison.json` and `output-equality.json` record the
+full accuracy gate, exact-output check and peak allocation. GPU oracle tests
+also cover INT4/INT8, zero/constant/random rows, packing fallback widths,
+scratch reuse and packed-weight lifetime.

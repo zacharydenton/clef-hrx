@@ -4,7 +4,10 @@ use crate::{
     gpu::{DType, Engine, Tensor},
 };
 use hrx::{GraphExec, inference::ModelContext};
+mod activation;
 pub(crate) mod quantized;
+pub use activation::SwiGluBenchmark;
+pub use quantized::PackingBenchmark;
 
 /// Development-only switches for paired full-model comparisons.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

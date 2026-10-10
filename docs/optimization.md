@@ -10,7 +10,10 @@ Accept small numerical differences if the complete evaluation does not regress:
 at least the accepted baseline's number correct (currently 202/231), all 231 requests strictly valid, the same
 checkpoint and dataset, and identical input token counts. Report changed decisions,
 probability drift, calibration, and tier scores. Keep the existing operator and
-reference tests; do not loosen their tolerances to qualify a candidate.
+reference tests; do not loosen their tolerances to qualify a candidate. The
+202/231 floor applies to the BF16 default. For the explicitly optional INT4
+speed/accuracy modes, gate kernel optimizations against the qualified baseline
+of the same precision mode and report the difference from BF16 separately.
 
 ## Criterion coverage
 
@@ -21,6 +24,8 @@ reference tests; do not loosen their tolerances to qualify a candidate.
 | `kernels` / `paired_delta_prefill/persistent` | Alternating-order chunked/register comparisons at 235, 620 and 1,024 tokens; raw paired timing totals | Completed graph replay, with both variants resident |
 | `kernels` / `paired_delta_prefill/prepared` and `/candidate` | Prepared or external DeltaNet kernels at 158, 235, 620, 1,024 and 2,048 tokens; alternating order, maximum error and bitwise equality | Completed graph replay, including preparation when selected |
 | `workload` / `workload_attention` | Causal 24-query/4-KV-head attention, 256 dimensions; 16 through 4,032 tokens | Completed graph, including GPU value transpose/padding and the selected attention kernel |
+| `workload` / `paired_swiglu` | MLP width 17,408 at all eleven workload lengths; separate SiLU/multiply versus fused activation, alternating execution order | Completed graph; raw paired batches and 99% bootstrap speedup intervals |
+| `workload` / `paired_packing` | INT4 packing at widths 5,120, 6,144 and 8,192; two-pass reference versus one-pass FP32 transform; exact logical codes and scales | Completed graph with alternating order and paired confidence intervals |
 | `normalization`, `preprocessing` | Normalization shapes and CPU request processing | Existing suite-specific boundaries |
 | `workload_inference` | Seven representative requests selected by nearest token length from an actual request corpus; exact-input replay and graph rebuilding | Complete `infer` calls, including preparation in rebuild cases |
 
@@ -114,6 +119,42 @@ Experimental sources must produce finite, deterministic outputs; numerical drift
 against the current kernel is logged for diagnosis. Bitwise agreement is not an
 acceptance requirement. The complete evaluation remains the accuracy gate.
 
+The fused SwiGLU activation retains the original intermediate BF16 rounding
+between SiLU and multiplication. It removes one temporary tensor/pass and uses
+256-thread workgroups. GPU tests cover row offsets, partial workgroups and two
+replays against the original two-dispatch path. The `swiglu-paired-full` sweep
+matched output bits before and after timing at every length and measured
+1.31–1.84× operator speedups, with all 99% paired intervals above 1.0. These are
+operator measurements. Full JevBench qualification preserves all logits and
+probabilities in both modes: BF16 scores 202/231 at 411.94 tok/s, and broader
+INT4 scores 194/231 at 814.21 tok/s. All outputs are strictly valid and token
+counts are unchanged. See [full results and reproduction](evaluation.md#fused-swiglu).
+
+```sh
+python3 scripts/bench_workload.py swiglu-paired-repro --filter paired_swiglu
+```
+
+The single-pass packing candidate keeps transformed FP32 values in local memory
+until the scale is known, eliminating the repeated transform. The selected
+production cutoff is 6,144 columns: quick paired measurements at 8,192 columns
+showed no benefit at 4,032 rows. Wider operands keep the two-pass implementation.
+The independent CPU packing oracle covers INT4 and INT8, zero/constant/random
+rows, widths 256/768/1,280/5,120/6,144/8,192/17,408 and replay. Scratch-boundedness
+and weight lifetime tests also pass.
+
+`single-packing-paired-full` covers all eleven workload lengths at both selected
+model widths (5,120 and 6,144): all 22 pairs have exact codes/scales and measured
+1.30–1.95× speedups, with every 99% paired lower bound above 1.0. Full INT4
+JevBench qualification scored 194/231 at 831.62 resident input tok/s, preserving
+all 231 logit/probability arrays and the 14.508 GiB peak allocation. The previous
+run measured 814.21 tok/s; these full runs are separate sequential measurements,
+not paired timing evidence. See [results and reproduction](evaluation.md#single-pass-int4-packing).
+
+```sh
+python3 scripts/bench_workload.py packing-paired-repro \
+  --filter 'paired_packing/pair/.*x(5120|6144)$'
+```
+
 `CLEF_BENCH_PAD_GEMM=1` tests the h3-hrx approach of adding 64 elements to operand
 row strides when K is a multiple of 1,024. This preserves logical matrix values
 and checks exact output equality. Choose it separately from a GEMM source override.
@@ -155,10 +196,25 @@ projections. The full INT4 backbone trial missed the BF16 accuracy floor below; 
 the next quantized projection reads the exact same tensor view with matching
 precision and stride. The source lease prevents allocation reuse from producing
 a false cache hit; completing or resetting a graph clears the cache. It targets
-the shared inputs of MLP gate/up and DeltaNet QKV/Z projections. This experimental
-switch still needs end-to-end timing and accuracy qualification.
-The evaluation recorder saves these environment variables. Packing reuse still
-requires end-to-end qualification; it is off in the public INT4 modes.
+the shared inputs of MLP gate/up and DeltaNet QKV/Z projections. It is enabled
+in the public INT4 modes after the full `jevbench-20261011-int4-shared-packing`
+qualification: all 231 logits/probability arrays match the scratch-reuse run,
+194/231 correct, all strictly valid, unchanged tokens. Resident throughput was
+780.17 tok/s versus 775.79 in the preceding scratch-reuse run; that 0.6% difference
+does not establish a reliable speed gain. Peak engine allocation was 14.738 GiB.
+The binary SHA-256 is
+`b4e0595172103401d1d08ecb17fafc64b6b3c76acc6cd0f0bcffe080b08aee5a`.
+The evaluation recorder saves benchmark-only environment variables.
+
+The profiling example accepts `--precision int4` alongside the ordinary precision
+choices. Its labels distinguish integer GEMMs and packing exports from BF16
+GEMMs. A one-round serialized diagnostic on the 4,032-token JevBench request
+recorded approximately 404 ms in packing, 341 ms in SiLU/multiply, 579 ms in
+DeltaNet, and 488 ms in attention, with integer GEMMs accounting for roughly
+half the GPU work. These intervals include profiling barriers and are not the
+end-to-end speed metric. The log is
+`artifacts/throughput-1000/int4-shared-profile.log`; ordinary runs before and
+after profiling are checked for exact output agreement.
 
 With `CLEF_EXPERIMENT_BACKBONE_BITS=4`, all 368 eligible projections were packed.
 The full `jevbench-20261010-int4-backbone` run reached **747.7 input tokens/s**

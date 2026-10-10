@@ -42,6 +42,7 @@ impl QuantizedProjections {
             bits: (precision == Precision::Int4Mlp).then_some(4),
             backbone_bits: (precision == Precision::Int4).then_some(4),
             projections: vec!["up".into(), "gate".into(), "down".into()],
+            share_packing: precision != Precision::Bf16,
             ..Default::default()
         }
     }
@@ -216,6 +217,26 @@ pub(crate) fn prepare(
     bits: usize,
     stride: usize,
 ) -> Result<(Tensor, Tensor)> {
+    prepare_with_source(
+        e,
+        x,
+        bits,
+        stride,
+        if x.cols <= 6144 {
+            include_str!("../kernels/prepare_integer_single.loom")
+        } else {
+            include_str!("../kernels/prepare_integer.loom")
+        },
+    )
+}
+
+pub(crate) fn prepare_with_source(
+    e: &mut Engine,
+    x: &Tensor,
+    bits: usize,
+    stride: usize,
+    source: &str,
+) -> Result<(Tensor, Tensor)> {
     ensure!(
         [4, 8].contains(&bits)
             && (256..=32768).contains(&x.cols)
@@ -244,16 +265,10 @@ pub(crate) fn prepare(
     }
     let mut constants = Constants::new();
     constants.push(x.rows as u32)?;
-    e.emit_special(
-        include_str!("../kernels/prepare_integer.loom"),
-        spec,
-        constants,
-        &[x.rows as u64],
-        &[x],
-        &storage,
-    )?;
-    // Graphs reuse these buffers even after their temporary Tensor handles drop.
-    e.retained.push(storage);
+    e.emit_special(source, spec, constants, &[x.rows as u64], &[x], &storage)?;
+    // The returned views lease this storage through their last recorded read.
+    // Graph access declarations order later scratch reuse; immutable weights
+    // are kept alive by QuantizedProjections rather than pinning every activation.
     Ok((codes, scales))
 }
 
@@ -334,6 +349,44 @@ mod tests {
             .map(|(a, b)| f64::from(*a) * f64::from(b) / 256.)
             .sum();
         assert!((actual - expected).abs() < 1e-8);
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151; checks bounded scratch across a deep quantized graph"]
+    fn activation_scratch_is_bounded() -> Result<()> {
+        let mut e = Engine::new(&ModelContext::new(Default::default())?)?;
+        e.quantized = QuantizedProjections::for_precision(Precision::Int4Mlp);
+        let name = "model.language_model.layers.0.mlp.up_proj.weight";
+        let weights: Vec<_> = (0..256 * 256)
+            .map(|i| half::bf16::from_f32(if i / 256 == i % 256 { 1. } else { 0. }))
+            .collect();
+        e.load_quantized_weight(name, 256, 256, bytemuck::cast_slice(&weights))?;
+        let w = e.quantized.weights[name].clone();
+        let values: Vec<_> = (0..17 * 256)
+            .map(|i| half::bf16::from_f32(1. + (i / 256) as f32 / 16.))
+            .collect();
+        let mut x = e.input(17, 256, DType::Bf16, bytemuck::cast_slice(&values))?;
+        let mut warmed_bytes = 0;
+        for layer in 0..32 {
+            x = e.project_quantized(&x, &w)?;
+            if layer == 7 {
+                warmed_bytes = e.allocated_bytes();
+            }
+            if layer > 7 {
+                assert_eq!(
+                    e.allocated_bytes(),
+                    warmed_bytes,
+                    "scratch grew at layer {layer}"
+                );
+            }
+        }
+        let mut graph = e.finish()?;
+        let expected: Vec<_> = values.iter().map(|v| v.to_f32()).collect();
+        for _ in 0..2 {
+            e.run(&mut graph)?;
+            assert_eq!(e.read_f32(&x)?, expected);
+        }
+        Ok(())
     }
 
     #[test]
@@ -427,7 +480,7 @@ mod tests {
         let context = ModelContext::new(Default::default())?;
         let mut e = Engine::new(&context)?;
         for bits in [4, 8] {
-            for width in [256, 5120, 17408] {
+            for width in [256, 768, 1280, 5120, 6144, 8192, 17408] {
                 let mut values = vec![half::bf16::ZERO; width * 3];
                 values[width] = half::bf16::ONE;
                 for i in 0..width {
