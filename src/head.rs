@@ -253,8 +253,10 @@ mod tests {
         let expected: Vec<_> = fixture
             .get("logits")?
             .bytes
-            .chunks_exact(4)
-            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_le_bytes(*v))
             .collect();
         eprintln!("head actual {actual:?}; reference {expected:?}");
         let mut off = 0;

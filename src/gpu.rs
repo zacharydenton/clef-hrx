@@ -481,12 +481,16 @@ impl Engine {
             &mut data,
         )?;
         Ok(if t.dtype == DType::Bf16 {
-            data.chunks_exact(2)
-                .map(|v| half::bf16::from_bits(u16::from_le_bytes(v.try_into().unwrap())).to_f32())
+            data.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|v| half::bf16::from_bits(u16::from_le_bytes(*v)).to_f32())
                 .collect()
         } else {
-            data.chunks_exact(4)
-                .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+            data.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|v| f32::from_le_bytes(*v))
                 .collect()
         })
     }
@@ -697,8 +701,10 @@ mod differential {
         let expected = f
             .get(name)?
             .bytes
-            .chunks_exact(2)
-            .map(|b| half::bf16::from_bits(u16::from_le_bytes(b.try_into().unwrap())).to_f32())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| half::bf16::from_bits(u16::from_le_bytes(*b)).to_f32())
             .collect::<Vec<_>>();
         let mut graph = e.finish()?;
         e.run(&mut graph)?;
