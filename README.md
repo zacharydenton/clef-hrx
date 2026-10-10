@@ -13,9 +13,6 @@ CLEF answers structured questions about text, images and video:
 | `score` | Expected score, legend and probabilities |
 | `noul` | Probability that a proposition is true |
 
-Experimental: the incident/outage fixture still exceeds the 0.003 probability
-error threshold against the BF16 reference. The test threshold has not been relaxed.
-
 ## Build and run
 
 Requires Rust 1.91+, Linux, a `gfx1151` GPU and at least 50 GiB of available RAM
