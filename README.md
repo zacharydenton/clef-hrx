@@ -54,13 +54,14 @@ about 46.5 GiB plus workspace. Use `--model-dir PATH` for a local snapshot or
 
 ## Evaluation
 
-On all 231 public JevBench cases, CLEF-HRX scored **201/231 (87.0%)**, compared
+On all 231 public JevBench cases, CLEF-HRX scored **202/231 (87.4%)**, compared
 with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
 completed with valid probabilities and no input truncation.
 
-On AMD Strix Halo, resident latency was **1.78 s median / 9.90 s p95**, with
-**19.4 decisions/minute** throughput. Another GPU application was present during
-this single sequential run; model loading is excluded from these speed figures.
+On AMD Strix Halo, resident latency was **1.11 s median / 6.89 s p95**, with
+**345 input tokens/s (28.6 decisions/minute)** throughput. Another GPU application
+was present during this single sequential run; model loading is excluded from
+these speed figures.
 [Results, measurement details and reproduction instructions](docs/evaluation.md).
 
 ## Library
@@ -75,12 +76,14 @@ this single sequential run; model loading is excluded from these speed figures.
 cargo test --locked --lib --bins --tests --examples --all-features
 cargo test --locked --doc
 cargo bench --locked --bench preprocessing
+python3 scripts/bench_workload.py baseline --profile quick
 CLEF_BENCH_FULL_MODEL=1 cargo bench --locked --bench inference
 ```
 
 GPU and checkpoint tests are ignored by default. Full-model benchmarks report
 loading and first-request time separately from resident requests.
 [Validation, kernel benchmarks and profiling](docs/development.md).
+[Workload benchmarks, recorded comparisons and evaluation gate](docs/optimization.md).
 
 ## License
 

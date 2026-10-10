@@ -446,4 +446,59 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    #[ignore = "requires gfx1151; validates register-resident DeltaNet"]
+    fn persistent_comparison() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        let mut e = Engine::new(&context)?;
+        for (n, log_decay) in [(1, 0.), (65, -1.), (260, 0.), (1024, -6.), (4032, -3.)] {
+            let values: Vec<_> = (0..n * 10240)
+                .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 64.))
+                .collect();
+            let gates = |factor| {
+                (0..n * 48)
+                    .map(|i| half::bf16::from_f32(((i * factor % 131) as f32 - 65.) / 64.))
+                    .collect::<Vec<_>>()
+            };
+            let qkv = e.input(n, 10240, DType::Bf16, bytemuck::cast_slice(&values))?;
+            let a = e.input(n, 48, DType::Bf16, bytemuck::cast_slice(&gates(13)))?;
+            let b = e.input(n, 48, DType::Bf16, bytemuck::cast_slice(&gates(31)))?;
+            let al = e.input(
+                1,
+                48,
+                DType::Bf16,
+                bytemuck::cast_slice(&[half::bf16::from_f32(log_decay); 48]),
+            )?;
+            let dt = e.input(
+                1,
+                48,
+                DType::Bf16,
+                bytemuck::cast_slice(&[half::bf16::from_f32(0.2); 48]),
+            )?;
+            let c = e.delta_chunked(&qkv, &a, &b, &al, &dt)?;
+            let mut cg = e.finish()?;
+            let p = e.delta_persistent(&qkv, &a, &b, &al, &dt)?;
+            let mut pg = e.finish()?;
+            e.run(&mut cg)?;
+            let expected = e.read_f32(&c)?;
+            e.run(&mut pg)?;
+            let actual = e.read_f32(&p)?;
+            assert!(actual.iter().chain(&expected).all(|v| v.is_finite()));
+            let error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!("persistent DeltaNet: n={n}, log_decay={log_decay}, max error={error}");
+            assert!(error < 0.002);
+            e.run(&mut pg)?;
+            assert_eq!(
+                actual,
+                e.read_f32(&p)?,
+                "register state must reset on replay"
+            );
+        }
+        Ok(())
+    }
 }

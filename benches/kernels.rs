@@ -57,18 +57,25 @@ fn paired(c: &mut Criterion) {
         ("chunked", 65),
         ("chunked", 260),
         ("chunked", 1024),
+        ("persistent", 235),
+        ("persistent", 620),
+        ("persistent", 1024),
         ("gated_norm", 260),
         ("gated_norm", 1024),
     ] {
         let norm = name == "gated_norm";
         let mut reference = if norm {
             DeltaBenchmark::gated_norm(tokens, false)
+        } else if name == "persistent" {
+            DeltaBenchmark::new(tokens, true)
         } else {
             DeltaBenchmark::reference(tokens)
         }
         .unwrap();
         let mut optimized = if norm {
             DeltaBenchmark::gated_norm(tokens, true)
+        } else if name == "persistent" {
+            DeltaBenchmark::resident(tokens)
         } else {
             DeltaBenchmark::new(tokens, true)
         }
@@ -133,6 +140,13 @@ fn paired(c: &mut Criterion) {
             .join(name)
             .join(tokens.to_string());
         std::fs::create_dir_all(&root).unwrap();
+        // Criterion invokes iter_custom during warmup, then once per measured
+        // sample. Keep those phases separate for paired confidence intervals.
+        let measured = if samples.len() >= 40 {
+            &samples[samples.len() - 40..]
+        } else {
+            &[]
+        };
         std::fs::write(
             root.join("paired.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -140,6 +154,7 @@ fn paired(c: &mut Criterion) {
                 "allocated_bytes": allocated,
                 "sample_size": 40,
                 "samples": samples,
+                "measurement_samples": measured,
                 "run_id": run_id,
                 "fingerprint": fingerprint,
                 "measurement_seconds": measurement_seconds,

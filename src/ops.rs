@@ -147,11 +147,38 @@ impl Engine {
         w: &Tensor,
         bias: Option<&Tensor>,
     ) -> Result<Tensor> {
-        let (m, k, n) = (x.rows, x.cols, w.rows);
+        self.linear_pipelined_source(
+            x,
+            w,
+            bias,
+            include_str!("../kernels/gemm_bf16_pipelined.loom"),
+        )
+    }
+    pub(crate) fn linear_pipelined_source(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        bias: Option<&Tensor>,
+        source: &str,
+    ) -> Result<Tensor> {
+        self.linear_pipelined_strided(x, w, bias, x.cols, source)
+    }
+    pub(crate) fn linear_pipelined_strided(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        bias: Option<&Tensor>,
+        k: usize,
+        source: &str,
+    ) -> Result<Tensor> {
+        let (m, n) = (x.rows, w.rows);
         ensure!(
             x.dtype == DType::Bf16
                 && w.dtype == DType::Bf16
-                && w.cols == k
+                && w.cols == x.cols
+                && k <= x.cols
+                && x.cols <= 65536
+                && x.cols.is_multiple_of(64)
                 && (1..=16777216).contains(&m)
                 && (64..=65536).contains(&k)
                 && k.is_multiple_of(64)
@@ -164,7 +191,7 @@ impl Engine {
         for (key, value) in [
             ("k_size", k),
             ("n_size", n),
-            ("k_stride", k),
+            ("k_stride", x.cols),
             ("m_group", 8.min(m.div_ceil(128))),
             ("grid_x", n / 256),
             ("grid_y", m.div_ceil(128)),
@@ -173,14 +200,7 @@ impl Engine {
         }
         let mut constants = Constants::new();
         constants.push(m as u32)?;
-        self.emit_special(
-            include_str!("../kernels/gemm_bf16_pipelined.loom"),
-            spec,
-            constants,
-            &[m as u64],
-            &[x, w],
-            &out,
-        )?;
+        self.emit_special(source, spec, constants, &[m as u64], &[x, w], &out)?;
         if let Some(b) = bias {
             self.binary(&out, &b.reshape(1, n), "addf")
         } else {

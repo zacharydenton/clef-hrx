@@ -104,6 +104,39 @@ impl Engine {
         )?;
         Ok(out)
     }
+    pub fn delta_persistent(
+        &mut self,
+        qkv: &Tensor,
+        a: &Tensor,
+        b: &Tensor,
+        alog: &Tensor,
+        dt: &Tensor,
+    ) -> Result<Tensor> {
+        let n = qkv.rows;
+        ensure!(
+            n > 0
+                && qkv.cols == 10240
+                && a.rows == n
+                && a.cols == 48
+                && b.rows == n
+                && b.cols == 48
+                && alog.len() == 48
+                && dt.len() == 48,
+            "persistent DeltaNet shape"
+        );
+        let out = self.alloc(n, 6144, DType::Bf16)?;
+        self.dispatch(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/delta_persistent.loom")
+            ),
+            48 * 16 * 32,
+            &[("qkv", qkv), ("a", a), ("b", b), ("al", alog), ("dt", dt)],
+            &out,
+            &[("n", n.to_string()), ("output_len", out.len().to_string())],
+        )?;
+        Ok(out)
+    }
     pub fn delta(
         &mut self,
         qkv: &Tensor,
@@ -227,10 +260,16 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             let b = e.project(&norm, &format!("{p}.in_proj_b"), false)?;
             let al = e.w(&format!("{p}.A_log"))?;
             let dt = e.w(&format!("{p}.dt_bias"))?;
-            let d = if n > 64 {
+            #[cfg(not(feature = "bench-internals"))]
+            let use_chunked = false;
+            #[cfg(feature = "bench-internals")]
+            let use_chunked = e.reference_kernels.delta;
+            let d = if use_chunked && n > 64 {
                 e.delta_chunked(&qkv, &a, &b, &al, &dt)?
-            } else {
+            } else if use_chunked {
                 e.delta(&qkv, &a, &b, &al, &dt)?
+            } else {
+                e.delta_persistent(&qkv, &a, &b, &al, &dt)?
             };
             let d = d.reshape(n * 48, 128);
             let w = e.w(&format!("{p}.norm.weight"))?;

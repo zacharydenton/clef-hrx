@@ -11,7 +11,7 @@ keywords = ["inference", "amdgpu", "clef", "loom"]
 categories = ["science"]
 include = [
     "/src/**", "/kernels/**", "/reference/**", "/tests/**", "/benches/**",
-    "/examples/**", "/licenses/**", "/LICENSE", "/THIRD_PARTY_NOTICES.md",
+    "/examples/**", "/scripts/*.py", "/licenses/**", "/LICENSE", "/THIRD_PARTY_NOTICES.md",
     "/README.md", "/docs/**", "/Cargo.lock", "!/benches/results/**", "!/tests/results/**",
 ]
 
@@ -61,6 +61,16 @@ name = "gemm"
 harness = false
 required-features = ["bench-internals"]
 
+[[bench]]
+name = "workload"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "workload_inference"
+harness = false
+required-features = ["bench-internals"]
+
 [[bin]]
 name = "clef"
 path = "src/main.rs"
@@ -75,6 +85,22 @@ required-features = ["bench-internals"]
 
 [[example]]
 name = "compare_inference"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "probe_gemm"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "probe_delta"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "compare_delta"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "probe_attention"
 required-features = ["bench-internals"]
 
 [profile.release]

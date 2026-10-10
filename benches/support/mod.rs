@@ -23,6 +23,7 @@ pub fn fingerprint() -> String {
         include_str!("../../kernels/chunk_state.loom"),
         include_str!("../../kernels/chunk_reorder.loom"),
         include_str!("../../kernels/delta_recurrent.loom"),
+        include_str!("../../kernels/delta_persistent.loom"),
         include_str!("../../kernels/columns.loom"),
         include_str!("../../kernels/cast.loom"),
         include_str!("../../kernels/addf.loom"),

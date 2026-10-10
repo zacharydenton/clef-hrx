@@ -10,19 +10,24 @@ use hrx::{GraphExec, inference::ModelContext};
 pub struct ReferenceKernels {
     pub gemm: bool,
     pub norm: bool,
+    pub delta: bool,
 }
 
 pub struct GemmBenchmark {
-    graph: GraphExec,
+    graphs: Vec<GraphExec>,
+    next_graph: usize,
     engine: Engine,
     output: Tensor,
     _context: ModelContext,
 }
+#[derive(Clone)]
 pub enum GemmKernel {
     Reference,
     Wide,
     Pipelined,
     Auto,
+    Source(String),
+    Padded,
 }
 impl GemmBenchmark {
     pub fn new(m: usize, k: usize, n: usize, optimized: bool) -> Result<Self> {
@@ -38,8 +43,17 @@ impl GemmBenchmark {
         )
     }
     pub fn with_kernel(m: usize, k: usize, n: usize, kernel: GemmKernel) -> Result<Self> {
+        Self::with_working_set(m, k, n, kernel, 0)
+    }
+    pub fn with_working_set(
+        m: usize,
+        k: usize,
+        n: usize,
+        kernel: GemmKernel,
+        minimum_weight_bytes: usize,
+    ) -> Result<Self> {
         anyhow::ensure!(
-            (1..=1024).contains(&m) && (1..=17408).contains(&k) && (1..=17408).contains(&n),
+            (1..=4096).contains(&m) && (1..=17408).contains(&k) && (1..=17408).contains(&n),
             "unsupported GEMM benchmark shape"
         );
         let context = ModelContext::new(Default::default())?;
@@ -49,13 +63,140 @@ impl GemmBenchmark {
                 .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 128.))
                 .collect::<Vec<_>>()
         };
-        let x = engine.input(m, k, DType::Bf16, bytemuck::cast_slice(&values(m * k)))?;
-        let w = engine.input(n, k, DType::Bf16, bytemuck::cast_slice(&values(n * k)))?;
-        let output = match kernel {
-            GemmKernel::Auto => engine.linear(&x, &w, None)?,
-            GemmKernel::Reference => engine.linear_impl::<false>(&x, &w, None)?,
-            GemmKernel::Wide => engine.linear_impl::<true>(&x, &w, None)?,
-            GemmKernel::Pipelined => engine.linear_pipelined(&x, &w, None)?,
+        let stride = k + if matches!(kernel, GemmKernel::Padded) && k.is_multiple_of(1024) {
+            64
+        } else {
+            0
+        };
+        let operands = |rows| {
+            let dense = values(rows * k);
+            if stride == k {
+                return dense;
+            }
+            let mut padded = vec![half::bf16::ZERO; rows * stride];
+            for r in 0..rows {
+                padded[r * stride..r * stride + k].copy_from_slice(&dense[r * k..(r + 1) * k]);
+            }
+            padded
+        };
+        let x = engine.input(m, stride, DType::Bf16, bytemuck::cast_slice(&operands(m)))?;
+        anyhow::ensure!(
+            minimum_weight_bytes <= 512 << 20,
+            "GEMM working set exceeds 512 MiB"
+        );
+        let copies = minimum_weight_bytes.div_ceil(n * stride * 2).max(1);
+        let mut graphs = Vec::with_capacity(copies);
+        let mut first_output = None;
+        for _ in 0..copies {
+            let w = engine.input(n, stride, DType::Bf16, bytemuck::cast_slice(&operands(n)))?;
+            let output = match kernel.clone() {
+                GemmKernel::Auto => engine.linear(&x, &w, None)?,
+                GemmKernel::Reference => engine.linear_impl::<false>(&x, &w, None)?,
+                GemmKernel::Wide => engine.linear_impl::<true>(&x, &w, None)?,
+                GemmKernel::Pipelined => engine.linear_pipelined(&x, &w, None)?,
+                GemmKernel::Source(source) => {
+                    engine.linear_pipelined_source(&x, &w, None, &source)?
+                }
+                GemmKernel::Padded => engine.linear_pipelined_strided(
+                    &x,
+                    &w,
+                    None,
+                    k,
+                    include_str!("../kernels/gemm_bf16_pipelined.loom"),
+                )?,
+            };
+            let mut graph = engine.finish()?;
+            engine.run(&mut graph)?;
+            graphs.push(graph);
+            first_output.get_or_insert(output);
+        }
+        Ok(Self {
+            graphs,
+            next_graph: 0,
+            engine,
+            output: first_output.unwrap(),
+            _context: context,
+        })
+    }
+    pub fn run(&mut self) -> Result<()> {
+        self.engine.run(&mut self.graphs[self.next_graph])?;
+        self.next_graph = (self.next_graph + 1) % self.graphs.len();
+        Ok(())
+    }
+    pub fn output(&mut self) -> Result<Vec<f32>> {
+        self.engine.read_f32(&self.output)
+    }
+}
+
+pub struct NormBenchmark {
+    graph: GraphExec,
+    engine: Engine,
+    output: Tensor,
+    _context: ModelContext,
+}
+
+pub struct AttentionBenchmark {
+    graph: GraphExec,
+    engine: Engine,
+    output: Tensor,
+    _context: ModelContext,
+}
+impl AttentionBenchmark {
+    pub fn new(tokens: usize, source: Option<&str>) -> Result<Self> {
+        anyhow::ensure!(
+            tokens > 0 && tokens <= 4096 && tokens.is_multiple_of(16),
+            "unsupported attention probe shape"
+        );
+        let context = ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        let values = |len, factor| {
+            (0..len)
+                .map(|i| half::bf16::from_f32(((i * factor % 251) as f32 - 125.) / 64.))
+                .collect::<Vec<_>>()
+        };
+        let q = engine.input(
+            tokens,
+            6144,
+            DType::Bf16,
+            bytemuck::cast_slice(&values(tokens * 6144, 17)),
+        )?;
+        let k = engine.input(
+            tokens,
+            1024,
+            DType::Bf16,
+            bytemuck::cast_slice(&values(tokens * 1024, 31)),
+        )?;
+        let mut v = values(tokens * 1024, 43);
+        if source.is_some() {
+            let old = v.clone();
+            for r in 0..tokens {
+                for c in 0..1024 {
+                    v[c * tokens + r] = old[r * 1024 + c];
+                }
+            }
+        }
+        let v = engine.input(tokens, 1024, DType::Bf16, bytemuck::cast_slice(&v))?;
+        let output = if let Some(source) = source {
+            let out = engine.alloc(tokens, 6144, DType::Bf16)?;
+            let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
+            engine.dispatch(
+                &source,
+                tokens.div_ceil(16) * 24 * 32,
+                &[("q", &q), ("k", &k), ("v", &v)],
+                &out,
+                &[
+                    ("heads", "24".into()),
+                    ("ratio", "6".into()),
+                    ("qw", "6144".into()),
+                    ("kw", "1024".into()),
+                    ("scale", "6.25e-2".into()),
+                    ("causal", "1".into()),
+                    ("keys", tokens.to_string()),
+                ],
+            )?;
+            out
+        } else {
+            engine.attention(&q, &k, &v, 24, 4, true)?
         };
         let mut graph = engine.finish()?;
         engine.run(&mut graph)?;
@@ -72,13 +213,6 @@ impl GemmBenchmark {
     pub fn output(&mut self) -> Result<Vec<f32>> {
         self.engine.read_f32(&self.output)
     }
-}
-
-pub struct NormBenchmark {
-    graph: GraphExec,
-    engine: Engine,
-    output: Tensor,
-    _context: ModelContext,
 }
 impl NormBenchmark {
     pub fn new(rows: usize, width: usize, layer: bool, parallel: bool) -> Result<Self> {
@@ -164,18 +298,34 @@ impl DeltaBenchmark {
         })
     }
     pub fn new(tokens: usize, chunked: bool) -> Result<Self> {
-        Self::build(tokens, chunked, false, true)
+        Self::build(tokens, chunked, false, true, None)
     }
     pub fn reference(tokens: usize) -> Result<Self> {
-        Self::build(tokens, true, false, false)
+        Self::build(tokens, true, false, false, None)
     }
     pub fn profiled(tokens: usize) -> Result<Self> {
-        Self::build(tokens, true, true, true)
+        Self::build(tokens, true, true, true, None)
     }
-    fn build(tokens: usize, chunked: bool, profile: bool, optimized: bool) -> Result<Self> {
+    pub fn persistent(tokens: usize, source: &str, values_per_wave: usize) -> Result<Self> {
         anyhow::ensure!(
-            (1..=1024).contains(&tokens),
-            "benchmark supports 1..=1024 tokens"
+            [4, 8, 16].contains(&values_per_wave),
+            "unsupported values per wave"
+        );
+        Self::build(tokens, false, false, true, Some((source, values_per_wave)))
+    }
+    pub fn resident(tokens: usize) -> Result<Self> {
+        Self::persistent(tokens, include_str!("../kernels/delta_persistent.loom"), 8)
+    }
+    fn build(
+        tokens: usize,
+        chunked: bool,
+        profile: bool,
+        optimized: bool,
+        persistent: Option<(&str, usize)>,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            (1..=4096).contains(&tokens),
+            "benchmark supports 1..=4096 tokens"
         );
         let context = ModelContext::new(Default::default())?;
         let mut engine = Engine::new(&context)?;
@@ -193,7 +343,27 @@ impl DeltaBenchmark {
             DType::Bf16,
             bytemuck::cast_slice(&[half::bf16::ZERO; 48]),
         )?;
-        let output = if chunked {
+        let output = if let Some((source, values_per_wave)) = persistent {
+            let out = engine.alloc(tokens, 6144, DType::Bf16)?;
+            let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
+            engine.dispatch(
+                &source,
+                48 * 128 / values_per_wave * 32,
+                &[
+                    ("qkv", &qkv),
+                    ("a", &a),
+                    ("b", &a),
+                    ("al", &al),
+                    ("dt", &al),
+                ],
+                &out,
+                &[
+                    ("n", tokens.to_string()),
+                    ("output_len", (tokens * 6144).to_string()),
+                ],
+            )?;
+            out
+        } else if chunked {
             if optimized {
                 engine.delta_chunked(&qkv, &a, &a, &al, &al)?
             } else {

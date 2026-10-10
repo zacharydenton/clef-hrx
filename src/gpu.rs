@@ -139,6 +139,20 @@ impl Engine {
             "CLEF currently requires gfx1151"
         );
         let compiler = Compiler::for_stream(None, &stream)?;
+        #[cfg(feature = "bench-internals")]
+        if let Some(path) = std::env::var_os("CLEF_BENCH_RUNTIME_RECORD") {
+            let path = std::path::PathBuf::from(path);
+            if !path.exists() {
+                std::fs::write(
+                    path,
+                    serde_json::to_vec_pretty(&serde_json::json!({
+                        "compiler_identity": compiler.identity(),
+                        "compiler_library": compiler.library_path(),
+                        "target": compiler.target().as_str(),
+                    }))?,
+                )?;
+            }
+        }
         let compile_reports =
             std::env::var_os("CLEF_COMPILE_REPORT_DIR").map(std::path::PathBuf::from);
         if let Some(path) = &compile_reports {
@@ -340,7 +354,8 @@ impl Engine {
                     serde_json::to_vec_pretty(&report)?,
                 )?;
             }
-            // Safety: sources are crate-owned; all binding extents are recorded below.
+            // Safety: callers supply trusted kernels matching these binding extents.
+            // Production sources are crate-owned; experimental sources are bench-only.
             let k = unsafe { self.stream.load_artifact(&artifact)? };
             if self.kernels.len() >= 512 {
                 self.kernels.clear();
@@ -389,7 +404,12 @@ impl Engine {
                         line.split_once(". Shapes").map(|(name, _)| name.to_owned())
                     })
                 })
-                .unwrap_or_else(|| "gemm_bf16".into()),
+                .unwrap_or_else(|| {
+                    format!(
+                        "gemm_bf16 {}x{}x{}",
+                        output.rows, inputs[0].cols, output.cols
+                    )
+                }),
             kernel,
             constants,
             grid,

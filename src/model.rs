@@ -182,6 +182,28 @@ impl ClefModel {
         }
         result
     }
+    /// Drops the recorded graph so benchmarks can time preparation separately.
+    #[cfg(feature = "bench-internals")]
+    pub fn invalidate_benchmark_graph(&mut self) -> Result<()> {
+        ensure!(
+            !self.failed,
+            "model execution failed; reload before reusing it"
+        );
+        // Safety: the closure only resets session-owned graph state.
+        let result = unsafe {
+            self.native.run(|state| -> Result<()> {
+                state.plan = None;
+                state.engine.reset_plan()?;
+                Ok(())
+            })
+        }
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
     /// Selects reference kernels for paired benchmarks, invalidating the graph.
     #[cfg(feature = "bench-internals")]
     pub fn set_reference_kernels(

@@ -2,3 +2,4 @@
 /artifacts/
 /benches/results/
 /tests/results/
+__pycache__/

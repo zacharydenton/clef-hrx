@@ -1,5 +1,8 @@
 # CLEF validation and benchmarks
 
+For workload-wide Criterion coverage, recorded comparisons and the accuracy gate,
+see [Performance experiments](optimization.md).
+
 Commands run from the repository root.
 
 ## Development
@@ -42,8 +45,8 @@ specializations; new token lengths can also incur compilation costs.
 The normalization benchmark alternates the serial reference and parallel kernels
 and reports paired timings. For full-model per-kernel diagnostics, run
 `cargo run --release --locked --features bench-internals --example profile_inference`.
-It accepts an optional request JSON path and uses the cached checkpoint with a
-1,536-token limit. Diagnostic timings include serialization barriers; use the
+It accepts request JSON paths, `--rounds`, and `--max-length` (default 1,536).
+Diagnostic timings include serialization barriers; use the
 inference benchmark for end-to-end latency.
 
 Set `CLEF_COMPILE_REPORT_DIR=target/compiler-reports` to retain Loom resource

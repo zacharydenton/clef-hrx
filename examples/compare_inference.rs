@@ -50,6 +50,7 @@ fn compare(model: &mut ClefModel, request: &Request, rounds: usize) -> Result<()
             ReferenceKernels {
                 norm: true,
                 gemm: true,
+                delta: false,
             },
         ),
         (
@@ -57,6 +58,7 @@ fn compare(model: &mut ClefModel, request: &Request, rounds: usize) -> Result<()
             ReferenceKernels {
                 norm: false,
                 gemm: true,
+                delta: false,
             },
         ),
         ("parallel_norm_new_gemm", ReferenceKernels::default()),
