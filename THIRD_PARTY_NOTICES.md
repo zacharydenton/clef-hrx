@@ -13,6 +13,12 @@
 - `kernels/gemm_bf16_pipelined.loom` comes from qwen-image-hrx's
   `gemm_bf16_fast.loom`, itself adapted from h3-hrx's `gemm_f16_fast_256b.loom`
   (MIT). Its source header is retained; see `licenses/qwen-image-hrx-MIT.txt`.
+- `kernels/transpose_v.loom` adapts h3-hrx's `transpose_qkv_v_f16.loom`
+  at `95ed12f43bd3e596cbfad175c22de9560447e9e5` (Apache-2.0), changing its
+  input layout to contiguous BF16 values and retaining its padded LDS transpose.
+- `benches/kernels/gemm_integer.loom` adapts h3-hrx's `gemm_packed_256.loom`
+  at the same revision (Apache-2.0), retaining its INT4/INT8 exports and changing
+  FP16 outputs and saturation bounds to BF16 for benchmark experiments.
 - Resize coefficient quantization follows PyTorch's
   `aten/src/ATen/native/cpu/UpSampleKernel.cpp` algorithm. PyTorch is BSD-3-Clause
   (see `licenses/pytorch-BSD.txt`); the bicubic filter and resampling algorithm

@@ -23,12 +23,30 @@ fn configure(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::W
         .confidence_level(0.99);
 }
 fn gemm(c: &mut Criterion) {
+    let integer_source = std::env::var_os("CLEF_BENCH_INTEGER_SOURCE")
+        .or_else(|| std::env::var_os("CLEF_BENCH_INT8_SOURCE"))
+        .map(|p| std::fs::read_to_string(p).unwrap());
+    let integer_padded = std::env::var("CLEF_BENCH_INTEGER_PADDED")
+        .or_else(|_| std::env::var("CLEF_BENCH_INT8_PADDED"))
+        .as_deref()
+        == Ok("1");
+    let integer_bits = std::env::var("CLEF_BENCH_INTEGER_BITS")
+        .map(|s| s.parse::<usize>().unwrap())
+        .unwrap_or(8);
+    assert!(
+        [4, 8].contains(&integer_bits),
+        "integer bits must be 4 or 8"
+    );
     let padded = std::env::var("CLEF_BENCH_PAD_GEMM").as_deref() == Ok("1");
     let source =
         std::env::var_os("CLEF_BENCH_GEMM_SOURCE").map(|p| std::fs::read_to_string(p).unwrap());
     assert!(
         !padded || source.is_none(),
         "choose padding or a GEMM source override for each experiment"
+    );
+    assert!(
+        integer_source.is_none() || (!padded && source.is_none()),
+        "choose one GEMM experiment per run"
     );
     let mut group = c.benchmark_group("workload_gemm");
     configure(&mut group);
@@ -65,13 +83,31 @@ fn gemm(c: &mut Criterion) {
                             GemmKernel::Auto
                         };
                         let mut graph =
-                            GemmBenchmark::with_working_set(m, k, n, kernel, minimum_bytes)
-                                .unwrap();
+                            if let Some(source) = integer_source.as_ref().filter(|_| compatible) {
+                                GemmBenchmark::packed_integer(
+                                    m,
+                                    k,
+                                    n,
+                                    source,
+                                    integer_bits,
+                                    integer_padded,
+                                    minimum_bytes,
+                                )
+                            } else {
+                                GemmBenchmark::with_working_set(m, k, n, kernel, minimum_bytes)
+                            }
+                            .unwrap();
                         let actual = graph.output().unwrap();
                         assert!(actual.iter().all(|x| x.is_finite()));
-                        if (source.is_some() || padded) && compatible {
-                            let expected =
-                                GemmBenchmark::new(m, k, n, true).unwrap().output().unwrap();
+                        if (source.is_some() || padded || integer_source.is_some()) && compatible {
+                            let expected = if integer_source.is_some() {
+                                GemmBenchmark::quantized_reference(m, k, n, integer_bits)
+                            } else {
+                                GemmBenchmark::new(m, k, n, true)
+                            }
+                            .unwrap()
+                            .output()
+                            .unwrap();
                             let error = actual
                                 .iter()
                                 .zip(&expected)
@@ -80,6 +116,13 @@ fn gemm(c: &mut Criterion) {
                             eprintln!("GEMM {m}x{k}x{n}: maximum output change={error}");
                             if padded {
                                 assert_eq!(actual, expected, "stride padding changed arithmetic");
+                            }
+                            if integer_source.is_some() {
+                                assert!(
+                                    actual.iter().zip(&expected).all(|(a, b)| (a - b).abs()
+                                        <= a.abs().max(b.abs()) / 128. + 1e-6),
+                                    "exactly representable integer inputs exceed one BF16 step"
+                                );
                             }
                         }
                         initial = actual;
@@ -162,22 +205,32 @@ fn delta(c: &mut Criterion) {
     group.finish();
 }
 fn attention(c: &mut Criterion) {
+    let reference = std::env::var("CLEF_BENCH_ATTENTION_REFERENCE").as_deref() == Ok("1");
     let source = std::env::var_os("CLEF_BENCH_ATTENTION_SOURCE")
         .map(|p| std::fs::read_to_string(p).unwrap());
+    assert!(
+        !reference || source.is_none(),
+        "choose reference attention or a source override"
+    );
+    let integrated = !reference && source.is_none();
     let mut group = c.benchmark_group("workload_attention");
     configure(&mut group);
-    // Tile-aligned cases for the experimental WMMA kernel. Tail coverage is
-    // provided by the normal operator tests before selecting it in production.
+    // Keep IDs stable for recorded baselines; operator tests cover partial tiles.
     for tokens in [16, 64, 128, 256, 624, 1024, 2048, 4032] {
         group.throughput(Throughput::Elements(tokens as u64));
         let mut graph = None;
         let mut actual = Vec::new();
         group.bench_function(BenchmarkId::new("causal_24q_4kv_d256", tokens), |b| {
             let graph = graph.get_or_insert_with(|| {
-                let mut graph = AttentionBenchmark::new(tokens, source.as_deref()).unwrap();
+                let mut graph = if integrated {
+                    AttentionBenchmark::integrated(tokens)
+                } else {
+                    AttentionBenchmark::new(tokens, source.as_deref())
+                }
+                .unwrap();
                 actual = graph.output().unwrap();
                 assert!(actual.iter().all(|x| x.is_finite()));
-                if source.is_some() {
+                if source.is_some() || integrated {
                     let expected = AttentionBenchmark::new(tokens, None)
                         .unwrap()
                         .output()

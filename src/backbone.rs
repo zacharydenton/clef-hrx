@@ -3,10 +3,10 @@ use crate::{
     gpu::{DType, Engine, Tensor},
 };
 use anyhow::ensure;
+use hrx::{Constants, loom::Specialization};
 
 impl Engine {
-    /// Online softmax attention; one wave per query/head, bounded memory.
-    /// The padded head dimension is handled by zero-valued inactive lanes.
+    /// Online softmax attention with bounded memory and tiled long-sequence execution.
     pub fn attention(
         &mut self,
         q: &Tensor,
@@ -16,8 +16,28 @@ impl Engine {
         kv_heads: usize,
         causal: bool,
     ) -> Result<Tensor> {
+        #[cfg(feature = "bench-internals")]
+        if self.reference_kernels.attention {
+            return self.attention_impl::<false>(q, k, v, heads, kv_heads, causal);
+        }
+        self.attention_impl::<true>(q, k, v, heads, kv_heads, causal)
+    }
+    pub(crate) fn attention_impl<const TILED: bool>(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        heads: usize,
+        kv_heads: usize,
+        causal: bool,
+    ) -> Result<Tensor> {
         ensure!(
-            q.cols.is_multiple_of(heads) && k.cols.is_multiple_of(kv_heads),
+            heads > 0
+                && kv_heads > 0
+                && q.rows > 0
+                && k.rows > 0
+                && q.cols.is_multiple_of(heads)
+                && k.cols.is_multiple_of(kv_heads),
             "attention layout"
         );
         let d = q.cols / heads;
@@ -28,6 +48,17 @@ impl Engine {
                 && heads.is_multiple_of(kv_heads),
             "attention shape"
         );
+        if TILED
+            && d == 256
+            && (1024..=16384).contains(&q.rows)
+            && k.rows <= 16384
+            && (!causal || q.rows == k.rows)
+            && q.dtype == DType::Bf16
+            && k.dtype == DType::Bf16
+            && v.dtype == DType::Bf16
+        {
+            return self.attention_tiled(q, k, v, heads, kv_heads, causal);
+        }
         let out = self.alloc(q.rows, q.cols, DType::Bf16)?;
         let source = match d {
             64 => concat!(
@@ -64,6 +95,108 @@ impl Engine {
             ],
         )?;
         Ok(out)
+    }
+    pub(crate) fn attention_tiled(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        heads: usize,
+        kv_heads: usize,
+        causal: bool,
+    ) -> Result<Tensor> {
+        ensure!(
+            q.cols == heads * 256 && k.cols == kv_heads * 256,
+            "tiled head dimensions"
+        );
+        self.attention_tiled_source(
+            q,
+            k,
+            v,
+            causal,
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/attention_tiled.loom")
+            ),
+        )
+    }
+    pub(crate) fn attention_tiled_source(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        causal: bool,
+        source: &str,
+    ) -> Result<Tensor> {
+        ensure!(
+            (1..=16384).contains(&q.rows)
+                && (1..=16384).contains(&k.rows)
+                && (256..=65536).contains(&q.cols)
+                && (256..=65536).contains(&k.cols)
+                && q.cols.is_multiple_of(256)
+                && k.cols.is_multiple_of(256)
+                && q.cols.is_multiple_of(k.cols)
+                && k.rows == v.rows
+                && k.cols == v.cols
+                && (!causal || q.rows == k.rows)
+                && q.dtype == DType::Bf16
+                && k.dtype == DType::Bf16
+                && v.dtype == DType::Bf16,
+            "tiled attention shape or storage"
+        );
+        let heads = q.cols / 256;
+        let kv_heads = k.cols / 256;
+        let packed = self.transpose_attention_v(v)?;
+        let out = self.alloc(q.rows, q.cols, DType::Bf16)?;
+        let mut spec = Specialization::new("clef_op");
+        for (key, value) in [
+            ("heads", heads.to_string()),
+            ("ratio", (heads / kv_heads).to_string()),
+            ("qw", q.cols.to_string()),
+            ("kw", k.cols.to_string()),
+            ("scale", "6.25e-2".into()),
+            ("causal", usize::from(causal).to_string()),
+        ] {
+            spec.set_config(format!("clef.{key}"), value);
+        }
+        let mut constants = Constants::new();
+        constants.push(q.rows as u32)?;
+        constants.push(k.rows as u32)?;
+        constants.push(packed.cols as u32)?;
+        self.emit_special(
+            source,
+            spec,
+            constants,
+            &[q.rows as u64, k.rows as u64, packed.cols as u64],
+            &[q, k, &packed],
+            &out,
+        )?;
+        Ok(out)
+    }
+    pub(crate) fn transpose_attention_v(&mut self, v: &Tensor) -> Result<Tensor> {
+        ensure!(
+            (1..=16384).contains(&v.rows)
+                && (64..=65536).contains(&v.cols)
+                && v.cols.is_multiple_of(64)
+                && v.dtype == DType::Bf16,
+            "attention value packing shape"
+        );
+        let capacity = v.rows.div_ceil(64) * 64;
+        let packed = self.alloc(v.cols, capacity, DType::Bf16)?;
+        let mut spec = Specialization::new("clef_transpose_v");
+        spec.set_config("clef.transpose_v.width", v.cols.to_string());
+        spec.set_config("clef.transpose_v.row_capacity", capacity.to_string());
+        let mut constants = Constants::new();
+        constants.push(v.rows as u32)?;
+        self.emit_special(
+            include_str!("../kernels/transpose_v.loom"),
+            spec,
+            constants,
+            &[v.rows as u64],
+            &[v],
+            &packed,
+        )?;
+        Ok(packed)
     }
     pub fn rope(&mut self, x: &Tensor, heads: usize, rotary: usize, cs: &Tensor) -> Result<Tensor> {
         let d = x.cols / heads;

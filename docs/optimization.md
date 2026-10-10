@@ -19,24 +19,25 @@ reference tests; do not loosen their tolerances to qualify a candidate.
 | `workload` / `workload_gemm` | Nine projection families; 1, 65, 127, 128, 158, 235, 260, 620, 1,024, 2,048, 4,032 rows; repeated weights and a rotating working set of at least 64 MiB | Completed dispatch, excluding allocation, compilation, upload and readback |
 | `workload` / `workload_delta` | Chunked and register-resident recurrence at every listed length; deterministic reset and allocation checks | Completed graph replay |
 | `kernels` / `paired_delta_prefill/persistent` | Alternating-order chunked/register comparisons at 235, 620 and 1,024 tokens; raw paired timing totals | Completed graph replay, with both variants resident |
-| `workload` / `workload_attention` | Causal 24-query/4-KV-head attention, 256 dimensions; 16 through 4,032 tokens | Completed dispatch; experimental source uses pretransposed V and must include packing cost in subsequent full-model qualification |
+| `workload` / `workload_attention` | Causal 24-query/4-KV-head attention, 256 dimensions; 16 through 4,032 tokens | Completed graph, including GPU value transpose/padding and the selected attention kernel |
 | `normalization`, `preprocessing` | Normalization shapes and CPU request processing | Existing suite-specific boundaries |
 | `workload_inference` | Seven representative requests selected by nearest token length from an actual request corpus; exact-input replay and graph rebuilding | Complete `infer` calls, including preparation in rebuild cases |
 
 Kernel groups use 20 samples, a 1-second warmup, 3-second measurement windows,
 99% confidence intervals, and a 3% noise threshold. Full-model groups use 10 samples,
 3-second warmups, and 30-second measurement windows. Criterion may extend the run
-to collect its samples. GEMM throughput counts FLOPs; other groups count tokens.
-Never report a GEMM's FLOP rate as model token throughput.
+to collect its samples. GEMM throughput counts multiply/add operations (floating
+point for BF16, integer for INT4/INT8); other groups count tokens. Never report a
+GEMM's operation rate as model token throughput.
 Each kernel case constructs and validates its graph once, outside warmup and timed
 samples. Repeated samples reuse the same allocations; rotating cases advance to
 the next resident weight buffer after each completed dispatch.
 
 The `quick` profile limits GEMM and DeltaNet to 235, 620 and 4,032 tokens. Attention
 retains its tile-aligned sweep. Use filters to investigate a specific bottleneck;
-run the full shape sweep before selecting an implementation. Attention tails and
-noncausal paths remain covered by operator tests and require additional candidate
-tests before an experimental tiled kernel can become the default.
+run the full shape sweep before selecting an implementation. Attention uses stable
+tile-aligned benchmark IDs; operator tests additionally cover odd lengths, noncausal
+cross-attention, exact value packing, FP64 spot checks, and deterministic replay.
 
 ## Recording and comparing runs
 
@@ -92,8 +93,12 @@ For kernel experiments without rebuilding Rust, set `CLEF_BENCH_GEMM_SOURCE`,
 the corresponding harness contract. DeltaNet also accepts
 `CLEF_BENCH_DELTA_VALUES=4|8|16`. Candidate sources are copied into the run record.
 The GEMM source override applies only to compatible pipelined shapes; the remaining
-shapes still exercise automatic selection. Experimental attention currently requires
-tile-aligned lengths. These overrides are benchmark-only.
+shapes still exercise automatic selection. Attention sources use the current native
+ABI with runtime query/key lengths and padded V capacity, as in
+`kernels/attention_tiled.loom`; the benchmark includes GPU value packing. Set
+`CLEF_BENCH_ATTENTION_REFERENCE=1` to measure the original attention kernel. The
+default measures production selection; a source override forces that source at
+every measured length. These overrides are benchmark-only.
 Experimental sources must produce finite, deterministic outputs; numerical drift
 against the current kernel is logged for diagnosis. Bitwise agreement is not an
 acceptance requirement. The complete evaluation remains the accuracy gate.
@@ -104,6 +109,18 @@ and checks exact output equality. Choose it separately from a GEMM source overri
 Padding happens outside the timed region: a winning result still needs a production
 weight layout and activation-packing implementation, with those costs included in
 the full-model evaluation.
+
+`CLEF_BENCH_INTEGER_SOURCE` accepts an experimental h3-style `h3_gemm_i4_256`
+or `h3_gemm_i8_256` kernel with BF16 output and per-row FP32 scales. Select
+`CLEF_BENCH_INTEGER_BITS=4|8` (default 8); `CLEF_BENCH_INTEGER_PADDED=1` adds
+64 bytes of stride padding when K is a multiple of 1,024 (128 INT4 or 64 INT8
+elements, preserving each kernel's required alignment). Synthetic inputs are exactly representable at the
+selected precision, with scales of 1/8 or 1/128. Outputs are checked against
+BF16 multiplication of those same values, within one BF16 step. This isolates
+dispatch performance; it does not measure model quantization error or
+activation-packing cost. Candidate sources are archived, and the complete
+evaluation is required before using integer kernels in inference. The older
+`CLEF_BENCH_INT8_SOURCE` and `CLEF_BENCH_INT8_PADDED` names remain aliases.
 
 ## Evaluation gate
 
@@ -177,3 +194,62 @@ smoke modes. The strict checkpoint-reference test retains its existing failure
 on the `outage` probability: 0.004716 absolute difference against a 0.003 tolerance
 (the earlier recorded run differed by 0.005436). All fixture winners matched;
 the tolerance remains unchanged. The complete JevBench accuracy gate passed.
+
+## Tiled attention and integer probes
+
+The current BF16 attention implementation batches 16 queries per wave, transposes
+V on the GPU, and accumulates online softmax in FP32. Splitting probabilities into
+high/residual BF16 components reduces the precision loss of the PV multiplication.
+Runtime query/key lengths let different requests reuse compiled code. The pinned
+compiler needs a loop-dependent zero for each QK accumulator; an invariant zero
+produced stale tile offsets during testing. The source records this workaround.
+
+Production selects tiled attention for 256-dimensional BF16 heads at 1,024 or more
+query tokens; shorter requests retain the original kernel. Criterion's
+`attention-dynamic` run includes value packing and compares against
+`workload-baseline-v2`:
+
+| Tokens | Original mean | Tiled mean | Latency change |
+| ---: | ---: | ---: | ---: |
+| 1,024 | 5.73 ms | 1.94 ms | -66.1% |
+| 2,048 | 28.76 ms | 8.45 ms | -70.6% |
+| 4,032 | 134.21 ms | 30.46 ms | -77.3% |
+
+All three met the runner's 99% interval screening rule. An unchanged 624-token
+control also moved by 4.4%, illustrating why between-run noise requires care.
+All 31 GPU/fixture tests passed, including odd lengths, cross-attention, exact
+transpose/padding, FP64 sampled comparisons and deterministic replay.
+
+The full evaluation retained 202/231, no changed decisions, at 401.9 input tokens/s
+(`jevbench-20261010-attention-long`). Its compiler cache was populated. The earlier
+345.3-token/s run had substantially higher preparation time even on unchanged
+short requests, so the recorded 16.4% end-to-end difference is not a controlled
+kernel speedup. See [measurement details](evaluation.md). An earlier candidate
+using tiled attention from 64 tokens scored 201/231 at 351.4 tokens/s and was
+rejected (`jevbench-20261010-attention`).
+
+Packed integer kernels remain benchmark-only. The h3-derived implementation is
+checked in at `benches/kernels/gemm_integer.loom`; it supports both INT4 and INT8
+with BF16 outputs. Each precision passed all 12 padded MLP smoke cases at 235,
+620 and 4,032 tokens, including repeated and rotating weights. Reproduce a
+correctness sweep or measured experiment with
+fresh run names:
+
+```sh
+CLEF_BENCH_INTEGER_SOURCE=benches/kernels/gemm_integer.loom \
+  CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  python3 scripts/bench_workload.py int4-smoke --profile quick \
+  --filter 'workload_gemm/mlp_(up_gate|down)' --test
+
+# Use bits=8 to compare INT8; omit --test and supply a baseline for measurements.
+CLEF_BENCH_INTEGER_SOURCE=benches/kernels/gemm_integer.loom \
+  CLEF_BENCH_INTEGER_BITS=8 CLEF_BENCH_INTEGER_PADDED=1 \
+  python3 scripts/bench_workload.py int8-measured --profile quick \
+  --filter 'workload_gemm/mlp_(up_gate|down)' --compare workload-baseline-v2
+```
+
+The earlier 12-case INT8 measurements (`int8-mlp`, `int8-mlp-padded`) were mixed:
+padded replay at 235 tokens reduced up/gate latency by 32.4% and down by 55.4%,
+but at 620 tokens increased them by 13.2% and 8.9%. At 4,032 tokens both changes
+were inconclusive. These synthetic dispatch results do not qualify model
+quantization; neither integer precision is enabled in inference.

@@ -689,6 +689,109 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[ignore = "requires gfx1151; validates packed WMMA attention and tails"]
+    fn tiled_attention_tails_and_replay() -> Result<()> {
+        let mut e = engine()?;
+        for (rows, keys, heads, kv, causal) in [
+            (16, 16, 1, 1, true),
+            (64, 64, 1, 1, true),
+            (65, 79, 6, 2, false),
+            (127, 127, 24, 4, true),
+            (235, 235, 24, 4, true),
+            (620, 620, 24, 4, true),
+            (4031, 4031, 24, 4, true),
+            (4032, 4032, 24, 4, true),
+        ] {
+            let values = |n, factor| {
+                (0..n)
+                    .map(|i| ((i * factor % 251) as f32 - 125.) / 64.)
+                    .collect::<Vec<_>>()
+            };
+            let q = input(&mut e, rows, heads * 256, &values(rows * heads * 256, 17))?;
+            let k = input(&mut e, keys, kv * 256, &values(keys * kv * 256, 31))?;
+            let v = input(&mut e, keys, kv * 256, &values(keys * kv * 256, 43))?;
+            let packed = e.transpose_attention_v(&v)?;
+            let mut pack_graph = e.finish()?;
+            e.run(&mut pack_graph)?;
+            let pack_values = e.read_f32(&packed)?;
+            let v_values = e.read_f32(&v)?;
+            for col in 0..v.cols {
+                for row in 0..packed.cols {
+                    let expected = if row < v.rows {
+                        v_values[row * v.cols + col]
+                    } else {
+                        0.
+                    };
+                    assert_eq!(
+                        pack_values[col * packed.cols + row],
+                        expected,
+                        "transpose at {row},{col}"
+                    );
+                }
+            }
+            let old = e.attention_impl::<false>(&q, &k, &v, heads, kv, causal)?;
+            let mut reference = e.finish()?;
+            let new = e.attention_tiled(&q, &k, &v, heads, kv, causal)?;
+            let mut candidate = e.finish()?;
+            e.run(&mut reference)?;
+            let expected = e.read_f32(&old)?;
+            e.run(&mut candidate)?;
+            let actual = e.read_f32(&new)?;
+            assert!(actual.iter().chain(&expected).all(|x| x.is_finite()));
+            let error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!(
+                "tiled attention {rows}x{keys}, heads={heads}/{kv}, causal={causal}: max error={error}"
+            );
+            if rows <= 127 {
+                let qf = e.read_f32(&q)?;
+                let kf = e.read_f32(&k)?;
+                for row in [0, rows / 2, rows - 1] {
+                    for head in [0, heads - 1] {
+                        let kh = head / (heads / kv);
+                        let scores: Vec<f64> = (0..if causal { row + 1 } else { keys })
+                            .map(|t| {
+                                (0..256)
+                                    .map(|d| {
+                                        f64::from(qf[row * heads * 256 + head * 256 + d])
+                                            * f64::from(kf[t * kv * 256 + kh * 256 + d])
+                                    })
+                                    .sum::<f64>()
+                                    / 16.
+                            })
+                            .collect();
+                        let max = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                        let denom = scores.iter().map(|s| (s - max).exp()).sum::<f64>();
+                        for col in [0, 127, 255] {
+                            let oracle = scores
+                                .iter()
+                                .enumerate()
+                                .map(|(t, s)| {
+                                    (s - max).exp()
+                                        * f64::from(v_values[t * kv * 256 + kh * 256 + col])
+                                })
+                                .sum::<f64>()
+                                / denom;
+                            let index = row * heads * 256 + head * 256 + col;
+                            assert!(
+                                (f64::from(actual[index]) - oracle).abs() <= 0.008,
+                                "FP64 attention mismatch at {row}/{head}/{col}"
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(error <= 0.008, "packed attention error {error}");
+            e.run(&mut candidate)?;
+            assert_eq!(e.read_f32(&new)?, actual, "attention replay changed output");
+            e.reset_plan()?;
+        }
+        Ok(())
+    }
+    #[test]
     #[ignore = "requires gfx1151 and HRX native bundle"]
     fn delta_zero_and_reset() -> Result<()> {
         let mut e = engine()?;

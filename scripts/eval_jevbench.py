@@ -9,10 +9,20 @@ Uses only Python's standard library and the benchmark's own scorer.
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def kernel_cache_snapshot():
+    """Record HRX's content-addressed cache without changing shared artifacts."""
+    xdg = Path(os.environ.get("XDG_CACHE_HOME", ""))
+    root = xdg if xdg.is_absolute() else Path.home() / ".cache"
+    path = root / "hrx" / "kernels"
+    return {"path": str(path),
+            "entries": sorted(p.name for p in path.iterdir() if p.is_dir()) if path.is_dir() else []}
 
 
 def speed_summary(records):
@@ -93,6 +103,8 @@ def main():
         "checkpoint_revision": "2f3de3dd85f379784083b0814d997ab627200f0c",
         "scoring": "Upstream score_task and summarize; raw native probabilities; score uses argmax",
         "latency_note": "Sequential local CLI; first call includes model loading. No warmup. Compilation included.",
+        "cache_before": kernel_cache_snapshot(),
+        "environment": {k: os.environ[k] for k in ("XDG_CACHE_HOME", "HRX_RUNTIME_DIR", "HRX_BUNDLE_MANIFEST", "HRX_OFFLINE") if k in os.environ},
     }
     (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (args.output / "working-tree.diff").write_bytes(subprocess.check_output(["git", "diff", "HEAD"]))
@@ -145,6 +157,8 @@ def main():
                 process.terminate()
                 process.wait()
     summary = summarize(tasks, records)
+    metadata["cache_after"] = kernel_cache_snapshot()
+    (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     summary["tiers"] = {name: summarize(group, [r for r in records if r["task_id"] in {t.id for t in group}])
                         for name, group in splits.items()}
     summary["wall_seconds"] = time.perf_counter() - started

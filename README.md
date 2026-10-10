@@ -58,10 +58,10 @@ On all 231 public JevBench cases, CLEF-HRX scored **202/231 (87.4%)**, compared
 with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
 completed with valid probabilities and no input truncation.
 
-On AMD Strix Halo, resident latency was **1.11 s median / 6.89 s p95**, with
-**345 input tokens/s (28.6 decisions/minute)** throughput. Another GPU application
-was present during this single sequential run; model loading is excluded from
-these speed figures.
+On AMD Strix Halo, resident latency was **0.91 s median / 5.63 s p95**, with
+**402 input tokens/s (33.3 decisions/minute)** throughput. Another GPU application
+was present and the compiler cache was populated during this single sequential
+run; model loading is excluded from these speed figures.
 [Results, measurement details and reproduction instructions](docs/evaluation.md).
 
 ## Library

@@ -11,6 +11,16 @@ pub struct ReferenceKernels {
     pub gemm: bool,
     pub norm: bool,
     pub delta: bool,
+    pub attention: bool,
+}
+
+fn gemm_value(i: usize, bits: usize) -> f32 {
+    let value = ((i * 17 % 251) as f32 - 125.) / 128.;
+    if bits == 4 {
+        (value * 8.).round().clamp(-8., 7.) / 8.
+    } else {
+        value
+    }
 }
 
 pub struct GemmBenchmark {
@@ -30,6 +40,91 @@ pub enum GemmKernel {
     Padded,
 }
 impl GemmBenchmark {
+    /// Experimental packed integer dispatch on exactly representable synthetic data.
+    /// Packing is outside timing; full-model qualification must include its cost.
+    pub fn packed_integer(
+        m: usize,
+        k: usize,
+        n: usize,
+        source: &str,
+        bits: usize,
+        padded: bool,
+        minimum_weight_bytes: usize,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            [4, 8].contains(&bits)
+                && (bits != 4 || k.is_multiple_of(128))
+                && (1..=4096).contains(&m)
+                && (64..=17408).contains(&k)
+                && k.is_multiple_of(64)
+                && (128..=17408).contains(&n)
+                && n.is_multiple_of(128)
+                && minimum_weight_bytes <= 512 << 20,
+            "unsupported packed integer benchmark shape"
+        );
+        let context = ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        let stride = k + if padded && k.is_multiple_of(1024) {
+            512 / bits
+        } else {
+            0
+        };
+        let per_word = 32 / bits;
+        let row_bytes = stride * bits / 8;
+        let scale = 1.0 / (1usize << (bits - 1)) as f32;
+        let values = |rows| {
+            let mut bytes = vec![0u8; rows * row_bytes];
+            let mask = ((1u16 << bits) - 1) as u8;
+            for row in 0..rows {
+                for col in 0..k {
+                    let value = (gemm_value(row * k + col, bits) / scale) as i8 as u8;
+                    bytes[row * row_bytes + col * bits / 8] |=
+                        (value & mask) << ((col % (8 / bits)) * bits);
+                }
+            }
+            bytes
+        };
+        let x = engine.input(m, stride / per_word, DType::U32, &values(m))?;
+        let xs = engine.input(1, m, DType::F32, bytemuck::cast_slice(&vec![scale; m]))?;
+        let ws = engine.input(1, n, DType::F32, bytemuck::cast_slice(&vec![scale; n]))?;
+        let copies = minimum_weight_bytes.div_ceil(n * row_bytes).max(1);
+        let mut graphs = Vec::with_capacity(copies);
+        let mut first_output = None;
+        for _ in 0..copies {
+            let w = engine.input(n, stride / per_word, DType::U32, &values(n))?;
+            let output = engine.alloc(m, n, DType::Bf16)?;
+            let mut spec = hrx::loom::Specialization::new(format!("h3_gemm_i{bits}_256"));
+            for (key, value) in [
+                ("k_size", k),
+                ("n_size", n),
+                ("k_stride", stride),
+                ("m_group", m.div_ceil(256).min(4)),
+            ] {
+                spec.set_config(format!("h3.gemm_i{bits}_256.{key}"), value.to_string());
+            }
+            let mut constants = hrx::Constants::new();
+            constants.push(m as u32)?;
+            engine.emit_special(
+                source,
+                spec,
+                constants,
+                &[m as u64],
+                &[&x, &w, &ws, &xs],
+                &output,
+            )?;
+            let mut graph = engine.finish()?;
+            engine.run(&mut graph)?;
+            graphs.push(graph);
+            first_output.get_or_insert(output);
+        }
+        Ok(Self {
+            graphs,
+            next_graph: 0,
+            engine,
+            output: first_output.unwrap(),
+            _context: context,
+        })
+    }
     pub fn new(m: usize, k: usize, n: usize, optimized: bool) -> Result<Self> {
         Self::with_kernel(
             m,
@@ -52,6 +147,20 @@ impl GemmBenchmark {
         kernel: GemmKernel,
         minimum_weight_bytes: usize,
     ) -> Result<Self> {
+        Self::build(m, k, n, kernel, minimum_weight_bytes, 16)
+    }
+    pub fn quantized_reference(m: usize, k: usize, n: usize, bits: usize) -> Result<Self> {
+        anyhow::ensure!([4, 8].contains(&bits), "unsupported integer precision");
+        Self::build(m, k, n, GemmKernel::Auto, 0, bits)
+    }
+    fn build(
+        m: usize,
+        k: usize,
+        n: usize,
+        kernel: GemmKernel,
+        minimum_weight_bytes: usize,
+        bits: usize,
+    ) -> Result<Self> {
         anyhow::ensure!(
             (1..=4096).contains(&m) && (1..=17408).contains(&k) && (1..=17408).contains(&n),
             "unsupported GEMM benchmark shape"
@@ -60,7 +169,7 @@ impl GemmBenchmark {
         let mut engine = Engine::new(&context)?;
         let values = |len| {
             (0..len)
-                .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 128.))
+                .map(|i| half::bf16::from_f32(gemm_value(i, bits)))
                 .collect::<Vec<_>>()
         };
         let stride = k + if matches!(kernel, GemmKernel::Padded) && k.is_multiple_of(1024) {
@@ -143,8 +252,14 @@ pub struct AttentionBenchmark {
 }
 impl AttentionBenchmark {
     pub fn new(tokens: usize, source: Option<&str>) -> Result<Self> {
+        Self::build(tokens, source, false)
+    }
+    pub fn integrated(tokens: usize) -> Result<Self> {
+        Self::build(tokens, None, true)
+    }
+    fn build(tokens: usize, source: Option<&str>, integrated: bool) -> Result<Self> {
         anyhow::ensure!(
-            tokens > 0 && tokens <= 4096 && tokens.is_multiple_of(16),
+            tokens > 0 && tokens <= 4096,
             "unsupported attention probe shape"
         );
         let context = ModelContext::new(Default::default())?;
@@ -166,37 +281,19 @@ impl AttentionBenchmark {
             DType::Bf16,
             bytemuck::cast_slice(&values(tokens * 1024, 31)),
         )?;
-        let mut v = values(tokens * 1024, 43);
-        if source.is_some() {
-            let old = v.clone();
-            for r in 0..tokens {
-                for c in 0..1024 {
-                    v[c * tokens + r] = old[r * 1024 + c];
-                }
-            }
-        }
-        let v = engine.input(tokens, 1024, DType::Bf16, bytemuck::cast_slice(&v))?;
+        let v = engine.input(
+            tokens,
+            1024,
+            DType::Bf16,
+            bytemuck::cast_slice(&values(tokens * 1024, 43)),
+        )?;
         let output = if let Some(source) = source {
-            let out = engine.alloc(tokens, 6144, DType::Bf16)?;
             let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
-            engine.dispatch(
-                &source,
-                tokens.div_ceil(16) * 24 * 32,
-                &[("q", &q), ("k", &k), ("v", &v)],
-                &out,
-                &[
-                    ("heads", "24".into()),
-                    ("ratio", "6".into()),
-                    ("qw", "6144".into()),
-                    ("kw", "1024".into()),
-                    ("scale", "6.25e-2".into()),
-                    ("causal", "1".into()),
-                    ("keys", tokens.to_string()),
-                ],
-            )?;
-            out
+            engine.attention_tiled_source(&q, &k, &v, true, &source)?
+        } else if integrated {
+            engine.attention_impl::<true>(&q, &k, &v, 24, 4, true)?
         } else {
-            engine.attention(&q, &k, &v, 24, 4, true)?
+            engine.attention_impl::<false>(&q, &k, &v, 24, 4, true)?
         };
         let mut graph = engine.finish()?;
         engine.run(&mut graph)?;

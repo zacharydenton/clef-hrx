@@ -9,14 +9,14 @@ leaderboard result or a fresh Jev API run.
 
 | Public tier | CLEF-HRX correct | Accuracy | Published Jev correct | Median latency | p95 latency |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Easy | 48/48 | 100.0% | 48/48 | 0.93 s | 1.10 s |
-| Standard (`original`) | 71/72 | 98.6% | 71/72 | 0.84 s | 1.12 s |
-| Hard | 83/111 | 74.8% | 81/111 | 1.83 s | 8.93 s |
-| All | 202/231 | 87.4% | 200/231 | 1.11 s | 6.89 s |
+| Easy | 48/48 | 100.0% | 48/48 | 0.82 s | 0.89 s |
+| Standard (`original`) | 71/72 | 98.6% | 71/72 | 0.84 s | 0.91 s |
+| Hard | 83/111 | 74.8% | 81/111 | 1.55 s | 7.21 s |
+| All | 202/231 | 87.4% | 200/231 | 0.91 s | 5.63 s |
 
 All 231 requests completed with strictly valid probability distributions and
 no input truncation. Inputs ranged from 158 to 4,032 tokens, totaling 166,629.
-The multiclass Brier score was 0.1668; top-label ECE was 0.0228 using 10 bins.
+The multiclass Brier score was 0.1669; top-label ECE was 0.0282 using 10 bins.
 CLEF's weakest family was temporal/numeric reasoning, with 5/15 correct.
 
 The earlier chunked DeltaNet run scored 201/231 at 233.4 input tokens/s. Keeping
@@ -25,27 +25,38 @@ recurrent state in registers increased resident throughput by 1.48×, gained
 change was 0.04375. The numerical comparison and full-suite gate are described in
 [Performance experiments](optimization.md).
 
+The current run adds tiled attention for inputs of at least 1,024 tokens and
+uses runtime sequence lengths to share compiled attention code. It retained
+202/231 with no changed decisions; maximum probability change was 0.01727 against
+the register-resident baseline. Brier changed from 0.1668 to 0.1669 and ECE from
+0.0228 to 0.0282. The observed throughput increased from 345.3 to 401.9 tokens/s,
+but these runs did not control compiler-cache warmth. Preparation also improved
+on unchanged short requests, so the full 16.4% difference cannot be attributed
+to the attention kernel. A matched warm-cache baseline comparison remains pending.
+
 ## Speed and measurement conditions
 
 The run used AMD Strix Halo (`gfx1151`), the BF16 checkpoint, and a release build
 of the native HRX implementation. One CLI process handled requests sequentially,
 with the model resident between requests and a 60 GiB allocation budget. Another
 application also used the GPU; these are shared-machine measurements from one
-run. Use an idle GPU for isolated speed measurements.
+run. The shared compiler cache already contained artifacts from earlier runs;
+this is not a cold-cache measurement. Use an idle GPU and matching cache
+conditions for isolated speed comparisons.
 
 The latency table excludes the first request from the easy and overall rows.
-The remaining **230 requests took 481.9 s** in total measured request time:
+The remaining **230 requests took 414.1 s** in total measured request time:
 
 | Resident measurement | Result |
 | --- | ---: |
-| Mean wall latency | 2.10 s |
-| Throughput | 0.477 decisions/s (28.6/min) |
-| Input-token throughput | 345.3 tokens/s |
-| GPU execution median / p95 | 0.84 s / 6.09 s |
-| Graph preparation median / p95 | 0.23 s / 0.85 s |
+| Mean wall latency | 1.80 s |
+| Throughput | 0.555 decisions/s (33.3/min) |
+| Input-token throughput | 401.9 tokens/s |
+| GPU execution median / p95 | 0.87 s / 5.51 s |
+| Graph preparation median / p95 | 0.056 s / 0.141 s |
 
-The first request, including model loading, took **37.4 s**. The complete
-inference run took **519.9 s (8.7 minutes)**. These measurements exclude model
+The first request, including model loading, took **37.2 s**. The complete
+inference run took **451.9 s (7.5 minutes)**. These measurements exclude model
 download, release compilation and token-length preflight. Request wall time
 includes encoding, kernel compilation, graph preparation, GPU execution and
 readback. There was no separate warmup. GPU execution timings include launch and
@@ -53,8 +64,8 @@ synchronization; they are not isolated per-kernel profiler measurements.
 
 ## Pinned inputs and scoring
 
-- Inference: the register-resident DeltaNet implementation shipped with this document.
-- Evaluated CLI SHA-256: `ca5bb3afe7962184769de47f10d9d85d3041bc5d2c9e1902cff724bbd62ffda0`.
+- Inference: register-resident DeltaNet and runtime-length tiled long-sequence attention shipped with this document.
+- Evaluated CLI SHA-256: `b815843053eaf5db2629371d6e8d0a0e35d404e77785812bc5f394f655eaa430`.
 - Earlier chunked baseline source: `afa40e389de0336b0bfa61bd05a390f85009e437`.
 - [JevBench source](https://github.com/fstandhartinger/jevbench/tree/7625ecb1b075cfe4d09d34141d353325825eea1d): `7625ecb1b075cfe4d09d34141d353325825eea1d`.
 - [Cloudflare/CLEF checkpoint](https://huggingface.co/Cloudflare/clef/tree/2f3de3dd85f379784083b0814d997ab627200f0c): `2f3de3dd85f379784083b0814d997ab627200f0c`.
@@ -113,10 +124,13 @@ The output directory contains:
   correctness, token counts, wall latency and internal phase timings.
 - `requests.jsonl` and `input_lengths.json`: exact inputs and preflight lengths.
 - `metadata.json` and `working-tree.diff`: revisions, binary/dataset hashes,
-  inference command and tracked changes at run time.
+  inference command and tracked changes at run time. New runs also record the
+  HRX kernel-cache path and entry names before/after inference, plus cache/runtime
+  environment overrides; older runs did not capture cache state.
 - `stderr.log`: CLI diagnostics.
 
 Generated outputs and downloaded artifacts are Git-ignored. The recorded run
-is stored locally in `tests/results/jevbench-20261010-persistent/`; the earlier
-baseline is in `tests/results/jevbench-20261010-full/`. A fresh checkout
+is stored locally in `tests/results/jevbench-20261010-attention-long/`; prior
+baselines are in `tests/results/jevbench-20261010-persistent/` and
+`tests/results/jevbench-20261010-full/`. A fresh checkout
 must run the commands above to produce its own artifacts.
