@@ -167,6 +167,13 @@ this wider K stage by 1.03–1.09×, with every 99% lower bound above 1.0
 original tile. Full INT4 qualification preserved every output and measured
 976.45 tok/s; see [the result and reproduction](evaluation.md#adaptive-int4-mlp-tiles).
 
+Removing forced inner-loop unrolling from the selected M256/N128/K256 down
+kernel preserved exact outputs in six cases and reduced registers from 256 to
+210, without spills; LDS remained 54 KiB. All six paired comparisons at 235,
+620 and 4,032 rows regressed to 0.965–0.971×, with every 99% upper bound below
+1.0 (`int4-wide-k-rolled-paired`). It was rejected; the selected kernel retains
+full inner-loop unrolling.
+
 ## Hosted comparison
 
 [Cloudflare's October 9 post](https://blog.cloudflare.com/clef-faster-cheaper-multimodal/)
