@@ -493,7 +493,16 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
     )?;
     for i in 0..64 {
         let p = format!("model.language_model.layers.{i}");
-        let norm = e.named_norm(&x, &format!("{p}.input_layernorm"), false, 1e-6)?;
+        let first_projection = if i % 4 == 3 {
+            "self_attn.q_proj"
+        } else {
+            "linear_attn.in_proj_qkv"
+        };
+        let norm = e.normalized_input(
+            &x,
+            &format!("{p}.input_layernorm"),
+            &format!("{p}.{first_projection}"),
+        )?;
         x = if i % 4 == 3 {
             let p = format!("{p}.self_attn");
             let qg = e
@@ -559,15 +568,21 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
         if n > 16_384 {
             drop(norm);
         }
-        let norm = e.named_norm(&x, &format!("{p}.post_attention_layernorm"), false, 1e-6)?;
-        x = if n > 16_384 {
-            // MLP rows are independent. Bound the wide activations and keep all
-            // kernel extents below u32::MAX throughout the supported context.
-            let down = mlp_chunked(e, &norm, &format!("{p}.mlp"), 8192)?;
-            e.binary(&x, &down, "addf")?
+        let norm_name = format!("{p}.post_attention_layernorm");
+        let mlp_name = format!("{p}.mlp");
+        if let Some(output) = e.normalized_mlp(&x, &norm_name, &mlp_name)? {
+            x = output;
         } else {
-            mlp(e, &norm, &format!("{p}.mlp"), Some(&x))?
-        };
+            let norm = e.named_norm(&x, &norm_name, false, 1e-6)?;
+            x = if n > 16_384 {
+                // MLP rows are independent. Bound the wide activations and keep all
+                // kernel extents below u32::MAX throughout the supported context.
+                let down = mlp_chunked(e, &norm, &mlp_name, 8192)?;
+                e.binary(&x, &down, "addf")?
+            } else {
+                mlp(e, &norm, &mlp_name, Some(&x))?
+            };
+        }
         e.trace(format!("layer_{i}"), &x);
     }
     let x = e.named_norm(&x, "model.language_model.norm", false, 1e-6)?;

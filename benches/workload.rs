@@ -1,7 +1,7 @@
 //! Shape coverage for the public JevBench workload; no checkpoint required.
 use clef_hrx::benchmarking::{
     AttentionBenchmark, ConvolutionBenchmark, DeltaBenchmark, GemmBenchmark, GemmKernel,
-    PackingBenchmark, SwiGluBenchmark,
+    NormPackingBenchmark, PackingBenchmark, SwiGluBenchmark,
 };
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::time::{Duration, Instant};
@@ -492,6 +492,66 @@ fn convolution(c: &mut Criterion) {
     }
     group.finish();
 }
+fn normalization_packing(c: &mut Criterion) {
+    if std::env::var("CLEF_BENCH_PACKING_NORM").as_deref() != Ok("1") {
+        return;
+    }
+    let Some(path) = std::env::var_os("CLEF_BENCH_PACKING_SOURCE") else {
+        return;
+    };
+    let source = std::fs::read_to_string(path).unwrap();
+    let mut group = c.benchmark_group("paired_norm_packing");
+    configure(&mut group);
+    for rows in lengths() {
+        for (cache, rotating) in [("replay", false), ("rotating", true)] {
+            if rotating && rows < 128 {
+                continue;
+            }
+            let mut graph = None;
+            let mut samples = Vec::new();
+            let mut sequence = 0u64;
+            let shape = format!("{rows}x5120");
+            group.throughput(Throughput::Elements(rows as u64 * 5120));
+            group.bench_function(BenchmarkId::new(cache, &shape), |b| {
+                let graph = graph.get_or_insert_with(|| NormPackingBenchmark::new(rows, &source, rotating).unwrap());
+                b.iter_custom(|iterations| {
+                    let mut times = [Duration::ZERO; 2];
+                    for _ in 0..iterations {
+                        for candidate in [sequence.is_multiple_of(2), !sequence.is_multiple_of(2)] {
+                            let started = Instant::now();
+                            graph.run(candidate).unwrap();
+                            times[usize::from(candidate)] += started.elapsed();
+                        }
+                        sequence += 1;
+                    }
+                    samples.push(serde_json::json!({"iterations": iterations, "reference_ns": times[0].as_nanos() as u64, "optimized_ns": times[1].as_nanos() as u64}));
+                    times[1]
+                });
+            });
+            if let Some(mut graph) = graph {
+                graph.check().unwrap();
+                let differences = graph.differences().unwrap();
+                let root = std::path::PathBuf::from("target/criterion/paired_norm_packing")
+                    .join(cache)
+                    .join(&shape);
+                std::fs::create_dir_all(&root).unwrap();
+                let measured = if samples.len() >= 20 {
+                    &samples[samples.len() - 20..]
+                } else {
+                    &[]
+                };
+                std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
+                    "rows": rows, "width": 5120, "bits": 4, "stores_normalized": std::env::var("CLEF_BENCH_NORM_PACK_STORE").as_deref() == Ok("1"), "rotating": rotating,
+                    "minimum_input_bytes_per_variant": if rotating {64 << 20} else {0},
+                    "bitwise_identical": differences["bitwise_identical"], "numerical_differences": differences,
+                    "numeric_mode": std::env::var("CLEF_BENCH_NORM_PACK_NUMERIC").as_deref() == Ok("1"), "sample_size": 20, "samples": samples, "measurement_samples": measured,
+                    "note": "Separate identical inputs per variant; named RMSNorm, BF16 rounding and packing included. Compilation and uploads excluded."
+                })).unwrap()).unwrap();
+            }
+        }
+    }
+    group.finish();
+}
 fn packing(c: &mut Criterion) {
     let mut group = c.benchmark_group("paired_packing");
     configure(&mut group);
@@ -541,6 +601,7 @@ fn packing(c: &mut Criterion) {
                     root.join("paired.json"),
                     serde_json::to_vec_pretty(&serde_json::json!({
                         "rows": rows, "width": width, "bits": 4, "bitwise_identical": true,
+                        "includes_norm": std::env::var("CLEF_BENCH_PACKING_NORM").as_deref() == Ok("1"),
                         "includes_swiglu": std::env::var("CLEF_BENCH_PACKING_SWIGLU").as_deref() == Ok("1"),
                         "includes_attention_gate": std::env::var("CLEF_BENCH_PACKING_ATTENTION_GATE").as_deref() == Ok("1"),
                         "sample_size": 20, "samples": samples, "measurement_samples": measured,
@@ -785,6 +846,7 @@ criterion_group!(
     packing,
     paired_integer_gemm,
     paired_bf16_gemm,
-    convolution
+    convolution,
+    normalization_packing
 );
 criterion_main!(workload);

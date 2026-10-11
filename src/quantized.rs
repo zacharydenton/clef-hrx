@@ -218,6 +218,107 @@ impl Engine {
         }
     }
 
+    /// Preserve a BF16 normalized view for small projections while caching packed codes.
+    pub(crate) fn normalized_input(
+        &mut self,
+        x: &Tensor,
+        norm_name: &str,
+        first_projection: &str,
+    ) -> Result<Tensor> {
+        if self.quantized.share_packing
+            && (128..=4032).contains(&x.rows)
+            && x.cols == 5120
+            && x.dtype == DType::Bf16
+            && let Some(weight) = self
+                .quantized
+                .weights
+                .get(&format!("{first_projection}.weight"))
+                .cloned()
+            && weight.bits == 4
+            && weight.cols == x.cols
+        {
+            let norm_weight = self.w(&format!("{norm_name}.weight"))?;
+            if norm_weight.dtype == DType::Bf16 {
+                let (codes, scales, normalized) = prepare_norm_store_with_source(
+                    self,
+                    x,
+                    &norm_weight,
+                    weight.bits,
+                    weight.stride,
+                    include_str!("../kernels/prepare_integer_register.loom"),
+                )?;
+                self.quantized.activation = Some(PreparedActivation {
+                    input: normalized.clone(),
+                    codes,
+                    scales,
+                    bits: weight.bits,
+                    stride: weight.stride,
+                });
+                return Ok(normalized);
+            }
+        }
+        self.named_norm(x, norm_name, false, 1e-6)
+    }
+
+    /// Share normalized packed activations between the MLP gate and up projections.
+    pub(crate) fn normalized_mlp(
+        &mut self,
+        x: &Tensor,
+        norm_name: &str,
+        prefix: &str,
+    ) -> Result<Option<Tensor>> {
+        if !self.quantized.share_packing
+            || !(128..=4032).contains(&x.rows)
+            || x.cols != 5120
+            || x.dtype != DType::Bf16
+        {
+            return Ok(None);
+        }
+        let Some(gate_weight) = self
+            .quantized
+            .weights
+            .get(&format!("{prefix}.gate_proj.weight"))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let Some(up_weight) = self
+            .quantized
+            .weights
+            .get(&format!("{prefix}.up_proj.weight"))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if gate_weight.bits != 4
+            || up_weight.bits != 4
+            || gate_weight.cols != x.cols
+            || up_weight.cols != x.cols
+            || gate_weight.rows != 17408
+            || up_weight.rows != 17408
+            || gate_weight.stride != up_weight.stride
+        {
+            return Ok(None);
+        }
+        let norm_weight = self.w(&format!("{norm_name}.weight"))?;
+        if norm_weight.dtype != DType::Bf16 {
+            return Ok(None);
+        }
+        let (codes, scales) = prepare_norm_with_source(
+            self,
+            x,
+            &norm_weight,
+            4,
+            gate_weight.stride,
+            include_str!("../kernels/prepare_integer_register.loom"),
+        )?;
+        self.quantized.clear_activation();
+        let gate = self.project_prepared(x.rows, &gate_weight, &codes, &scales, None)?;
+        let up = self.project_prepared(x.rows, &up_weight, &codes, &scales, None)?;
+        self.project_swiglu(&gate, &up, &format!("{prefix}.down_proj"), Some(x))
+            .map(Some)
+    }
+
     pub(crate) fn project_swiglu(
         &mut self,
         gate: &Tensor,
@@ -460,6 +561,96 @@ fn prepare_inputs(
     // Graph access declarations order later scratch reuse; immutable weights
     // are kept alive by QuantizedProjections rather than pinning every activation.
     Ok((codes, scales))
+}
+
+/// Named RMSNorm (offset weights, eps 1e-6) plus packing.
+pub(crate) fn prepare_norm_with_source(
+    e: &mut Engine,
+    x: &Tensor,
+    weight: &Tensor,
+    bits: usize,
+    stride: usize,
+    source: &str,
+) -> Result<(Tensor, Tensor)> {
+    let (codes, scales, _) = prepare_normalized(e, x, weight, bits, stride, source, false)?;
+    Ok((codes, scales))
+}
+
+pub(crate) fn prepare_norm_store_with_source(
+    e: &mut Engine,
+    x: &Tensor,
+    weight: &Tensor,
+    bits: usize,
+    stride: usize,
+    source: &str,
+) -> Result<(Tensor, Tensor, Tensor)> {
+    let (codes, scales, normalized) = prepare_normalized(e, x, weight, bits, stride, source, true)?;
+    Ok((codes, scales, normalized.unwrap()))
+}
+
+fn prepare_normalized(
+    e: &mut Engine,
+    x: &Tensor,
+    weight: &Tensor,
+    bits: usize,
+    stride: usize,
+    source: &str,
+    store: bool,
+) -> Result<(Tensor, Tensor, Option<Tensor>)> {
+    ensure!(
+        x.cols == 5120
+            && x.dtype == DType::Bf16
+            && weight.len() == x.cols
+            && weight.dtype == DType::Bf16
+            && [4, 8].contains(&bits)
+            && (1..=1048576).contains(&x.rows)
+            && (x.cols..=65536).contains(&stride)
+            && stride.is_multiple_of(512 / bits),
+        "unsupported normalized packing shape"
+    );
+    let words = stride / (32 / bits);
+    let packed_words = x.rows * (words + 1);
+    let norm_offset = (packed_words * 4).next_multiple_of(128);
+    let storage_words = if store {
+        norm_offset / 4 + x.rows * x.cols / 2
+    } else {
+        packed_words
+    };
+    let storage = e.alloc(1, storage_words, DType::U32)?;
+    let mut codes = storage.clone();
+    codes.rows = x.rows;
+    codes.cols = words;
+    let mut scales = storage.clone();
+    scales.offset += x.rows * words * 4;
+    scales.cols = x.rows;
+    scales.dtype = DType::F32;
+    let suffix = if store { "_store" } else { "" };
+    let mut spec = Specialization::new(format!("h3_prepare_norm{suffix}_i{bits}"));
+    for (key, value) in [("width", x.cols), ("lanes", 256), ("out_stride", stride)] {
+        spec.set_config(
+            format!("h3.prepare_plain_tiled_i{bits}.{key}"),
+            value.to_string(),
+        );
+    }
+    let mut constants = Constants::new();
+    constants.push(x.rows as u32)?;
+    e.emit_special(
+        source,
+        spec,
+        constants,
+        &[x.rows as u64],
+        &[x, weight],
+        &storage,
+    )?;
+    let normalized = store.then(|| {
+        let mut t = storage;
+        t.offset += norm_offset;
+        t.rows = x.rows;
+        t.cols = x.cols;
+        t.dtype = DType::Bf16;
+        t
+    });
+    Ok((codes, scales, normalized))
 }
 
 #[cfg(test)]
@@ -1096,6 +1287,228 @@ mod tests {
                             );
                         }
                     }
+                }
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires gfx1151; normalized packing bounds, BF16 output, FP64 oracle and replay"]
+    fn normalized_packing_matches_reference() -> Result<()> {
+        let source = std::env::var("CLEF_TEST_NORM_PACK_SOURCE")
+            .ok()
+            .map(std::fs::read_to_string)
+            .transpose()?
+            .unwrap_or_else(|| include_str!("../kernels/prepare_integer_register.loom").to_owned());
+        let context = ModelContext::new(Default::default())?;
+        let mut e = Engine::new(&context)?;
+        let width = 5120;
+        for bits in [4, 8] {
+            for exceptional_weight in [false, true] {
+                for rows in [
+                    1, 2, 7, 65, 127, 128, 129, 158, 235, 620, 1024, 2048, 4032, 4033,
+                ] {
+                    let values: Vec<_> = (0..(rows + 2) * width)
+                        .map(|i| {
+                            let c = i % width;
+                            let value = ((i * 37 % 1031) as f32 - 515.) / 37.;
+                            half::bf16::from_f32(match (i / width) % 11 {
+                                0 => {
+                                    if c % 2 == 0 {
+                                        0.0
+                                    } else {
+                                        -0.0
+                                    }
+                                }
+                                1 => value * 1e-5,
+                                2 => half::bf16::MAX.to_f32(),
+                                3 => half::bf16::from_bits(1).to_f32(),
+                                4 => value * 1e15,
+                                5 if c == 37 => f32::NAN,
+                                6 if c == 113 => f32::INFINITY,
+                                7 if c == 259 => f32::NEG_INFINITY,
+                                8 => {
+                                    if c % 2 == 0 {
+                                        1.0
+                                    } else {
+                                        -1.0
+                                    }
+                                }
+                                9 => value * 1e-3,
+                                _ => value,
+                            })
+                        })
+                        .collect();
+                    let weights: Vec<_> = (0..3 * width)
+                        .map(|i| {
+                            half::bf16::from_f32(if exceptional_weight {
+                                match i % 1009 {
+                                    0 => f32::NAN,
+                                    1 => f32::INFINITY,
+                                    2 => f32::NEG_INFINITY,
+                                    3 => half::bf16::MAX.to_f32(),
+                                    _ => 0.5,
+                                }
+                            } else {
+                                match i % 19 {
+                                    0 => -1.0,
+                                    1 => -0.0,
+                                    2 => 0.0,
+                                    _ => ((i * 13 % 127) as f32 - 63.) / 128.,
+                                }
+                            })
+                        })
+                        .collect();
+                    let x = e
+                        .input(rows + 2, width, DType::Bf16, bytemuck::cast_slice(&values))?
+                        .slice_rows(1, rows);
+                    let weight = e
+                        .input(3, width, DType::Bf16, bytemuck::cast_slice(&weights))?
+                        .slice_rows(2, 1);
+                    let stride = width + 512 / bits;
+                    let normalized = e.norm(&x, &weight, None, 1e-6, true)?;
+                    let reference = prepare(&mut e, &normalized, bits, stride)?;
+                    let mut reference_graph = e.finish()?;
+                    let fused =
+                        prepare_norm_with_source(&mut e, &x, &weight, bits, stride, &source)?;
+                    let mut fused_graph = e.finish()?;
+                    let stored =
+                        prepare_norm_store_with_source(&mut e, &x, &weight, bits, stride, &source)?;
+                    let mut stored_graph = e.finish()?;
+                    let ulp = |a: f32, b: f32| {
+                        if a == b {
+                            return 0;
+                        }
+                        let ordered = |x: f32| {
+                            let v = x.to_bits() >> 16;
+                            if v & 0x8000 != 0 {
+                                (!v) & 0xffff
+                            } else {
+                                v | 0x8000
+                            }
+                        };
+                        ordered(a).abs_diff(ordered(b))
+                    };
+                    let logical = |raw: Vec<f32>, pitch: usize| -> Vec<u32> {
+                        raw.chunks_exact(pitch)
+                            .flat_map(|r| r[..width / (32 / bits)].iter().map(|v| v.to_bits()))
+                            .collect()
+                    };
+                    let mut first = None;
+                    for _ in 0..2 {
+                        e.run(&mut reference_graph)?;
+                        let expected = logical(e.read_f32(&reference.0)?, reference.0.cols);
+                        let expected_scales = e.read_f32(&reference.1)?;
+                        let expected_norm = e.read_f32(&normalized)?;
+                        e.run(&mut fused_graph)?;
+                        let actual = logical(e.read_f32(&fused.0)?, fused.0.cols);
+                        let actual_scales = e.read_f32(&fused.1)?;
+                        e.run(&mut stored_graph)?;
+                        let stored_codes = logical(e.read_f32(&stored.0)?, stored.0.cols);
+                        let stored_scales = e.read_f32(&stored.1)?;
+                        let actual_norm = e.read_f32(&stored.2)?;
+                        assert!(
+                            actual == stored_codes,
+                            "storing normalization changed packed codes"
+                        );
+                        assert!(
+                            actual_scales
+                                .iter()
+                                .map(|x| x.to_bits())
+                                .eq(stored_scales.iter().map(|x| x.to_bits())),
+                            "storing normalization changed scales"
+                        );
+                        let mut changed = 0usize;
+                        for (word, (a, b)) in actual.iter().zip(&expected).enumerate() {
+                            for lane in 0..32 / bits {
+                                let decode = |w: u32| {
+                                    ((w << (32 - bits * (lane + 1))) as i32) >> (32 - bits)
+                                };
+                                let delta = (decode(*a) - decode(*b)).abs();
+                                assert!(
+                                    delta <= 1,
+                                    "codes: bits={bits}, rows={rows}, word={word}, lane={lane}, delta={delta}"
+                                );
+                                changed += usize::from(delta != 0);
+                            }
+                        }
+                        assert!(
+                            changed as f64 / (rows * width) as f64 <= 0.01,
+                            "too many changed codes"
+                        );
+                        for (a, b) in actual_scales.iter().zip(&expected_scales) {
+                            if !b.is_finite() {
+                                assert_eq!(a.to_bits(), b.to_bits());
+                            } else {
+                                assert!(
+                                    a.is_finite() && (a - b).abs() <= b.abs().max(1e-30) * 0.004,
+                                    "scale differs: {a} vs {b}"
+                                );
+                            }
+                        }
+                        let mut changed_norm = 0usize;
+                        for (a, b) in actual_norm.iter().zip(&expected_norm) {
+                            if b.is_nan() {
+                                assert!(a.is_nan());
+                            } else if !b.is_finite() {
+                                assert_eq!(a.to_bits(), b.to_bits());
+                            } else {
+                                assert!(
+                                    a.is_finite() && ulp(*a, *b) <= 1,
+                                    "normalization differs: {a} vs {b}"
+                                );
+                                changed_norm += usize::from(a != b);
+                            }
+                        }
+                        assert!(
+                            changed_norm as f64 / (rows * width) as f64 <= 0.01,
+                            "too many changed normalized values"
+                        );
+                        // Independent FP64 RMS oracle on finite representative rows where
+                        // the reference FP32 sum neither overflows nor uses denormal inputs.
+                        if !exceptional_weight {
+                            for row in [0, rows / 2, rows - 1] {
+                                let v = &values[(row + 1) * width..(row + 2) * width];
+                                if v.iter().all(|v| {
+                                    let x = v.to_f32();
+                                    x.is_finite()
+                                        && x.abs() <= 1e16
+                                        && (x == 0.0 || x.abs() >= f32::MIN_POSITIVE)
+                                }) {
+                                    let ss: f64 =
+                                        v.iter().map(|v| f64::from(v.to_f32()).powi(2)).sum();
+                                    let inv =
+                                        (ss / width as f64 + f64::from(1e-6f32)).sqrt().recip();
+                                    for col in 0..width {
+                                        let w = weights[2 * width + col].to_f32() + 1.;
+                                        let oracle = half::bf16::from_f32(
+                                            (f64::from(v[col].to_f32()) * inv * f64::from(w))
+                                                as f32,
+                                        )
+                                        .to_f32();
+                                        assert!(
+                                            ulp(actual_norm[row * width + col], oracle) <= 1,
+                                            "FP64 RMS oracle: row={row}, col={col}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        let state = (
+                            actual,
+                            actual_scales
+                                .iter()
+                                .map(|x| x.to_bits())
+                                .collect::<Vec<_>>(),
+                            actual_norm.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                        );
+                        if let Some(first) = &first {
+                            assert!(first == &state, "normalized packing changed on replay");
+                        } else {
+                            first = Some(state);
+                        }
+                    }
+                    e.reset_plan()?;
                 }
             }
         }

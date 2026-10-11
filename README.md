@@ -67,24 +67,25 @@ BF16 is the default. Normal builds also support explicit INT4 modes:
 
 | Mode | Full JevBench accuracy | Resident input tok/s |
 | --- | ---: | ---: |
-| BF16 | 202/231 (87.4%) | 516 |
-| INT4 MLP only | 199/231 (86.1%) | 752 |
-| INT4 eligible backbone projections | 194/231 (84.0%) | 986–1,007 |
+| BF16 | 202/231 (87.4%) | 519 |
+| INT4 MLP only | 204/231 (88.3%) | 747 |
+| INT4 eligible backbone projections | 194/231 (84.0%) | 1,003–1,035 |
 
-INT4 trades accuracy for speed; it is never selected automatically. These full
-sequential runs use the same binary and preserve every output of each mode's
-previous baseline. The INT4 range covers the initial run, an unchanged-binary
-repeat and a fresh control. The repeat remains below 1,000 tok/s. DeltaNet
-convolution now reuses overlapping inputs across eight adjacent rows, preserving
-FMA order and BF16 rounding. Peak engine allocation is 14.08 GiB for broader
-INT4 and 23.96 GiB for MLP-only INT4.
-See [qualification and reproduction](docs/evaluation.md#eight-row-causal-convolution),
-[precision details](docs/usage.md#precision)
-and [recorded experiments](docs/optimization.md). Vision, normalization and the
-trained decision head retain their original precision. A subsequent compact-grid
-experiment improved kernel benchmarks but did not establish a full-model gain;
-[its results and reproduction](docs/evaluation.md#partial-mlp-down-raster-groups)
-are recorded, and the previously qualified dispatch is retained.
+INT4 is an explicit speed/accuracy choice. Both full
+sequential broader INT4 runs exceeded 1,000 resident input tok/s, including encoding,
+preparation, compilation, GPU execution and readback. Only the first request
+with model loading is excluded. The repeat reproduced every output exactly;
+its margin above 1,000 tok/s is narrow.
+
+Fused RMS normalization and activation packing retain the same-mode accuracy
+floors. FP32 summation order changes in INT4: broader INT4 gained five correct
+cases and lost five versus its previous baseline, with a maximum probability
+change of 0.6601. BF16 outputs remain exact. Peak engine allocation is
+14.08 GiB for broader INT4 and 23.96 GiB for MLP-only INT4.
+See [qualification and reproduction](docs/evaluation.md#parallel-reduction-and-input-normalization),
+[precision details](docs/usage.md#precision) and
+[operator experiments](docs/optimization.md#rmsnorm-and-integer-packing-fusion).
+Vision and the trained decision head retain their original precision.
 
 ## Evaluation
 
@@ -92,15 +93,15 @@ The [WorkflowEvals runner and reproduction notes](docs/workflowevals.md) cover
 all four workflows in the pinned public collection. The first resumable batch
 completed 4/705 cases, including a 36,916-token request. Full results are pending.
 
-On all 231 public JevBench cases, CLEF-HRX scored **202/231 (87.4%)**, compared
+On all 231 public JevBench cases, default BF16 scored **202/231 (87.4%)**, compared
 with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
 completed with valid probabilities and no input truncation.
 
-On AMD Strix Halo, BF16 resident latency was **0.66 s median / 4.59 s p95**, with
-**516 input tokens/s (42.8 decisions/minute)** throughput. This single sequential
+On AMD Strix Halo, BF16 resident latency was **0.66 s median / 4.52 s p95**, with
+**519 input tokens/s (43.0 decisions/minute)** throughput. This single sequential
 run used a populated compiler cache; the first request including model loading
 is excluded from these speed figures.
-[Results, measurement details and reproduction instructions](docs/evaluation.md#eight-row-causal-convolution).
+[Results, measurement details and reproduction instructions](docs/evaluation.md#parallel-reduction-and-input-normalization).
 
 ## Library
 

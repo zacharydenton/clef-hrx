@@ -6,8 +6,12 @@
 // Keep the pair sums/differences and final add/subtract ordering. Do not replace
 // this transform with an algebraically equivalent butterfly with other rounding.
 // Entirely padded waves participate with zeros, including the row-max reduction.
-template.decl @clef.register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1, %attention_gate: i1)
-template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1, %attention_gate: i1) {
+// Named RMSNorm fusion uses four waves with a parallel FP32 sum, then rounds
+// the normalized value to BF16 before the Hadamard steps. An optional BF16
+// output supports projections that retain their original precision.
+// Its contract is width 5120, weight offset 1 and epsilon 1e-6.
+template.decl @clef.register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1, %attention_gate: i1, %rmsnorm: i1, %store_norm: i1)
+template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1, %attention_gate: i1, %rmsnorm: i1, %store_norm: i1) {
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
@@ -51,6 +55,23 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
   %fone = scalar.constant 1.0 : f32
   %one8 = vector.splat %fone : vector<8xf32>
   %hv = buffer.view %hg[%off0] : buffer -> view<[%tokens_b]x[%width]xbf16>
+  %norm_inv = scf.if %rmsnorm -> (f32) {
+      %norm_step = index.constant 128 : index
+      %norm_ss_lane = scf.for %nj = [%lane to %width step %norm_step](%ns = %zero : f32) -> (f32) {
+        %nxh = view.load %hv[%row, %nj] : view<[%tokens_b]x[%width]xbf16> -> bf16
+        %nxf = scalar.extf %nxh : bf16 to f32
+        %nxd = scalar.subf %nxf, %zero : f32
+        %ns_next = scalar.fmaf %nxd, %nxd, %ns : f32
+        scf.yield %ns_next : f32
+      }
+      %norm_ss = kernel.workgroup.reduce<addf> %norm_ss_lane : f32
+      %norm_width = scalar.constant 5120.0 : f32
+      %norm_eps = scalar.constant 1e-6 : f32
+      %norm_var = scalar.divf %norm_ss, %norm_width : f32
+      %norm_ve = scalar.addf %norm_var, %norm_eps : f32
+      %norm_inv0 = scalar.rsqrtf %norm_ve : f32
+    scf.yield %norm_inv0 : f32
+  } else { scf.yield %fone : f32 }
   %qv = buffer.view %qg[%off0] : buffer -> view<[%tokens_b]x[%out_words]xi32>
   %scale_elements = index.mul %tokens_b, %out_words : index
   %word_bytes = index.constant 4 : offset
@@ -64,22 +85,49 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
   %half8 = index.div %wave_lane, %c8 : index
   %bit8 = index.rem %half8, %c2 : index
   %low8 = index.cmp eq, %bit8, %c0 : index
-  %c2047 = index.constant 2047 : index
-  %c2048 = index.constant 2048 : index
-  %rounded_width = index.add %width, %c2047 : index
-  %chunks = index.div %rounded_width, %c2048 : index
+  %norm_threads = index.constant 128 : index
+  %pack_threads256 = index.constant 256 : index
+  %pack_threads = scf.select %rmsnorm, %norm_threads, %pack_threads256 : index
+  %chunk_width = index.mul %pack_threads, %c8 : index
+  %chunk_last = index.sub %chunk_width, %c1 : index
+  %rounded_width = index.add %width, %chunk_last : index
+  %chunks = index.div %rounded_width, %chunk_width : index
   %cache_size = index.mul %chunks, %c8 : index
   %last_col = index.sub %width, %c8 : index
   %cache_init = vector.constant 0.0 : vector<[%cache_size]xf32>
   // Unroll the row chunks so the retained vector lives in registers.
   %values, %lane_max = scf.for %chunk = [%c0 to %chunks step %c1](%cache = %cache_init : vector<[%cache_size]xf32>, %prev_max = %zero : f32) -> (vector<[%cache_size]xf32>, f32) unroll {
-    %tile_base = index.mul %chunk, %c2048 : index
+    %tile_base = index.mul %chunk, %chunk_width : index
     %tile_col0 = index.add %wg_lane8, %tile_base : index
     %tile_active = index.cmp ult, %tile_col0, %width : index
     %tile_v = scf.if %tile_active -> (vector<8xf32>) {
       %tile_col = index.assume %tile_col0 [le(%tile_col0, %last_col), mul(%tile_col0, 8)] : index
       %tile_h = vector.load %hv[%row, %tile_col] : view<[%tokens_b]x[%width]xbf16> -> vector<8xbf16>
-      %tile_f = vector.extf %tile_h : vector<8xbf16> to vector<8xf32>
+      %tile_f0 = vector.extf %tile_h : vector<8xbf16> to vector<8xf32>
+      %tile_f = scf.if %rmsnorm -> (vector<8xf32>) {
+        %nwv = buffer.view %ug[%off0] : buffer -> view<[%width]xbf16>
+        %nwh = vector.load %nwv[%tile_col] : view<[%width]xbf16> -> vector<8xbf16>
+        %nwf = vector.extf %nwh : vector<8xbf16> to vector<8xf32>
+        %nw = vector.addf %nwf, %one8 : vector<8xf32>
+        %nd = vector.subf %tile_f0, %zero8 : vector<8xf32>
+        %ni = vector.splat %norm_inv : vector<8xf32>
+        %nn = vector.mulf %nd, %ni : vector<8xf32>
+        %nr = vector.fmaf %nn, %nw, %zero8 : vector<8xf32>
+        %nh = vector.fptrunc %nr : vector<8xf32> to vector<8xbf16>
+        scf.if %store_norm {
+          %norm_c31 = index.constant 31 : index
+          %norm_words = index.add %out_words, %c1 : index
+          %norm_end = index.mul %tokens_b, %norm_words : index
+          %norm_rounded = index.add %norm_end, %norm_c31 : index
+          %norm_blocks = index.div %norm_rounded, %c32 : index
+          %norm_aligned = index.mul %norm_blocks, %c32 : index
+          %norm_offset = index.scale %norm_aligned, %word_bytes : index, offset -> offset
+          %norm_output = buffer.view %qg[%norm_offset] : buffer -> view<[%tokens_b]x[%width]xbf16>
+          vector.store %nh, %norm_output[%row, %tile_col] : vector<8xbf16>, view<[%tokens_b]x[%width]xbf16>
+        }
+        %nf = vector.extf %nh : vector<8xbf16> to vector<8xf32>
+        scf.yield %nf : vector<8xf32>
+      } else { scf.yield %tile_f0 : vector<8xf32> }
       %activated = scf.if %attention_gate -> (vector<8xf32>) {
         // Q and gate occupy adjacent 256-element halves of each head.
         %c256_gate = index.constant 256 : index
@@ -230,7 +278,7 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
   %zero_i = scalar.constant 0 : i32
   %words_per_lane = index.div %c8, %packed : index
   scf.for %chunk_out = [%c0 to %chunks step %c1] unroll {
-    %tile_base = index.mul %chunk_out, %c2048 : index
+    %tile_base = index.mul %chunk_out, %chunk_width : index
     %tile_col0 = index.add %wg_lane8, %tile_base : index
     %tile_active = index.cmp ult, %tile_col0, %width : index
     %slot_base = index.mul %chunk_out, %c8 : index
@@ -298,7 +346,9 @@ kernel.def target(@pack_target4) export("h3_prepare_plain_tiled_i4") @h3_prepare
   %width = config.get @h3.prepare_plain_tiled_i4.width : index
   %fused = scalar.constant false : i1
   %attention_gate = scalar.constant false : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
+  %rmsnorm = scalar.constant false : i1
+  %store_norm = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
   kernel.return
 }
 amdgpu.target<gfx11-generic> @pack_target8 {subgroup_size = 32}
@@ -315,7 +365,9 @@ kernel.def target(@pack_target8) export("h3_prepare_plain_tiled_i8") @h3_prepare
   %width = config.get @h3.prepare_plain_tiled_i8.width : index
   %fused = scalar.constant false : i1
   %attention_gate = scalar.constant false : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
+  %rmsnorm = scalar.constant false : i1
+  %store_norm = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
   kernel.return
 }
 
@@ -330,7 +382,9 @@ kernel.def target(@pack_target4) export("h3_prepare_swiglu_i4") @h3_prepare_swig
   %width = config.get @h3.prepare_plain_tiled_i4.width : index
   %fused = scalar.constant true : i1
   %attention_gate = scalar.constant false : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
+  %rmsnorm = scalar.constant false : i1
+  %store_norm = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
   kernel.return
 }
 
@@ -345,7 +399,9 @@ kernel.def target(@pack_target8) export("h3_prepare_swiglu_i8") @h3_prepare_swig
   %width = config.get @h3.prepare_plain_tiled_i8.width : index
   %fused = scalar.constant true : i1
   %attention_gate = scalar.constant false : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
+  %rmsnorm = scalar.constant false : i1
+  %store_norm = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
   kernel.return
 }
 
@@ -360,7 +416,9 @@ kernel.def target(@pack_target4) export("h3_prepare_attention_gate_i4") @h3_prep
   %width = config.get @h3.prepare_plain_tiled_i4.width : index
   %fused = scalar.constant false : i1
   %attention_gate = scalar.constant true : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
+  %rmsnorm = scalar.constant false : i1
+  %store_norm = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
   kernel.return
 }
 
@@ -375,6 +433,72 @@ kernel.def target(@pack_target8) export("h3_prepare_attention_gate_i8") @h3_prep
   %width = config.get @h3.prepare_plain_tiled_i8.width : index
   %fused = scalar.constant false : i1
   %attention_gate = scalar.constant true : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
+  %rmsnorm = scalar.constant false : i1
+  %store_norm = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
+  kernel.return
+}
+
+kernel.def target(@pack_target4) export("h3_prepare_norm_i4") @h3_prepare_norm_i4(%tokens: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 128 : index
+  kernel.launch.config workgroups(%tokens, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%tokens: index, %h: buffer, %up: buffer, %q: buffer) {
+  %stride = config.get @h3.prepare_plain_tiled_i4.out_stride : index
+  %bits = index.constant 4 : index
+  %width = config.get @h3.prepare_plain_tiled_i4.width : index
+  %fused = scalar.constant false : i1
+  %attention_gate = scalar.constant false : i1
+  %rmsnorm = scalar.constant true : i1
+  %store_norm = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
+  kernel.return
+}
+
+kernel.def target(@pack_target8) export("h3_prepare_norm_i8") @h3_prepare_norm_i8(%tokens: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 128 : index
+  kernel.launch.config workgroups(%tokens, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%tokens: index, %h: buffer, %up: buffer, %q: buffer) {
+  %stride = config.get @h3.prepare_plain_tiled_i8.out_stride : index
+  %bits = index.constant 8 : index
+  %width = config.get @h3.prepare_plain_tiled_i8.width : index
+  %fused = scalar.constant false : i1
+  %attention_gate = scalar.constant false : i1
+  %rmsnorm = scalar.constant true : i1
+  %store_norm = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
+  kernel.return
+}
+
+kernel.def target(@pack_target4) export("h3_prepare_norm_store_i4") @h3_prepare_norm_store_i4(%tokens: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 128 : index
+  kernel.launch.config workgroups(%tokens, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%tokens: index, %h: buffer, %up: buffer, %q: buffer) {
+  %stride = config.get @h3.prepare_plain_tiled_i4.out_stride : index
+  %bits = index.constant 4 : index
+  %width = config.get @h3.prepare_plain_tiled_i4.width : index
+  %fused = scalar.constant false : i1
+  %attention_gate = scalar.constant false : i1
+  %rmsnorm = scalar.constant true : i1
+  %store_norm = scalar.constant true : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
+  kernel.return
+}
+
+kernel.def target(@pack_target8) export("h3_prepare_norm_store_i8") @h3_prepare_norm_store_i8(%tokens: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 128 : index
+  kernel.launch.config workgroups(%tokens, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%tokens: index, %h: buffer, %up: buffer, %q: buffer) {
+  %stride = config.get @h3.prepare_plain_tiled_i8.out_stride : index
+  %bits = index.constant 8 : index
+  %width = config.get @h3.prepare_plain_tiled_i8.width : index
+  %fused = scalar.constant false : i1
+  %attention_gate = scalar.constant false : i1
+  %rmsnorm = scalar.constant true : i1
+  %store_norm = scalar.constant true : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate, %rmsnorm, %store_norm) : (index, buffer, buffer, buffer, index, index, index, i1, i1, i1, i1)
   kernel.return
 }

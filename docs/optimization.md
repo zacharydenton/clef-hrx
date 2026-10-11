@@ -833,3 +833,133 @@ or proof that the kernel itself causes a regression. They do not qualify a
 model-level gain. The compact production entry points and dispatch were removed;
 the benchmark export controls and expanded independent GPU boundary fixture
 are retained. See [all full-run results](evaluation.md#partial-mlp-down-raster-groups).
+
+
+## RMSNorm and integer packing fusion
+
+The first candidate combined the named post-attention RMSNorm with Hadamard rotation
+and activation packing for the MLP gate/up projections. Each wave preserves the
+original 32-lane sequential FMA sums and subgroup reduction. Normalization uses
+weight offset 1 and epsilon 1e-6, rounds to BF16, then applies the existing
+Hadamard arithmetic and quantization. The two projections share the packed
+codes and scales. Native selection covers INT4 5,120-to-17,408 gate/up pairs
+at 128–4,032 rows; BF16 and other shapes retain their prior path.
+
+The first 256-thread designs either shared one wave's RMS statistic or repeated
+it independently in every wave. Both lost on longer inputs. Reducing the wave
+count changed that result. Three-shape paired speedups versus separate native
+normalization and register packing, with exact outputs in every timed case:
+
+| Threads / statistic | 235 rows | 620 rows | 4,032 rows |
+| --- | ---: | ---: | ---: |
+| 256 / shared | 1.109× | 0.848× | 0.730× |
+| 256 / repeated | 1.126× | 0.857× | 0.782× |
+| 32 / one wave | 1.281× | 1.442× | 1.165× |
+| 64 / shared | 1.627× | 1.290× | 1.461× |
+| 64 / repeated | 1.654× | 1.308× | 1.440× |
+| 128 / shared | 1.582× | 1.243× | 1.091× |
+| 128 / repeated | 1.604× | 1.190× | 1.156× |
+
+The first full-model candidate used a 64-thread variant that repeats the exact RMS statistic in two waves,
+avoiding an extra cross-wave synchronization. Its initial report used 108 VGPRs,
+8 bytes LDS and zero spills; the shared 64-thread variant used the same VGPRs
+but 16 bytes LDS and more SGPRs. The single-wave variant used 188 VGPRs.
+Reports and generated sources are under `artifacts/throughput-1000/norm-pack-*`.
+The failed 256-thread and other experimental routes are retained only as local
+experiment sources; the exact two-wave path is archived in `norm-packing-source`.
+
+`paired_norm_packing` checks separate identical sliced inputs for each variant.
+Rotating cases retain at least 64 MiB of input per variant. Each variant is
+checked against its own saved initial output before and after timing, and the
+candidate is separately compared with the reference. Padding words are excluded
+because no projection reads them. The
+reference includes the BF16 normalization intermediate, which stays leased
+across every replay. Timing alternates variants and records raw pairs and
+99% bootstrap intervals. Upload and compilation are excluded here and included
+in full-model qualification where applicable.
+
+The expanded 23-pair sweep (`norm-pack-redundant64-rotating`) covers 1, 65,
+127–129, 158, 235, 260, 620, 1,024, 2,048 and 4,031–4,032 rows, with rotating
+cases from 128 rows onward. It measured **1.034–1.641×**, with every 99% lower
+bound above 1.0. The final native source passed eight pairs at 128, 235, 620 and
+4,032 rows in both cache modes at **1.194–1.635×**, again with every lower bound
+above 1.0 (`norm-pack-native-paired`).
+
+The normalized-packing GPU fixture covers 14 lengths through 4,033, INT4 and
+INT8, finite and exceptional weights, independently sliced inputs/weights,
+signed zero, subnormals, small values dominated by epsilon, large values,
+infinities and NaNs, with two replays. For this exact two-wave candidate, all
+logical codes and scale bits matched the separate native normalization/packing
+reference. The existing register,
+SwiGLU and attention-gate packing fixtures also pass after extending the shared
+template. CPU tests and Clippy passed.
+
+The exact candidate reached 1,023.87 tok/s initially but 990.15 on repeat,
+with unchanged full-suite outputs. It did not meet the repeated 1,000 tok/s
+threshold. A separate profile confirmed 64 fused MLP dispatches; the next
+experiment reduced the RMS dependency chain and fused input normalization too.
+
+### Parallel RMS reduction and retained BF16 output
+
+The qualified implementation distributes the 5,120 squares across 128 threads instead
+of repeating the original 32-lane sum. Each lane accumulates 40 FP32 FMAs,
+followed by a workgroup sum. This changes summation order. Weight offset 1,
+epsilon 1e-6, BF16 rounding before the Hadamard transform, and the transform's
+arithmetic remain unchanged. The four-wave packing loop retains 40 FP32 values
+per thread. Separate 64-, 128- and 256-thread probes led to choosing 128 as a
+balance across representative shapes and both cache modes. Final compiler reports
+show 70 VGPRs without the BF16 store and 67 with it; both use 32 bytes LDS and
+zero spills (`artifacts/throughput-1000/norm-pack-parallel-native-reports`).
+
+An optional BF16 output shares the codes/scales allocation, aligned to 128 bytes.
+It supplies small BF16 attention/DeltaNet projections while the larger INT4
+projections reuse the prepared codes. Both input and post-attention fusion are
+restricted to BF16 width 5,120, compatible INT4 weights and 128–4,032 rows.
+BF16 mode and longer inputs keep their prior path, including the 64k default.
+
+The benchmark's exact comparison is still the default. Explicit
+`CLEF_BENCH_NORM_PACK_NUMERIC=1` permits at most one integer code level with at
+most 1% of codes changed, scale relative error at most 0.004, and at most one
+BF16 ULP with at most 1% of retained normalized values changed. These bounds
+were established before the parallel candidate's measurements. They do not
+replace the full-model accuracy floors. Reference and candidate outputs must
+each remain bitwise stable across every timed replay.
+
+Final native sweeps cover 128, 129, 158, 235, 260, 620, 1,024, 2,048, 4,031 and
+4,032 rows with replay and independently rotating inputs: **40 paired cases**.
+Every 99% lower confidence bound exceeds 1.0:
+
+| Output | Paired speedup range | Lowest 99% lower bound | Result directory under `benches/results/` |
+| --- | ---: | ---: | --- |
+| Codes and scales | 1.363–3.423× | 1.361× | `norm-pack-parallel-native` |
+| Codes, scales and BF16 values | 1.308–2.486× | 1.307× | `norm-pack-parallel-store-native` |
+
+The largest changed-code fraction was 0.000000776 (less than one per million),
+with maximum code change 1 and scale relative error 0.000154088. Retained BF16
+values differed by at most one ULP, with at most 0.000006104 changed (6.11 per
+million). All outputs were stable on replay. Raw pairs, numerical differences,
+source snapshots and compiler reports are retained with the benchmark records.
+
+The GPU fixture checks both output modes against separate native normalization
+and packing over 14 lengths, both integer precisions, sliced inputs/weights,
+exceptional values and two exact candidate replays. A separate FP64 RMS oracle
+checks representative finite rows within one BF16 ULP. Store and no-store modes
+must produce exactly identical packed codes and scales. All four packing GPU
+fixtures, the CPU suite and Clippy pass.
+
+```sh
+CLEF_BENCH_PACKING_NORM=1 CLEF_BENCH_NORM_PACK_NUMERIC=1 \
+  CLEF_BENCH_NORM_PACK_STORE=0 \
+  CLEF_BENCH_PACKING_SOURCE=kernels/prepare_integer_register.loom \
+  CLEF_BENCH_LENGTHS=128,129,158,235,260,620,1024,2048,4031,4032 \
+  python3 scripts/bench_workload.py norm-parallel-repro --profile full \
+  --filter paired_norm_packing
+# Repeat with CLEF_BENCH_NORM_PACK_STORE=1 and a fresh result name.
+cargo test --locked --release --lib packing_matches_reference -- --ignored
+```
+
+`CLEF_BENCH_PACKING_NORM=1` also enables the simpler `paired_packing` combined
+reference for focused exact probes; filter that group to width 5,120.
+`CLEF_TEST_NORM_PACK_SOURCE` can point the GPU fixture at an experimental source;
+without it the fixture tests the native kernel. See
+[full-model qualification and reproduction](evaluation.md#rmsnorm-and-packing-fusion).

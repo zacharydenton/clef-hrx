@@ -1118,9 +1118,9 @@ clock/power variation. A full-model gain remains unproven, so the compact
 production path is removed rather than selected from its best initial result.
 The stronger independent GPU fixture and benchmark export controls are retained.
 
-The retained binary's observed broader INT4 range is now **986.28–1,007.05 tok/s**,
+At that stage, the retained binary's observed broader INT4 range was **986.28–1,007.05 tok/s**,
 including the original initial run, original repeat and this fresh control.
-The repeat still misses 1,000 tok/s; the throughput goal remains open.
+The repeat missed 1,000 tok/s; the throughput goal remained open.
 
 
 The final normal rebuild after removing the candidate exactly matches the
@@ -1130,3 +1130,127 @@ and Clippy passed after restoration. The independent record audit
 runs' binary identities, pinned dataset metadata, request bytes, CLI arguments,
 strict validity, exact outputs, raw token/wall totals and sole GPU clients.
 It records the candidate as unselected and the throughput goal as incomplete.
+
+## RMSNorm and packing fusion
+
+The first candidate preserved the original RMS summation order in two waves
+and combined only post-attention normalization and MLP packing. Full pinned
+JevBench runs retained all 231 question arrays and token counts exactly:
+
+| Mode / run | Correct / strictly valid | Resident wall seconds | Input tok/s |
+| --- | ---: | ---: | ---: |
+| Broader INT4 initial | 194 / 231 | 162.515 | 1,023.87 |
+| Broader INT4 repeat | 194 / 231 | 168.050 | 990.15 |
+| BF16 | 202 / 231 | 320.606 | 519.00 |
+| MLP-only INT4 | 199 / 231 | 221.254 | 752.05 |
+
+These records are `tests/results/jevbench-20261011-<mode>-norm-packing`, with
+`-repeat` appended for the second broader INT4 run. The repeated throughput
+threshold failed. The archived ordinary binary is
+`artifacts/throughput-1000/clef-norm-packing`, SHA-256
+`026b843e948474c394a913ea65393afb9fcec279b27c6c70d7aad4d578a848e1`.
+Its `-source.json` hashes 109 files in `norm-packing-source`, overlaying base
+commit `37fc5f3`. Embedded reference data and fixtures come from that checkout.
+
+### Parallel reduction and input normalization
+
+The qualified implementation uses 128 threads to accumulate the RMS statistic, shortening
+each lane's FMA chain from 160 to 40 operations. It fuses both post-attention
+MLP normalization and input normalization. The latter also retains normalized
+BF16 values for projections that keep their original precision. INT4
+projections reuse the packed codes and scales. Native selection is restricted
+to compatible INT4 weights, BF16 input and norm weights, width 5,120 and
+128–4,032 rows. BF16 mode, other shapes and the default 64k context retain the
+prior path.
+
+This changes FP32 summation order. Normalization still uses trained weight
+offset 1 and epsilon 1e-6 and rounds to BF16 before the unchanged Hadamard
+transform. [Operator evidence](optimization.md#parallel-rms-reduction-and-retained-bf16-output)
+records 40 final paired cases, numeric bounds, stable replays and an independent
+FP64 oracle. Full-model acceptance requires at least 202/231 BF16, 199/231
+MLP-only INT4 and 194/231 broader INT4, with all 231 cases strictly valid. BF16
+and the unchanged-binary repeat must preserve all question arrays exactly.
+
+The ordinary binary is `artifacts/throughput-1000/clef-norm-parallel`, SHA-256
+`8c932c174cf25f3f5001dff8e4511ff4efdef312cb739c9a16640caf83353a90`.
+Its `-source.json` hashes 109 files in `norm-parallel-source`, overlaying base
+commit `37fc5f3`. Use that source overlay on its base checkout to reproduce the
+measured version after the main branch advances.
+
+All four full pinned runs completed, with 231/231 strictly valid outputs and
+no truncation. Each resident measurement covers 166,394 input tokens in 230
+sequential requests and includes native encoding, preparation, compilation,
+GPU execution and readback; only the first request with model loading is
+excluded.
+
+| Mode / run | Correct / strictly valid | Resident wall seconds | Input tok/s | Exact question arrays vs comparison baseline |
+| --- | ---: | ---: | ---: | ---: |
+| Broader INT4 initial | 194 / 231 | 160.843 | 1,034.51 | 0 / 231 |
+| Broader INT4 repeat | 194 / 231 | 165.829 | 1,003.41 | 231 / 231 |
+| BF16 | 202 / 231 | 320.623 | 518.97 | 231 / 231 |
+| MLP-only INT4 | 204 / 231 | 222.609 | 747.47 | 0 / 231 |
+
+Both broader INT4 runs pass the 1,000 resident input tok/s threshold. The repeat
+has a narrow margin; these are observed sequential full-suite results, not a
+throughput guarantee for every run or workload. Per-run telemetry records a
+single GPU compute client. No clock/power, batching or concurrency changes were
+used. BF16 remains the default and the context limit remains 65,536.
+
+Tiny local rounding changes amplify through the quantized model. Broader INT4
+has five newly correct and five newly incorrect cases versus the prior control;
+none of its complete question arrays is bitwise identical to that control.
+The unchanged-binary repeat is exact on all 231. Accuracy gates on total correct;
+probability changes, individual regressions and calibration are retained:
+
+| Mode vs prior baseline | Correct gained / lost | Maximum probability change | Brier before → after | ECE before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Broader INT4 | 5 / 5 | 0.66006050 | 0.202133 → 0.208800 | 0.057637 → 0.032711 |
+| MLP-only INT4 | 5 / 0 | 0.35487970 | 0.165336 → 0.158953 | 0.049884 → 0.039079 |
+| BF16 | 0 / 0 | 0.00000000 | 0.166949 → 0.166949 | 0.028195 → 0.028195 |
+
+MLP-only INT4 improved accuracy by five cases without losing any previously
+correct case. Its 747.47 tok/s versus the prior 752.25 does not establish a
+speed gain for that mode. Subsequent optimizations should compare against these
+new qualified outputs, including the improved 204/231 MLP-only baseline.
+
+Raw runs are under `tests/results/jevbench-20261011-<mode>-norm-parallel`, with
+`-repeat` appended for the second broader INT4 run. Each contains predictions,
+scored cases, summary, comparison, output equality and cache snapshots.
+Telemetry is `artifacts/throughput-1000/norm-parallel[-repeat]-<mode>-eval-telemetry.jsonl`.
+The GPU packing fixtures, CPU suite and Clippy passed before these measurements.
+
+Reproduce on an idle GPU with fresh result names:
+
+```sh
+cargo test --locked --release --lib packing_matches_reference -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4-norm-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-conv-rows8-raster-control \
+  tests/results/jevbench-int4-norm-repro --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4-norm-repeat \
+  --prepared tests/results/jevbench-int4-norm-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-int4-norm-repro \
+  tests/results/jevbench-int4-norm-repeat --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision bf16 --output tests/results/jevbench-bf16-norm-repro \
+  --prepared tests/results/jevbench-int4-norm-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-bf16-conv-rows8 \
+  tests/results/jevbench-bf16-norm-repro
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4-mlp --output tests/results/jevbench-int4-mlp-norm-repro \
+  --prepared tests/results/jevbench-int4-norm-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-mlp-conv-rows8 \
+  tests/results/jevbench-int4-mlp-norm-repro
+```
+
+Both INT4 comparisons enforce 1,000 resident input tok/s along with full-suite
+validity and the same-mode accuracy floor. `--prepared` reuses only validated
+request files and length preflight; it does not remove native encoding from
+timed requests. Keep initial and repeat results, cache snapshots and hardware
+telemetry, including any failing comparisons.

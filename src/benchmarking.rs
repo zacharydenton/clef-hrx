@@ -6,9 +6,11 @@ use crate::{
 use hrx::{GraphExec, inference::ModelContext};
 mod activation;
 mod convolution;
+mod normalization_packing;
 pub(crate) mod quantized;
 pub use activation::SwiGluBenchmark;
 pub use convolution::ConvolutionBenchmark;
+pub use normalization_packing::NormPackingBenchmark;
 pub use quantized::PackingBenchmark;
 
 /// CPU-only cache-hit work with the same source/configuration in both maps.

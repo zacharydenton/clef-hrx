@@ -43,10 +43,15 @@ impl PackingBenchmark {
         let fused = std::env::var("CLEF_BENCH_PACKING_SWIGLU").as_deref() == Ok("1");
         let attention_gate =
             std::env::var("CLEF_BENCH_PACKING_ATTENTION_GATE").as_deref() == Ok("1");
-        ensure!(!(fused && attention_gate), "choose one packing activation");
+        let norm = std::env::var("CLEF_BENCH_PACKING_NORM").as_deref() == Ok("1");
+        ensure!(
+            usize::from(fused) + usize::from(attention_gate) + usize::from(norm) <= 1,
+            "choose one packing activation"
+        );
+        ensure!(!norm || width == 5120, "normalized packing width");
         ensure!(!attention_gate || width == 6144, "attention packing width");
         ensure!(
-            !(fused || attention_gate) || candidate_source.is_some(),
+            !(fused || attention_gate || norm) || candidate_source.is_some(),
             "fused packing requires a candidate source"
         );
         let up = if fused || attention_gate {
@@ -58,8 +63,18 @@ impl PackingBenchmark {
         } else {
             None
         };
+        let norm_weight = if norm {
+            let values: Vec<_> = (0..width)
+                .map(|i| half::bf16::from_f32(((i * 13 % 127) as f32 - 63.) / 128.))
+                .collect();
+            Some(engine.input(1, width, DType::Bf16, bytemuck::cast_slice(&values))?)
+        } else {
+            None
+        };
         let mut reference_intermediates = Vec::new();
-        let activated = if attention_gate {
+        let activated = if norm {
+            engine.norm(&input, norm_weight.as_ref().unwrap(), None, 1e-6, true)?
+        } else if attention_gate {
             let gate = engine.columns(&up.as_ref().unwrap().reshape(rows * 24, 512), 256, 256)?;
             reference_intermediates.push(gate.clone());
             let sigmoid = engine.unary(&gate.reshape(rows, width), "sigmoid")?;
@@ -77,7 +92,7 @@ impl PackingBenchmark {
             &activated,
             bits,
             stride,
-            if fused || attention_gate {
+            if fused || attention_gate || norm {
                 include_str!("../../kernels/prepare_integer_register.loom")
             } else if candidate_source.is_some() && width <= 6144 {
                 include_str!("../../kernels/prepare_integer_single.loom")
@@ -91,7 +106,16 @@ impl PackingBenchmark {
         } else {
             vec![&input]
         };
-        let candidate = if attention_gate {
+        let candidate = if norm {
+            crate::quantized::prepare_norm_with_source(
+                &mut engine,
+                &input,
+                norm_weight.as_ref().unwrap(),
+                bits,
+                stride,
+                candidate_source.as_deref().unwrap(),
+            )?
+        } else if attention_gate {
             crate::quantized::prepare_attention_gate_with_source(
                 &mut engine,
                 &input,
