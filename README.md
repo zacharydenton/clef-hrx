@@ -67,18 +67,20 @@ BF16 is the default. Normal builds also support explicit INT4 modes:
 
 | Mode | Full JevBench accuracy | Resident input tok/s |
 | --- | ---: | ---: |
-| BF16 | 202/231 (87.4%) | 525 |
+| BF16 | 202/231 (87.4%) | 518 |
 | INT4 MLP only | 199/231 (86.1%) | 625 |
-| INT4 eligible backbone projections | 194/231 (84.0%) | 976 |
+| INT4 eligible backbone projections | 194/231 (84.0%) | 978 |
 
 INT4 trades accuracy for speed; it is never selected automatically. These are
 archived full-suite measurements of the respective kernel configurations. The
 BF16 and broader INT4 results include fused SwiGLU, vectorized DeltaNet and
-cached kernel-source fingerprints; broader INT4 also fuses SwiGLU with
+cached kernel-source fingerprints and pipelined K/V projections; broader INT4
+also fuses SwiGLU with
 register-based packing and selects MLP GEMM tiles by padded row coverage.
-BF16 and MLP-only figures come from earlier builds.
-Broader INT4 uses 14.28 GiB peak engine allocation and preserves all outputs of its
-previous run. See [qualification and reproduction](docs/evaluation.md#adaptive-int4-mlp-tiles),
+The MLP-only figure comes from an earlier build.
+Broader INT4 uses 14.28 GiB peak engine allocation. Both full runs preserve every
+output of their respective baselines.
+See [qualification and reproduction](docs/evaluation.md#pipelined-narrow-bf16-projections),
 [precision details](docs/usage.md#precision)
 and [recorded experiments](docs/optimization.md). Vision, normalization and the
 trained decision head retain their original precision.
@@ -93,11 +95,11 @@ On all 231 public JevBench cases, CLEF-HRX scored **202/231 (87.4%)**, compared
 with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
 completed with valid probabilities and no input truncation.
 
-On AMD Strix Halo, BF16 resident latency was **0.66 s median / 4.42 s p95**, with
-**525 input tokens/s (43.5 decisions/minute)** throughput. This single sequential
+On AMD Strix Halo, BF16 resident latency was **0.65 s median / 4.53 s p95**, with
+**518 input tokens/s (43.0 decisions/minute)** throughput. This single sequential
 run used a populated compiler cache; the first request including model loading
 is excluded from these speed figures.
-[Results, measurement details and reproduction instructions](docs/evaluation.md#kernel-source-fingerprint-cache).
+[Results, measurement details and reproduction instructions](docs/evaluation.md#pipelined-narrow-bf16-projections).
 
 ## Library
 

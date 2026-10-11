@@ -97,10 +97,13 @@ impl Engine {
         if self.reference_kernels.gemm {
             return self.linear_impl::<false>(x, w, bias);
         }
+        // The narrow K/V shape benefits only beyond the short-input region.
+        // Paired replay/rotating sweeps cover the selected 257–4032-row range.
+        let narrow_kv = x.cols == 5120 && w.rows == 1024 && (257..=4032).contains(&x.rows);
         if x.rows >= 128
             && (1024..=65536).contains(&x.cols)
             && x.cols.is_multiple_of(64)
-            && (4096..=65536).contains(&w.rows)
+            && ((4096..=65536).contains(&w.rows) || narrow_kv)
             && w.rows.is_multiple_of(256)
         {
             return self.linear_pipelined(x, w, bias);
@@ -419,6 +422,8 @@ mod tests {
             (129, 256, 768),
             (257, 320, 512),
             (1153, 64, 512),
+            (257, 5120, 1024),
+            (513, 5120, 1024),
         ] {
             let values = |len, factor| {
                 (0..len)

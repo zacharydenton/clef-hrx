@@ -15,9 +15,11 @@ reference tests; do not loosen their tolerances to qualify a candidate. The
 speed/accuracy modes, gate kernel optimizations against the qualified baseline
 of the same precision mode and report the difference from BF16 separately.
 
-The latest qualified full runs measure **976.45 tok/s INT4** and **524.73 tok/s
-BF16**, with every output unchanged. See [adaptive MLP tiles and reproduction
-instructions](evaluation.md#adaptive-int4-mlp-tiles). The 1,000 tok/s
+The latest qualified full runs measure **977.68 tok/s INT4** and **518.25 tok/s
+BF16**, with every output unchanged. See [pipelined K/V projections and reproduction
+instructions](evaluation.md#pipelined-narrow-bf16-projections). These separate runs
+do not establish an overall speedup: the prior measurements were 976.45 and
+524.73 tok/s respectively. The 1,000 tok/s
 target remains unmet.
 
 ## Criterion coverage
@@ -31,7 +33,8 @@ target remains unmet.
 | `workload` / `workload_attention` | Causal 24-query/4-KV-head attention, 256 dimensions; 16 through 4,032 tokens | Completed graph, including GPU value transpose/padding and the selected attention kernel |
 | `workload` / `paired_swiglu` | MLP width 17,408 at all eleven workload lengths; separate SiLU/multiply versus fused activation, alternating execution order | Completed graph; raw paired batches and 99% bootstrap speedup intervals |
 | `workload` / `paired_packing` | INT4 packing at widths 5,120, 6,144 and 8,192; an external candidate also adds 17,408; exact logical codes and scales | Completed graph with alternating order and paired confidence intervals; default compares two-pass/one-pass LDS, external candidates use the pre-register production baseline |
-| `workload` / `paired_integer_gemm` | Current packed GEMM versus `CLEF_BENCH_INTEGER_SOURCE`, six projection families, repeated and rotating weights, all workload lengths | Alternating-order completed graphs; prepacked identical operands; exact output bits checked before and after timing |
+| `workload` / `paired_integer_gemm` | Original packed GEMM versus `CLEF_BENCH_INTEGER_SOURCE`, eight projection families including K/V and joint head, repeated and rotating weights, all workload lengths | Alternating-order completed graphs; prepacked identical operands; exact output bits checked before and after timing |
+| `workload` / `paired_bf16_gemm` | BF16 GEMM versus `CLEF_BENCH_GEMM_SOURCE`, the same eight projection families at 128 or more rows, repeated and rotating weights | Alternating-order completed graphs; exact output bits before and after timing, combined allocation capped at 1 GiB |
 | `preprocessing` / `kernel_cache_key` (with `bench-internals`) | CPU cache-hit key generation and two map lookups; three real kernel source lengths and a fixed eight-entry configuration | Full-source keys versus content-verified cached SHA-256 fingerprints; no GPU execution |
 | `normalization`, `preprocessing` | Normalization shapes and CPU request processing | Existing suite-specific boundaries |
 | `workload_inference` | Seven representative requests selected by nearest token length from an actual request corpus; exact-input replay and graph rebuilding | Complete `infer` calls, including preparation in rebuild cases |
@@ -274,6 +277,10 @@ nonuniform FP32 input/weight row scales and zero-scale rows. Use that flag with
 The paired JSON records which scale fixture was used.
 `CLEF_BENCH_INTEGER_REFERENCE_SOURCE` replaces the original integer GEMM reference
 with another source file; the runner archives and hashes both sources.
+For `paired_bf16_gemm`, `CLEF_BENCH_GEMM_REFERENCE=auto|wide|reference|pipelined`
+chooses the reference dispatch (`auto` by default). Use `wide` to reproduce the
+older K/V path after a production dispatch change. Both paired GEMM groups
+retain raw timing batches and 99% bootstrap speedup intervals.
 `CLEF_BENCH_LENGTHS=257,384,513,640,769,896` overrides the quick/full row sweep
 in the workload suite with up to 64 comma-separated lengths in 1–4,032.
 Values are sorted and deduplicated. For example:

@@ -641,3 +641,73 @@ python3 scripts/compare_jevbench.py \
 
 The final command returns nonzero below the target even when accuracy passes.
 Use the archived binary/source snapshot for the exact recorded implementation.
+
+## Pipelined narrow BF16 projections
+
+The 5,120→1,024 BF16 projection now uses the existing pipelined GEMM at
+257–4,032 rows. This covers full-attention K/V projections in both BF16 and
+INT4 modes. Shorter inputs and lengths beyond the measured range keep their
+previous dispatch. No projection changes precision.
+
+Paired operator comparisons cover 128, 158, 235, 256, 257, 384, 512, 513, 620,
+768, 1,024, 2,048 and 4,032 rows, with replay and rotating weights. All outputs
+match bits. All measured cases in the selected range improve 1.09–2.67×, with
+every 99% lower bound above 1.0. Short shapes include regressions and are excluded.
+Artifacts: `benches/results/bf16-kv-pipelined-paired` and
+`benches/results/bf16-kv-pipelined-boundaries`.
+
+Full INT4 JevBench preserved every output array and input token count, scoring
+194/231 with all 231 requests strictly valid. It processed 166,394 resident
+tokens in 170.193 seconds: **977.68 input tok/s**, versus 976.45 previously.
+Median/p95 latency was 0.274/2.619 seconds and peak engine allocation 14.278 GiB.
+The 0.13% difference between sequential full runs is not evidence of a reliable
+model-level speedup. Mean GPU time fell from 708.72 to 706.10 ms while preparation
+rose from 29.48 to 31.24 ms. The 1,000 tok/s target remains unmet.
+
+Full BF16 also preserved all 231 output arrays and token counts, scoring
+202/231 with all requests strictly valid. It processed the same 166,394 resident
+tokens in 321.067 seconds: **518.25 input tok/s**, below the earlier 524.73 run.
+Median/p95 latency was 0.653/4.535 seconds and peak engine allocation 47.773 GiB.
+Mean GPU time was 1,362.34 ms and preparation 30.86 ms. These full measurements
+qualify arithmetic and report actual throughput; they do not establish an
+overall speedup from the operator improvement.
+
+The normal binary is `artifacts/throughput-1000/clef-kv-pipelined`, SHA-256
+`eb88b1aa04c026c280426419fa03f28d757a93ad7de2f0261d9c7fb7e4d9ab84`.
+Its `-source.json` hashes all 105 files in
+`artifacts/throughput-1000/kv-pipelined-source`. Records are in
+`tests/results/jevbench-20261011-int4-kv-pipelined`; telemetry is
+`artifacts/throughput-1000/kv-pipelined-int4-eval-telemetry.jsonl`.
+BF16 records use `tests/results/jevbench-20261011-bf16-kv-pipelined` and
+`artifacts/throughput-1000/kv-pipelined-bf16-eval-telemetry.jsonl`.
+Both result directories contain `comparison.json` and `output-equality.json`.
+The INT4/BF16 telemetry has 254/335 samples, respectively; each reports only
+its native evaluation process in KFD when a client is present.
+Timing includes encoding, preparation, compilation, GPU work and readback,
+excluding only the first request including model loading. The compiler cache
+was populated. CPU tests, Clippy and GPU parity with independent sliced operands,
+bias, ragged rows and replay passed.
+
+Reproduce with fresh names, one GPU process at a time:
+
+```sh
+CLEF_BENCH_GEMM_REFERENCE=wide \
+  CLEF_BENCH_GEMM_SOURCE=kernels/gemm_bf16_pipelined.loom \
+  CLEF_BENCH_LENGTHS=128,158,235,256,257,384,512,513,620,768,1024,2048,4032 \
+  python3 scripts/bench_workload.py bf16-kv-pipelined-repro \
+  --filter paired_bf16_gemm/kv_and_head
+cargo test --locked --release --lib pipelined_gemm_parity -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4-kv-pipelined-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-adaptive-gemm \
+  tests/results/jevbench-int4-kv-pipelined-repro --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision bf16 --output tests/results/jevbench-bf16-kv-pipelined-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-bf16-source-fingerprint \
+  tests/results/jevbench-bf16-kv-pipelined-repro
+```
+
+The INT4 comparison returns nonzero below 1,000 tok/s even when accuracy passes.

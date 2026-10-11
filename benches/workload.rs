@@ -410,7 +410,18 @@ fn packing(c: &mut Criterion) {
 }
 /// Both packed-GEMM variants stay resident; timing order alternates each pair.
 fn paired_integer_gemm(c: &mut Criterion) {
-    let Some(path) = std::env::var_os("CLEF_BENCH_INTEGER_SOURCE") else {
+    paired_gemm(c, true);
+}
+fn paired_bf16_gemm(c: &mut Criterion) {
+    paired_gemm(c, false);
+}
+fn paired_gemm(c: &mut Criterion, integer: bool) {
+    let source_key = if integer {
+        "CLEF_BENCH_INTEGER_SOURCE"
+    } else {
+        "CLEF_BENCH_GEMM_SOURCE"
+    };
+    let Some(path) = std::env::var_os(source_key) else {
         return;
     };
     let source = std::fs::read_to_string(path).unwrap();
@@ -422,7 +433,22 @@ fn paired_integer_gemm(c: &mut Criterion) {
         .unwrap_or(8);
     assert!([4, 8].contains(&bits));
     let padded = std::env::var("CLEF_BENCH_INTEGER_PADDED").as_deref() == Ok("1");
-    let mut group = c.benchmark_group("paired_integer_gemm");
+    let group_name = if integer {
+        "paired_integer_gemm"
+    } else {
+        "paired_bf16_gemm"
+    };
+    let bf16_reference = match std::env::var("CLEF_BENCH_GEMM_REFERENCE")
+        .as_deref()
+        .unwrap_or("auto")
+    {
+        "auto" => GemmKernel::Auto,
+        "wide" => GemmKernel::Wide,
+        "reference" => GemmKernel::Reference,
+        "pipelined" => GemmKernel::Pipelined,
+        _ => panic!("CLEF_BENCH_GEMM_REFERENCE must be auto, wide, reference or pipelined"),
+    };
+    let mut group = c.benchmark_group(group_name);
     configure(&mut group);
     for m in lengths() {
         for (role, k, n) in [
@@ -432,7 +458,12 @@ fn paired_integer_gemm(c: &mut Criterion) {
             ("delta_qkv", 5120, 10240),
             ("delta_z", 5120, 6144),
             ("attention_q_gate", 5120, 12288),
+            ("kv_and_head", 5120, 1024),
+            ("joint_head", 1024, 1024),
         ] {
+            if !integer && m < 128 {
+                continue;
+            }
             for (cache, minimum_bytes) in [("replay", 0), ("rotating", 64 << 20)] {
                 let label = format!("{role}_{cache}");
                 let shape = format!("{m}x{k}x{n}");
@@ -444,7 +475,7 @@ fn paired_integer_gemm(c: &mut Criterion) {
                 group.bench_function(BenchmarkId::new(&label, &shape), |b| {
                     let graphs = graphs.get_or_insert_with(|| {
                         assert!(std::env::var("CLEF_BENCH_INTEGER_PREPARE").as_deref() != Ok("1"), "paired integer GEMM uses prepacked operands; measure preparation in workload_gemm");
-                        let mut reference = GemmBenchmark::packed_integer(
+                        let mut reference = if integer { GemmBenchmark::packed_integer(
                             m,
                             k,
                             n,
@@ -452,9 +483,10 @@ fn paired_integer_gemm(c: &mut Criterion) {
                             bits,
                             padded,
                             minimum_bytes,
-                        )
-                        .unwrap();
-                        let mut candidate = GemmBenchmark::packed_integer(
+                        ) } else {
+                            GemmBenchmark::with_working_set(m, k, n, bf16_reference.clone(), minimum_bytes)
+                        }.unwrap();
+                        let mut candidate = if integer { GemmBenchmark::packed_integer(
                             m,
                             k,
                             n,
@@ -462,8 +494,9 @@ fn paired_integer_gemm(c: &mut Criterion) {
                             bits,
                             padded,
                             minimum_bytes,
-                        )
-                        .unwrap();
+                        ) } else {
+                            GemmBenchmark::with_working_set(m, k, n, GemmKernel::Source(source.clone()), minimum_bytes)
+                        }.unwrap();
                         assert!(
                             reference.allocated_bytes() + candidate.allocated_bytes() <= 1 << 30,
                             "paired GEMM exceeds 1 GiB allocation budget"
@@ -479,7 +512,7 @@ fn paired_integer_gemm(c: &mut Criterion) {
                                 .map(|x| x.to_bits())
                                 .collect::<Vec<_>>(),
                             expected,
-                            "packed GEMM changed output"
+                            "candidate GEMM changed output"
                         );
                         [reference, candidate]
                     });
@@ -516,7 +549,8 @@ fn paired_integer_gemm(c: &mut Criterion) {
                             "GEMM replay changed output"
                         );
                     }
-                    let root = std::path::PathBuf::from("target/criterion/paired_integer_gemm")
+                    let root = std::path::PathBuf::from("target/criterion")
+                        .join(group_name)
                         .join(&label)
                         .join(&shape);
                     std::fs::create_dir_all(&root).unwrap();
@@ -526,12 +560,12 @@ fn paired_integer_gemm(c: &mut Criterion) {
                         &[]
                     };
                     std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
-                        "rows": m, "k": k, "columns": n, "bits": bits,
-                        "padded": padded, "minimum_weight_bytes_per_variant": minimum_bytes,
-                        "varying_row_scales": std::env::var("CLEF_BENCH_INTEGER_ROW_SCALES").as_deref() == Ok("1"),
+                        "rows": m, "k": k, "columns": n, "bits": if integer { bits } else { 16 },
+                        "padded": integer && padded, "minimum_weight_bytes_per_variant": minimum_bytes,
+                        "varying_row_scales": integer && std::env::var("CLEF_BENCH_INTEGER_ROW_SCALES").as_deref() == Ok("1"),
                         "bitwise_identical": true, "sample_size": 20,
                         "samples": samples, "measurement_samples": measured,
-                        "note": "Prepacked operands; two resident variants with separate identical weight allocations; preparation excluded.",
+                        "note": "Two resident variants with separate identical weight allocations; upload, compilation and integer packing excluded.",
                     })).unwrap()).unwrap();
                 }
             }
@@ -546,6 +580,7 @@ criterion_group!(
     attention,
     swiglu,
     packing,
-    paired_integer_gemm
+    paired_integer_gemm,
+    paired_bf16_gemm
 );
 criterion_main!(workload);
