@@ -7,6 +7,7 @@ mod embedding;
 pub mod encoding;
 mod gpu;
 mod head;
+mod kernel_cache;
 pub mod media;
 mod memory;
 pub mod model;

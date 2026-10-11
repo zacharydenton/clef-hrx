@@ -9,6 +9,57 @@ pub(crate) mod quantized;
 pub use activation::SwiGluBenchmark;
 pub use quantized::PackingBenchmark;
 
+/// CPU-only cache-hit work with the same source/configuration in both maps.
+pub struct KernelCacheKeyBenchmark {
+    source: String,
+    spec: hrx::loom::Specialization,
+    fingerprints: crate::kernel_cache::SourceFingerprints,
+    legacy: std::collections::HashMap<String, usize>,
+    compact: std::collections::HashMap<crate::kernel_cache::KernelKey, usize>,
+}
+impl KernelCacheKeyBenchmark {
+    pub fn new(source: &str) -> Self {
+        let source = source.to_owned();
+        let mut spec = hrx::loom::Specialization::new("clef_op");
+        for (name, value) in [
+            ("work", 620 * 5120),
+            ("groups", 620 * 5120 / 64),
+            ("out_len", 620 * 5120),
+            ("out_dtype", 1),
+            ("a_len", 620 * 5120),
+            ("a_dtype", 1),
+            ("b_len", 620 * 5120),
+            ("b_dtype", 1),
+        ] {
+            spec.set_config(format!("clef.{name}"), value.to_string());
+        }
+        let mut fingerprints = crate::kernel_cache::SourceFingerprints::default();
+        let compact_key = fingerprints.key(&source, &spec);
+        let legacy_key = format!("{}{:?}", source, spec.configuration());
+        Self {
+            source,
+            spec,
+            fingerprints,
+            legacy: [(legacy_key, 7)].into(),
+            compact: [(compact_key, 7)].into(),
+        }
+    }
+    pub fn legacy(&self) -> (bool, Option<usize>) {
+        let key = format!("{}{:?}", self.source, self.spec.configuration());
+        (
+            self.legacy.contains_key(std::hint::black_box(&key)),
+            self.legacy.get(std::hint::black_box(&key)).copied(),
+        )
+    }
+    pub fn fingerprinted(&mut self) -> (bool, Option<usize>) {
+        let key = self.fingerprints.key(&self.source, &self.spec);
+        (
+            self.compact.contains_key(std::hint::black_box(&key)),
+            self.compact.get(std::hint::black_box(&key)).copied(),
+        )
+    }
+}
+
 /// Development-only switches for paired full-model comparisons.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReferenceKernels {
@@ -48,7 +99,8 @@ impl GemmBenchmark {
         self.engine.allocated_bytes()
     }
 
-    /// Experimental packed integer dispatch on exactly representable synthetic data.
+    /// Experimental packed integer dispatch; uniform scales are exactly representable.
+    /// Paired comparisons can vary the two operands' row scales independently.
     /// Packing is outside timing; full-model qualification must include its cost.
     pub fn packed_integer(
         m: usize,
@@ -80,6 +132,21 @@ impl GemmBenchmark {
         let per_word = 32 / bits;
         let row_bytes = stride * bits / 8;
         let scale = 1.0 / (1usize << (bits - 1)) as f32;
+        let varying_scales = std::env::var("CLEF_BENCH_INTEGER_ROW_SCALES").as_deref() == Ok("1");
+        let scales = |rows, factor, zero_period| {
+            (0..rows)
+                .map(|row| {
+                    if !varying_scales {
+                        scale
+                    } else if row % zero_period == 0 {
+                        0.0
+                    } else {
+                        ((row * factor % 31 + 1) as f32 / 257.0)
+                            * 2.0f32.powi(-((row * factor % 5) as i32 * 4))
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
         let values = |rows| {
             let mut bytes = vec![0u8; rows * row_bytes];
             let mask = ((1u16 << bits) - 1) as u8;
@@ -93,8 +160,8 @@ impl GemmBenchmark {
             bytes
         };
         let x = engine.input(m, stride / per_word, DType::U32, &values(m))?;
-        let xs = engine.input(1, m, DType::F32, bytemuck::cast_slice(&vec![scale; m]))?;
-        let ws = engine.input(1, n, DType::F32, bytemuck::cast_slice(&vec![scale; n]))?;
+        let xs = engine.input(1, m, DType::F32, bytemuck::cast_slice(&scales(m, 3, 17)))?;
+        let ws = engine.input(1, n, DType::F32, bytemuck::cast_slice(&scales(n, 7, 23)))?;
         let copies = minimum_weight_bytes.div_ceil(n * row_bytes).max(1);
         let mut graphs = Vec::with_capacity(copies);
         let mut first_output = None;

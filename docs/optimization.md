@@ -15,6 +15,11 @@ reference tests; do not loosen their tolerances to qualify a candidate. The
 speed/accuracy modes, gate kernel optimizations against the qualified baseline
 of the same precision mode and report the difference from BF16 separately.
 
+The latest qualified full runs measure **906.55 tok/s INT4** and **524.73 tok/s
+BF16**, with every output unchanged. See [CPU cache work and complete reproduction
+instructions](evaluation.md#kernel-source-fingerprint-cache). The 1,000 tok/s
+target remains unmet.
+
 ## Criterion coverage
 
 | Suite | Coverage | Timing boundary |
@@ -27,6 +32,7 @@ of the same precision mode and report the difference from BF16 separately.
 | `workload` / `paired_swiglu` | MLP width 17,408 at all eleven workload lengths; separate SiLU/multiply versus fused activation, alternating execution order | Completed graph; raw paired batches and 99% bootstrap speedup intervals |
 | `workload` / `paired_packing` | INT4 packing at widths 5,120, 6,144 and 8,192; two-pass reference versus one-pass FP32 transform; exact logical codes and scales | Completed graph with alternating order and paired confidence intervals |
 | `workload` / `paired_integer_gemm` | Current packed GEMM versus `CLEF_BENCH_INTEGER_SOURCE`, six projection families, repeated and rotating weights, all workload lengths | Alternating-order completed graphs; prepacked identical operands; exact output bits checked before and after timing |
+| `preprocessing` / `kernel_cache_key` (with `bench-internals`) | CPU cache-hit key generation and two map lookups; three real kernel source lengths and a fixed eight-entry configuration | Full-source keys versus content-verified cached SHA-256 fingerprints; no GPU execution |
 | `normalization`, `preprocessing` | Normalization shapes and CPU request processing | Existing suite-specific boundaries |
 | `workload_inference` | Seven representative requests selected by nearest token length from an actual request corpus; exact-input replay and graph rebuilding | Complete `infer` calls, including preparation in rebuild cases |
 
@@ -203,7 +209,11 @@ For alternating-order integer comparisons, select `paired_integer_gemm` and set
 with separate identical operands, checks exact output bits, and records raw
 paired batches and 99% bootstrap intervals. Rotating cases allocate at least
 64 MiB of weights per variant; combined engine allocation is capped at 1 GiB.
-This group times prepacked operands only. For example:
+This group times prepacked operands only. Set
+`CLEF_BENCH_INTEGER_ROW_SCALES=1` for an additional correctness sweep with distinct,
+nonuniform FP32 input/weight row scales and zero-scale rows. Use that flag with
+`paired_integer_gemm`; the regular raw-integer/BF16 oracle assumes uniform scales.
+The paired JSON records which scale fixture was used. For example:
 
 ```sh
 CLEF_BENCH_INTEGER_SOURCE=artifacts/throughput-1000/gemm-integer-epilogue-unroll.loom \

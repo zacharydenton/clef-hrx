@@ -404,3 +404,66 @@ An intervening sequential old-binary control was interrupted by the restart at
 `interrupted.json` remain in `jevbench-20261011-int4-vector-control`. The earlier
 two-model attempt also produced no timing result: its second loader failed the
 available-memory preflight. Neither incomplete attempt is used as a speed result.
+
+## Kernel-source fingerprint cache
+
+Kernel dispatch previously copied and hashed the full Loom source with every
+cache lookup. The engine now memoizes a SHA-256 fingerprint, verifies source
+content on memo hits, and keys compiled kernels by fingerprint, export symbol
+and configuration. The bounded memo safely handles reused source allocations;
+eviction does not remove compiled kernels. This changes CPU preparation only.
+
+Both complete sequential JevBench runs preserved all 231 logit and probability
+arrays against their respective qualified baselines:
+
+| Mode | Correct / strict valid | Resident input tok/s | Resident seconds | Median / p95 seconds | Peak engine GiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BF16 default | 202 / 231 | 524.73 | 317.107 | 0.658 / 4.416 | 47.773 |
+| INT4 eligible backbone | 194 / 231 | 906.55 | 183.546 | 0.294 / 2.799 | 14.508 |
+
+Each rate includes encoding, preparation, compilation, GPU execution and readback
+for 166,394 resident tokens, excluding only the first request including model
+loading. The compiler cache was populated. INT4 mean preparation fell from
+60.57 to 30.74 ms against the preceding 883.33 tok/s run; mean GPU execution
+changed from 755.70 to 764.58 ms. The measured end-to-end rate rose 2.6%.
+These are sequential runs, not a paired causal estimate. The older BF16
+411.94 tok/s result also differs in kernel selection and host load, so its
+27.4% rate difference cannot be assigned to this CPU change.
+
+Results live in `tests/results/jevbench-20261011-{int4,bf16}-source-fingerprint`,
+with `comparison.json` and `output-equality.json`. The INT4 `throughput-gate.json`
+explicitly fails the still-unmet **1,000 tok/s** target while passing accuracy.
+The archived normal binary is `artifacts/throughput-1000/clef-source-fingerprint`,
+SHA-256 `0ef451de8cc33806b80b8097df8b8aa4ac6bf011c9fcb314ba8dcf9f4c3e7e67`.
+Its `-source.json` hashes all 102 files in
+`benches/results/source-fingerprint-cpu/source`.
+
+The CPU Criterion run `source-fingerprint-cpu` measures warm key generation and
+two map lookups using three real source lengths and a fixed eight-entry
+configuration. Mean time changed from 1,550 to 450 ns for pointwise, 9,713 to
+736 ns for integer GEMM, and 4,694 to 514 ns for DeltaNet. These are CPU
+microbenchmarks, not model throughput. Source-allocation reuse and export/config
+identity tests, the CPU test suite and all-target/all-feature Clippy passed.
+
+Reproduce with fresh artifact names, running GPU jobs sequentially:
+
+```sh
+python3 scripts/bench_workload.py source-fingerprint-cpu-repro \
+  --suite preprocessing --filter kernel_cache_key
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-fingerprint-int4-repro
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --prepared tests/results/jevbench-fingerprint-int4-repro \
+  --output tests/results/jevbench-fingerprint-bf16-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-delta-vector8-postboot \
+  tests/results/jevbench-fingerprint-int4-repro --min-tps 1000
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-bf16-swiglu \
+  tests/results/jevbench-fingerprint-bf16-repro
+```
+
+The INT4 comparison returns nonzero when throughput is below the target, even
+when accuracy passes. Use the archived binary or source snapshot to reproduce
+the exact measured implementation after subsequent changes.

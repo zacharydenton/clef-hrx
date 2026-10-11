@@ -500,6 +500,7 @@ fn paired_integer_gemm(c: &mut Criterion) {
                     std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
                         "rows": m, "k": k, "columns": n, "bits": bits,
                         "padded": padded, "minimum_weight_bytes_per_variant": minimum_bytes,
+                        "varying_row_scales": std::env::var("CLEF_BENCH_INTEGER_ROW_SCALES").as_deref() == Ok("1"),
                         "bitwise_identical": true, "sample_size": 20,
                         "samples": samples, "measurement_samples": measured,
                         "note": "Prepacked operands; two resident variants with separate identical weight allocations; preparation excluded.",

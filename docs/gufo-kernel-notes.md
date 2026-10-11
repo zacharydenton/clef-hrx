@@ -98,6 +98,15 @@ cases matched bits, but all twelve paired MLP cases slowed down: speedups ranged
 from 0.641× to 0.993× (`int4-m256-k64-paired-mlp`). The extra staging iterations
 did not pay off; the production K block remains unchanged.
 
+Two 512-thread integer GEMM tiles also passed all 36 paired smoke cases. The
+M256/N256 tile used 190 VGPRs and 40 KiB LDS; its twelve paired MLP speedups ranged
+from 0.737× to 1.037× (`int4-n256-paired-mlp`). Only the longest down projection
+improved. The M512/N128 tile used 194 VGPRs and 50 KiB LDS and slowed every MLP
+case, with speedups from 0.482× to 0.966× (`int4-m512-paired-mlp`). Neither tile
+was selected. Both retained the per-wave accumulator count while increasing the
+workgroup from eight to sixteen waves; more operand reuse did not give a general
+speedup.
+
 Vectorizing the eight independent DeltaNet value channels keeps each channel's
 FP32 recurrence order while allowing the compiler to schedule reductions together.
 `delta-vector8-paired` and `delta-vector8-long-paired` cover eight lengths from
@@ -107,6 +116,25 @@ checks nonzero input slices, distinct gates, varying decay/bias, selection
 boundaries and replay. Full BF16 and INT4 qualification preserved every output;
 a fresh INT4 run after a host restart measured 883.33 tok/s. The selected range
 is 128–4,032 tokens. See [measurement conditions and reproduction](evaluation.md#vectorized-deltanet-qualification).
+
+Gufo's `src/models/minimax_h3/dense.hip` also suggested swapping WMMA operands
+and packing the transposed accumulator directly into BF16 output. The prototype
+preserved every output bit in 36 uniform-scale and 36 varied-scale cases, including
+zero scales. Paired MLP timings with a rolled epilogue ranged from 0.995× to
+1.010× (`int4-direct-store-paired-mlp`). Unrolling the direct epilogue passed the
+36 varied-scale cases but produced 0.980–1.017× speedups, including short down
+projection regressions (`int4-direct-store-unroll-paired-mlp`). Neither version
+was selected. The source inspection used the same pinned Gufo revision above.
+
+A second Gufo-inspired prototype loaded WMMA operands directly from global
+memory and refilled registers after their last use, retaining our row-major
+packed layout. It passed all 36 varied-scale correctness cases
+(`int4-global-scales-smoke`). It reduced the compiler's register count from 200
+to 168 VGPRs and LDS from 30 KiB to zero, without spills. Nevertheless, all twelve
+paired MLP cases were much slower: candidate speedups were only 0.079–0.255×,
+with every 99% upper bound below 1.0 (`int4-global-paired-mlp`). It was rejected.
+The results do not isolate the cause; Gufo's operand layout and memory access
+pattern differ, so removing staging alone does not reproduce its performance.
 
 ## Hosted comparison
 

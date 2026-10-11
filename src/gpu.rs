@@ -1,6 +1,9 @@
 //! HRX graph execution. Tensor leases govern scratch reuse while
 //! byte-range access declarations order reuse inside a recorded graph.
-use crate::Result;
+use crate::{
+    Result,
+    kernel_cache::{KernelKey, SourceFingerprints},
+};
 use anyhow::{Context, ensure};
 use hrx::{
     Buffer, Constants, GraphExec, Kernel, Stream,
@@ -99,7 +102,8 @@ pub(crate) struct Engine {
     compiler: Compiler,
     compile_reports: Option<std::path::PathBuf>,
     allocations: Vec<Allocation>,
-    kernels: HashMap<String, CompiledKernel>,
+    kernels: HashMap<KernelKey, CompiledKernel>,
+    source_fingerprints: SourceFingerprints,
     commands: Vec<Command>,
     pub weights: HashMap<String, Tensor>,
     pub embedding_rows: HashMap<String, crate::embedding::EmbeddingRows>,
@@ -195,6 +199,7 @@ impl Engine {
             compile_reports,
             allocations: Vec::new(),
             kernels: HashMap::new(),
+            source_fingerprints: SourceFingerprints::default(),
             commands: Vec::new(),
             weights: HashMap::new(),
             embedding_rows: HashMap::new(),
@@ -358,7 +363,7 @@ impl Engine {
         inputs: &[&Tensor],
         output: &Tensor,
     ) -> Result<()> {
-        let key = format!("{}{:?}", source, spec.configuration());
+        let key = self.source_fingerprints.key(source, &spec);
         if !self.kernels.contains_key(&key) {
             if self.compile_reports.is_some() {
                 spec.set_report(hrx::loom::ReportMode::Details);
@@ -369,7 +374,7 @@ impl Engine {
                 .compile(&spec)
                 .context("compiling CLEF kernel")?;
             if let Some(directory) = &self.compile_reports {
-                let identity = format!("{:x}", Sha256::digest(key.as_bytes()));
+                let identity = format!("{:x}", Sha256::digest(format!("{key:?}").as_bytes()));
                 let report = serde_json::json!({
                     "source_sha256":format!("{:x}", Sha256::digest(source.as_bytes())),
                     "configuration":spec.configuration(),

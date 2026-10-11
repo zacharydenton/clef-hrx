@@ -67,16 +67,17 @@ BF16 is the default. Normal builds also support explicit INT4 modes:
 
 | Mode | Full JevBench accuracy | Resident input tok/s |
 | --- | ---: | ---: |
-| BF16 | 202/231 (87.4%) | 412 |
+| BF16 | 202/231 (87.4%) | 525 |
 | INT4 MLP only | 199/231 (86.1%) | 625 |
-| INT4 eligible backbone projections | 194/231 (84.0%) | 883 |
+| INT4 eligible backbone projections | 194/231 (84.0%) | 907 |
 
 INT4 trades accuracy for speed; it is never selected automatically. These are
 archived full-suite measurements of the respective kernel configurations. The
-BF16 and broader INT4 results include fused SwiGLU; broader INT4 also uses
-single-pass packing and vectorized DeltaNet. The MLP-only result is from an earlier build. Broader INT4
+BF16 and broader INT4 results include fused SwiGLU, vectorized DeltaNet and
+cached kernel-source fingerprints; broader INT4 also uses single-pass packing.
+The MLP-only result is from an earlier build. Broader INT4
 uses 14.51 GiB peak engine allocation and preserves all outputs of its previous
-run. See [qualification and reproduction](docs/evaluation.md#vectorized-deltanet-qualification),
+run. See [qualification and reproduction](docs/evaluation.md#kernel-source-fingerprint-cache),
 [precision details](docs/usage.md#precision)
 and [recorded experiments](docs/optimization.md). Vision, normalization and the
 trained decision head retain their original precision.
@@ -91,11 +92,11 @@ On all 231 public JevBench cases, CLEF-HRX scored **202/231 (87.4%)**, compared
 with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
 completed with valid probabilities and no input truncation.
 
-On AMD Strix Halo, resident latency was **0.90 s median / 5.47 s p95**, with
-**412 input tokens/s (34.2 decisions/minute)** throughput. Another GPU application
-was present and the compiler cache was populated during this single sequential
-run; model loading is excluded from these speed figures.
-[Results, measurement details and reproduction instructions](docs/evaluation.md#fused-swiglu).
+On AMD Strix Halo, BF16 resident latency was **0.66 s median / 4.42 s p95**, with
+**525 input tokens/s (43.5 decisions/minute)** throughput. This single sequential
+run used a populated compiler cache; the first request including model loading
+is excluded from these speed figures.
+[Results, measurement details and reproduction instructions](docs/evaluation.md#kernel-source-fingerprint-cache).
 
 ## Library
 

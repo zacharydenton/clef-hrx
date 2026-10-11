@@ -6,6 +6,44 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use std::hint::black_box;
 
 fn benches(c: &mut Criterion) {
+    #[cfg(feature = "bench-internals")]
+    {
+        use clef_hrx::benchmarking::KernelCacheKeyBenchmark;
+        let mut group = c.benchmark_group("kernel_cache_key");
+        group
+            .sample_size(50)
+            .warm_up_time(std::time::Duration::from_millis(250))
+            .measurement_time(std::time::Duration::from_secs(1))
+            .confidence_level(0.99);
+        for (name, source) in [
+            (
+                "pointwise",
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/addf.loom")
+                ),
+            ),
+            ("integer", include_str!("../kernels/gemm_integer.loom")),
+            (
+                "delta",
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/delta_persistent_vector.loom")
+                ),
+            ),
+        ] {
+            let mut cache = KernelCacheKeyBenchmark::new(source);
+            assert_eq!(cache.legacy(), (true, Some(7)));
+            assert_eq!(cache.fingerprinted(), (true, Some(7)));
+            group.bench_function(BenchmarkId::new("legacy", name), |b| {
+                b.iter(|| black_box(cache.legacy()))
+            });
+            group.bench_function(BenchmarkId::new("fingerprint", name), |b| {
+                b.iter(|| black_box(cache.fingerprinted()))
+            });
+        }
+        group.finish();
+    }
     let request: serde_json::Value =
         serde_json::from_str(include_str!("../examples/invoice.json")).unwrap();
     c.bench_function("canonical_json/invoice", |b| {
