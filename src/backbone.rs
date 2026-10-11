@@ -524,8 +524,7 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
 fn mlp(e: &mut Engine, x: &Tensor, prefix: &str) -> Result<Tensor> {
     let gate = e.project(x, &format!("{prefix}.gate_proj"), false)?;
     let up = e.project(x, &format!("{prefix}.up_proj"), false)?;
-    let gate = e.swiglu(&gate, &up)?;
-    e.project(&gate, &format!("{prefix}.down_proj"), false)
+    e.project_swiglu(&gate, &up, &format!("{prefix}.down_proj"))
 }
 
 fn mlp_chunked(e: &mut Engine, x: &Tensor, prefix: &str, chunk: usize) -> Result<Tensor> {

@@ -6,8 +6,8 @@
 // Keep the pair sums/differences and final add/subtract ordering. Do not replace
 // this transform with an algebraically equivalent butterfly with other rounding.
 // Entirely padded waves participate with zeros, including the row-max reduction.
-template.decl @clef.register_pack(%tokens: index, %h: buffer, %q: buffer, %stride: index, %bits: index, %width: index)
-template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %q: buffer, %stride: index, %bits: index, %width: index) {
+template.decl @clef.register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1)
+template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1) {
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
@@ -44,6 +44,10 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %q:
   %out_words = index.div %stride, %packed : index
   %hg = buffer.assume.memory_space<global> %h : buffer
   %qg = buffer.assume.memory_space<global> %q : buffer
+  %ug = buffer.assume.memory_space<global> %up : buffer
+  %uv = buffer.view %ug[%off0] : buffer -> view<[%tokens_b]x[%width]xbf16>
+  %fone = scalar.constant 1.0 : f32
+  %one8 = vector.splat %fone : vector<8xf32>
   %hv = buffer.view %hg[%off0] : buffer -> view<[%tokens_b]x[%width]xbf16>
   %qv = buffer.view %qg[%off0] : buffer -> view<[%tokens_b]x[%out_words]xi32>
   %scale_elements = index.mul %tokens_b, %out_words : index
@@ -74,7 +78,24 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %q:
       %tile_col = index.assume %tile_col0 [le(%tile_col0, %last_col), mul(%tile_col0, 8)] : index
       %tile_h = vector.load %hv[%row, %tile_col] : view<[%tokens_b]x[%width]xbf16> -> vector<8xbf16>
       %tile_f = vector.extf %tile_h : vector<8xbf16> to vector<8xf32>
-      scf.yield %tile_f : vector<8xf32>
+      %activated = scf.if %fused -> (vector<8xf32>) {
+        %up_h = vector.load %uv[%row, %tile_col] : view<[%tokens_b]x[%width]xbf16> -> vector<8xbf16>
+        %up_f = vector.extf %up_h : vector<8xbf16> to vector<8xf32>
+        %gate_neg = vector.negf %tile_f : vector<8xf32>
+        %gate_exp = vector.expf<afn> %gate_neg : vector<8xf32>
+        %gate_den = vector.addf %one8, %gate_exp : vector<8xf32>
+        %gate_act = vector.divf %tile_f, %gate_den : vector<8xf32>
+        // Preserve both BF16 materializations in SiLU -> multiply -> pack.
+        %gate_round = vector.fptrunc %gate_act : vector<8xf32> to vector<8xbf16>
+        %gate_restore = vector.extf %gate_round : vector<8xbf16> to vector<8xf32>
+        %product = vector.mulf %gate_restore, %up_f : vector<8xf32>
+        %product_round = vector.fptrunc %product : vector<8xf32> to vector<8xbf16>
+        %product_restore = vector.extf %product_round : vector<8xbf16> to vector<8xf32>
+        scf.yield %product_restore : vector<8xf32>
+      } else {
+        scf.yield %tile_f : vector<8xf32>
+      }
+      scf.yield %activated : vector<8xf32>
     } else {
       scf.yield %zero8 : vector<8xf32>
     }
@@ -246,7 +267,8 @@ kernel.def target(@pack_target4) export("h3_prepare_plain_tiled_i4") @h3_prepare
   %stride = config.get @h3.prepare_plain_tiled_i4.out_stride : index
   %bits = index.constant 4 : index
   %width = config.get @h3.prepare_plain_tiled_i4.width : index
-  template.apply<@clef.register_pack>(%tokens, %h, %q, %stride, %bits, %width) : (index, buffer, buffer, index, index, index)
+  %fused = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused) : (index, buffer, buffer, buffer, index, index, index, i1)
   kernel.return
 }
 amdgpu.target<gfx11-generic> @pack_target8 {subgroup_size = 32}
@@ -261,6 +283,35 @@ kernel.def target(@pack_target8) export("h3_prepare_plain_tiled_i8") @h3_prepare
   %stride = config.get @h3.prepare_plain_tiled_i8.out_stride : index
   %bits = index.constant 8 : index
   %width = config.get @h3.prepare_plain_tiled_i8.width : index
-  template.apply<@clef.register_pack>(%tokens, %h, %q, %stride, %bits, %width) : (index, buffer, buffer, index, index, index)
+  %fused = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused) : (index, buffer, buffer, buffer, index, index, index, i1)
+  kernel.return
+}
+
+// Fusion preserves the BF16 rounding after SiLU and after multiplication.
+kernel.def target(@pack_target4) export("h3_prepare_swiglu_i4") @h3_prepare_swiglu_i4(%tokens: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%tokens, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%tokens: index, %h: buffer, %up: buffer, %q: buffer) {
+  %stride = config.get @h3.prepare_plain_tiled_i4.out_stride : index
+  %bits = index.constant 4 : index
+  %width = config.get @h3.prepare_plain_tiled_i4.width : index
+  %fused = scalar.constant true : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused) : (index, buffer, buffer, buffer, index, index, index, i1)
+  kernel.return
+}
+
+// Fusion preserves the BF16 rounding after SiLU and after multiplication.
+kernel.def target(@pack_target8) export("h3_prepare_swiglu_i8") @h3_prepare_swiglu_i8(%tokens: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%tokens, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%tokens: index, %h: buffer, %up: buffer, %q: buffer) {
+  %stride = config.get @h3.prepare_plain_tiled_i8.out_stride : index
+  %bits = index.constant 8 : index
+  %width = config.get @h3.prepare_plain_tiled_i8.width : index
+  %fused = scalar.constant true : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused) : (index, buffer, buffer, buffer, index, index, index, i1)
   kernel.return
 }

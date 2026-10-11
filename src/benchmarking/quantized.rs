@@ -38,22 +38,47 @@ impl PackingBenchmark {
             .ok()
             .map(std::fs::read_to_string)
             .transpose()?;
+        let fused = std::env::var("CLEF_BENCH_PACKING_SWIGLU").as_deref() == Ok("1");
+        ensure!(
+            !fused || candidate_source.is_some(),
+            "fused packing requires a candidate source"
+        );
+        let up = if fused {
+            let values: Vec<_> = (0..rows * width)
+                .map(|i| half::bf16::from_f32(((i * 29 % 997) as f32 - 498.) / 32.))
+                .collect();
+            Some(engine.input(rows, width, DType::Bf16, bytemuck::cast_slice(&values))?)
+        } else {
+            None
+        };
+        let activated = if let Some(up) = &up {
+            engine.swiglu(&input, up)?
+        } else {
+            input.clone()
+        };
         // Keep the pre-register production baseline reproducible after selection.
         let reference = crate::quantized::prepare_with_source(
             &mut engine,
-            &input,
+            &activated,
             bits,
             stride,
-            if candidate_source.is_some() && width <= 6144 {
+            if fused {
+                include_str!("../../kernels/prepare_integer_register.loom")
+            } else if candidate_source.is_some() && width <= 6144 {
                 include_str!("../../kernels/prepare_integer_single.loom")
             } else {
                 include_str!("../../kernels/prepare_integer.loom")
             },
         )?;
         let reference_graph = engine.finish()?;
-        let candidate = crate::quantized::prepare_with_source(
+        let inputs = if let Some(up) = &up {
+            vec![&input, up]
+        } else {
+            vec![&input]
+        };
+        let candidate = crate::quantized::prepare_with_inputs(
             &mut engine,
-            &input,
+            &inputs,
             bits,
             stride,
             candidate_source

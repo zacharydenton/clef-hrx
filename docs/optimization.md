@@ -15,9 +15,9 @@ reference tests; do not loosen their tolerances to qualify a candidate. The
 speed/accuracy modes, gate kernel optimizations against the qualified baseline
 of the same precision mode and report the difference from BF16 separately.
 
-The latest qualified full runs measure **943.58 tok/s INT4** and **524.73 tok/s
-BF16**, with every output unchanged. See [register packing and reproduction
-instructions](evaluation.md#register-based-integer-packing). The 1,000 tok/s
+The latest qualified full runs measure **967.12 tok/s INT4** and **524.73 tok/s
+BF16**, with every output unchanged. See [fused packing and reproduction
+instructions](evaluation.md#fused-swiglu-and-packing). The 1,000 tok/s
 target remains unmet.
 
 ## Criterion coverage
@@ -219,6 +219,28 @@ Full INT4 qualification retained all 231 logit/probability arrays and scored
 sequential run. Register packing is selected for the backbone widths 5,120,
 6,144 and 17,408. BF16 does not use this path. See
 [complete measurement conditions](evaluation.md#register-based-integer-packing).
+
+`CLEF_BENCH_PACKING_SWIGLU=1`, together with an external packing source, compares
+the existing SwiGLU plus register-packing graph with a fused graph. Both paths
+include activation and packing in the timed region, and both BF16 rounding
+steps remain explicit. `swiglu-register-packing-paired` preserved exact codes
+and scale bits at all eleven row lengths. The seven lengths from 158 through
+4,032 measured 1.32–1.59× speedups, with every 99% lower bound above 1.0.
+One row regressed to 0.60× and 128 rows to 0.984×, so the native selection keeps
+the separate path below 158 rows. Fusion uses the same register-packing template
+with a distinct export and a second input buffer.
+
+Full INT4 JevBench qualification preserved every logit/probability array and
+scored 194/231 at **967.12 resident input tok/s**. Peak engine allocation fell
+from 14.508 to 14.278 GiB. See [the complete result](evaluation.md#fused-swiglu-and-packing);
+the 1,000 tok/s gate still fails.
+
+```sh
+CLEF_BENCH_PACKING_SWIGLU=1 \
+  CLEF_BENCH_PACKING_SOURCE=kernels/prepare_integer_register.loom \
+  python3 scripts/bench_workload.py swiglu-packing-repro \
+  --filter 'paired_packing/pair/.*x17408'
+```
 
 `CLEF_BENCH_PAD_GEMM=1` tests the h3-hrx approach of adding 64 elements to operand
 row strides when K is a multiple of 1,024. This preserves logical matrix values

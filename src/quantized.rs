@@ -187,24 +187,64 @@ impl Engine {
             }
             (a, scales)
         };
-        let out = self.alloc(x.rows, w.rows, DType::Bf16)?;
+        self.project_prepared(x.rows, w, &a, &scales)
+    }
+
+    pub(crate) fn project_swiglu(
+        &mut self,
+        gate: &Tensor,
+        up: &Tensor,
+        name: &str,
+    ) -> Result<Tensor> {
+        if gate.rows >= 158
+            && gate.cols == 17408
+            && let Some(weight) = self
+                .quantized
+                .weights
+                .get(&format!("{name}.weight"))
+                .cloned()
+        {
+            ensure!(gate.cols == weight.cols, "SwiGLU projection width mismatch");
+            let (codes, scales) = prepare_with_inputs(
+                self,
+                &[gate, up],
+                weight.bits,
+                weight.stride,
+                include_str!("../kernels/prepare_integer_register.loom"),
+            )?;
+            self.quantized.clear_activation();
+            self.project_prepared(gate.rows, &weight, &codes, &scales)
+        } else {
+            let activated = self.swiglu(gate, up)?;
+            self.project(&activated, name, false)
+        }
+    }
+
+    fn project_prepared(
+        &mut self,
+        rows: usize,
+        w: &QuantizedWeight,
+        a: &Tensor,
+        scales: &Tensor,
+    ) -> Result<Tensor> {
+        let out = self.alloc(rows, w.rows, DType::Bf16)?;
         let mut spec = Specialization::new(format!("h3_gemm_i{}_256", w.bits));
         for (key, value) in [
             ("k_size", w.cols),
             ("n_size", w.rows),
             ("k_stride", w.stride),
-            ("m_group", x.rows.div_ceil(256).min(4)),
+            ("m_group", rows.div_ceil(256).min(4)),
         ] {
             spec.set_config(format!("h3.gemm_i{}_256.{key}", w.bits), value.to_string());
         }
         let mut constants = Constants::new();
-        constants.push(x.rows as u32)?;
+        constants.push(rows as u32)?;
         self.emit_special(
             include_str!("../kernels/gemm_integer.loom"),
             spec,
             constants,
-            &[x.rows as u64],
-            &[&a, &w.codes, &w.scales, &scales],
+            &[rows as u64],
+            &[a, &w.codes, &w.scales, scales],
             &out,
         )?;
         Ok(out)
@@ -239,6 +279,18 @@ pub(crate) fn prepare_with_source(
     stride: usize,
     source: &str,
 ) -> Result<(Tensor, Tensor)> {
+    prepare_with_inputs(e, &[x], bits, stride, source)
+}
+
+pub(crate) fn prepare_with_inputs(
+    e: &mut Engine,
+    inputs: &[&Tensor],
+    bits: usize,
+    stride: usize,
+    source: &str,
+) -> Result<(Tensor, Tensor)> {
+    ensure!((1..=2).contains(&inputs.len()), "packing input count");
+    let x = inputs[0];
     ensure!(
         [4, 8].contains(&bits)
             && (256..=32768).contains(&x.cols)
@@ -249,6 +301,12 @@ pub(crate) fn prepare_with_source(
             && stride.is_multiple_of(512 / bits),
         "unsupported rotated integer operand"
     );
+    ensure!(
+        inputs
+            .iter()
+            .all(|t| t.rows == x.rows && t.cols == x.cols && t.dtype == x.dtype),
+        "packing input shape/dtype mismatch"
+    );
     let words = stride / (32 / bits);
     let storage = e.alloc(1, x.rows * (words + 1), DType::U32)?;
     let mut codes = storage.clone();
@@ -258,7 +316,12 @@ pub(crate) fn prepare_with_source(
     scales.offset += x.rows * words * 4;
     scales.cols = x.rows;
     scales.dtype = DType::F32;
-    let mut spec = Specialization::new(format!("h3_prepare_plain_tiled_i{bits}"));
+    let symbol = if inputs.len() == 2 {
+        "h3_prepare_swiglu"
+    } else {
+        "h3_prepare_plain_tiled"
+    };
+    let mut spec = Specialization::new(format!("{symbol}_i{bits}"));
     for (key, value) in [("width", x.cols), ("lanes", 256), ("out_stride", stride)] {
         spec.set_config(
             format!("h3.prepare_plain_tiled_i{bits}.{key}"),
@@ -267,7 +330,7 @@ pub(crate) fn prepare_with_source(
     }
     let mut constants = Constants::new();
     constants.push(x.rows as u32)?;
-    e.emit_special(source, spec, constants, &[x.rows as u64], &[x], &storage)?;
+    e.emit_special(source, spec, constants, &[x.rows as u64], inputs, &storage)?;
     // The returned views lease this storage through their last recorded read.
     // Graph access declarations order later scratch reuse; immutable weights
     // are kept alive by QuantizedProjections rather than pinning every activation.
@@ -585,6 +648,84 @@ mod tests {
                     results.push(runs.remove(0));
                 }
                 assert_eq!(results[0], results[1], "bits={bits}, width={width}");
+                e.reset_plan()?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151; validates fused SwiGLU rounding, slices, exceptional rows and replay"]
+    fn fused_swiglu_packing_matches_reference() -> Result<()> {
+        let context = ModelContext::new(Default::default())?;
+        let mut e = Engine::new(&context)?;
+        let width = 17408;
+        for bits in [4, 8] {
+            for rows in [1, 128, 158, 620] {
+                let gates: Vec<_> = (0..(rows + 2) * width)
+                    .map(|i| {
+                        let col = i % width;
+                        half::bf16::from_f32(match (i / width) % 7 {
+                            0 => 0.0,
+                            1 if col == 259 => f32::NAN,
+                            2 if col == 515 => f32::INFINITY,
+                            3 => half::bf16::MAX.to_f32(),
+                            4 => f32::from_bits(0x0001_0000),
+                            5 => {
+                                if col % 2 == 0 {
+                                    -80.0
+                                } else {
+                                    80.0
+                                }
+                            }
+                            _ => ((i * 17 % 1031) as f32 - 515.0) / 16.0,
+                        })
+                    })
+                    .collect();
+                let ups: Vec<_> = (0..(rows + 3) * width)
+                    .map(|i| half::bf16::from_f32(((i * 29 % 997) as f32 - 498.0) / 32.0))
+                    .collect();
+                let gate = e
+                    .input(rows + 2, width, DType::Bf16, bytemuck::cast_slice(&gates))?
+                    .slice_rows(1, rows);
+                let up = e
+                    .input(rows + 3, width, DType::Bf16, bytemuck::cast_slice(&ups))?
+                    .slice_rows(2, rows);
+                let stride = width + 512 / bits;
+                let mut results = Vec::new();
+                for fused in [false, true] {
+                    let (codes, scales) = if fused {
+                        prepare_with_inputs(
+                            &mut e,
+                            &[&gate, &up],
+                            bits,
+                            stride,
+                            include_str!("../kernels/prepare_integer_register.loom"),
+                        )?
+                    } else {
+                        let activated = e.swiglu(&gate, &up)?;
+                        prepare(&mut e, &activated, bits, stride)?
+                    };
+                    let mut graph = e.finish()?;
+                    for _ in 0..2 {
+                        e.run(&mut graph)?;
+                        let raw: Vec<_> =
+                            e.read_f32(&codes)?.into_iter().map(f32::to_bits).collect();
+                        let logical: Vec<_> = raw
+                            .chunks_exact(codes.cols)
+                            .flat_map(|row| row[..width / (32 / bits)].iter().copied())
+                            .collect();
+                        let scales: Vec<_> =
+                            e.read_f32(&scales)?.into_iter().map(f32::to_bits).collect();
+                        results.push((logical, scales));
+                    }
+                }
+                for actual in &results[1..] {
+                    assert!(
+                        actual == &results[0],
+                        "bits={bits}, rows={rows}: fused packing or replay differs"
+                    );
+                }
                 e.reset_plan()?;
             }
         }

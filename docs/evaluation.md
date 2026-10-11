@@ -521,3 +521,56 @@ python3 scripts/compare_jevbench.py \
 
 The last command returns nonzero below 1,000 tok/s even if accuracy passes.
 Use the archived binary/source snapshot for the exact recorded implementation.
+
+## Fused SwiGLU and packing
+
+For quantized MLP down projections with at least 158 rows, SwiGLU now feeds the
+register-based Hadamard transform directly. The kernel preserves BF16 rounding
+after SiLU and after multiplication, while avoiding the intermediate activation
+buffer. Shorter inputs and BF16 projections retain the separate path.
+
+The complete INT4 JevBench run scored **194/231**, with all 231 requests strictly
+valid and all logit/probability arrays identical to the register-packing baseline.
+It processed 166,394 resident input tokens in **172.051 seconds**, measuring
+**967.12 input tok/s** versus 943.58 previously. Median/p95 resident latency was
+0.276/2.598 seconds. Peak engine allocation fell from 14.508 to **14.278 GiB**.
+The **1,000 tok/s target remains unmet**.
+
+The rate includes encoding, preparation, compilation, GPU execution and readback,
+excluding only the first request including model loading. The compiler cache was
+populated, and full-run telemetry reports only the evaluation PID in KFD. Mean
+GPU time fell from 732.84 to 715.21 ms and mean preparation from 31.08 to 30.02 ms.
+The 2.5% increase compares separate sequential full runs, not paired model timing.
+
+Records are in `tests/results/jevbench-20261011-int4-swiglu-packing`, including
+`comparison.json` with the failed throughput gate and `output-equality.json`.
+Telemetry is `artifacts/throughput-1000/swiglu-packing-eval-telemetry.jsonl`.
+Archived normal binary: `artifacts/throughput-1000/clef-swiglu-packing`, SHA-256
+`239c9c922c61be483b06fad05d9cb04f01c9302c87e4f2d4b8e1f8589fc0e6b7`.
+Its `-source.json` hashes all 103 files in
+`benches/results/swiglu-packing-selected-smoke/source`.
+
+The paired operator experiment preserved exact packed codes and scale bits at
+all eleven lengths. The seven measured lengths from 158 through 4,032 improved
+1.32–1.59×, with all 99% lower bounds above 1.0. Short-length regressions motivated
+the fallback. CPU tests, Clippy, the independent packing oracle and GPU checks
+for INT4/INT8, input slices, exceptional values and replay passed. BF16's existing
+202/231 and 524.73 tok/s measurement remains historical; this run qualifies INT4.
+
+Reproduce sequentially, with fresh names:
+
+```sh
+CLEF_BENCH_PACKING_SWIGLU=1 \
+  CLEF_BENCH_PACKING_SOURCE=kernels/prepare_integer_register.loom \
+  python3 scripts/bench_workload.py swiglu-packing-repro \
+  --filter 'paired_packing/pair/.*x17408'
+cargo test --locked --release --lib packing_ -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-swiglu-packing-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-register-packing \
+  tests/results/jevbench-swiglu-packing-repro --min-tps 1000
+```
+
+The final command returns nonzero below the target even when accuracy passes.

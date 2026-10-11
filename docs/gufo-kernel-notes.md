@@ -143,6 +143,20 @@ speedups were 0.821–0.926× and all 99% upper bounds were below 1.0
 (`int4-n64-paired-mlp`). This tile was also rejected; register count alone is not
 a performance criterion.
 
+A full paired sweep revisited the older M128/N128/K256 tile with varied row
+scales (`int4-m128-paired-full`): all 44 correctness cases passed. At 260 rows,
+up/gate measured 1.33–1.34× and down 1.13–1.14×; at 620 rows, up/gate measured
+1.16–1.17× and down about 1.05×. Short cases with the same padded row count
+(158 and 235) regressed. The broad tile remains unselected; the results support
+testing a conditional choice when it removes substantial padded work.
+
+Doubling the M256/N128 K stage to 256 INT4 elements passed all 36 varied-scale
+correctness cases (`int4-m256-k256-smoke`). It used 256 VGPRs and 54 KiB LDS.
+The twelve paired MLP cases were mixed (`int4-m256-k256-paired`): down projections
+improved 1.01–1.07×, while short up/gate cases regressed to 0.89–0.96×. This
+candidate is not selected; longer down-projection coverage is still needed
+before considering a conditional dispatch.
+
 ## Hosted comparison
 
 [Cloudflare's October 9 post](https://blog.cloudflare.com/clef-faster-cheaper-multimodal/)

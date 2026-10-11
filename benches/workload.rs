@@ -378,6 +378,7 @@ fn packing(c: &mut Criterion) {
                     root.join("paired.json"),
                     serde_json::to_vec_pretty(&serde_json::json!({
                         "rows": rows, "width": width, "bits": 4, "bitwise_identical": true,
+                        "includes_swiglu": std::env::var("CLEF_BENCH_PACKING_SWIGLU").as_deref() == Ok("1"),
                         "sample_size": 20, "samples": samples, "measurement_samples": measured,
                     }))
                     .unwrap(),
