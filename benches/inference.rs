@@ -16,10 +16,12 @@ fn benches(c: &mut Criterion) {
     let started = Instant::now();
     let mut model = ClefModel::load(LoadOptions {
         source: Source {
+            model: Default::default(),
             directory: std::env::var_os("CLEF_MODEL_DIR").map(Into::into),
             offline: true,
         },
         encoding: EncodeOptions {
+            strict_context: false,
             max_length: 512,
             max_state_tokens: None,
         },

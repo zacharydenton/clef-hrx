@@ -14,12 +14,15 @@ pub const MAX_CONTEXT_TOKENS: usize = 65_536;
 pub const SYSTEM_PROMPT: &str = "Read the complete state and schema. Decide every field jointly. Each answer must be exactly one of that field's allowed options.";
 #[derive(Debug, Clone, Copy)]
 pub struct EncodeOptions {
+    /// Reject state truncation under either token limit.
+    pub strict_context: bool,
     pub max_length: usize,
     pub max_state_tokens: Option<usize>,
 }
 impl Default for EncodeOptions {
     fn default() -> Self {
         Self {
+            strict_context: false,
             max_length: MAX_CONTEXT_TOKENS,
             max_state_tokens: None,
         }
@@ -181,16 +184,20 @@ impl Encoder {
         let fixed = prefix.len() + schema.len() + suffix.len();
         ensure!(
             fixed <= options.max_length,
-            "schema and media require {fixed} tokens before state; maximum is {}",
+            "context capacity exceeded: schema and media require {fixed} tokens before state; maximum is {}",
             options.max_length
         );
         let mut state = self.tokens(&render(&request.state))?;
-        state.truncate(
-            options
-                .max_state_tokens
-                .unwrap_or(usize::MAX)
-                .min(options.max_length - fixed),
+        let state_limit = options
+            .max_state_tokens
+            .unwrap_or(usize::MAX)
+            .min(options.max_length - fixed);
+        ensure!(
+            !options.strict_context || state.len() <= state_limit,
+            "context capacity exceeded: state requires {} tokens; available {state_limit}; fixed {fixed}",
+            state.len()
         );
+        state.truncate(state_limit);
         let offset = prefix.len() + state.len();
         for q in &mut questions {
             q.question_span.iter_mut().for_each(|i| *i += offset);
@@ -270,6 +277,7 @@ mod context_tests {
         for max_length in [1, 16_385, 64_000, MAX_CONTEXT_TOKENS] {
             assert!(
                 EncodeOptions {
+                    strict_context: false,
                     max_length,
                     max_state_tokens: None
                 }
@@ -280,6 +288,7 @@ mod context_tests {
         for max_length in [0, MAX_CONTEXT_TOKENS + 1, usize::MAX] {
             assert!(
                 EncodeOptions {
+                    strict_context: false,
                     max_length,
                     max_state_tokens: None
                 }

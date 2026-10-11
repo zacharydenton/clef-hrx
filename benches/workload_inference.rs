@@ -23,14 +23,23 @@ fn benches(c: &mut Criterion) {
     let start = Instant::now();
     let mut model = ClefModel::load(LoadOptions {
         source: Source {
+            model: match std::env::var("CLEF_BENCH_MODEL")
+                .as_deref()
+                .unwrap_or("clef")
+            {
+                "clef" => clef_hrx::ModelVariant::Clef,
+                "clef-flash" => clef_hrx::ModelVariant::ClefFlash,
+                other => panic!("unknown benchmark model {other}"),
+            },
             directory: std::env::var_os("CLEF_MODEL_DIR").map(Into::into),
             offline: true,
         },
         encoding: EncodeOptions {
-            max_length: 16384,
+            strict_context: true,
+            max_length: 65536,
             ..Default::default()
         },
-        memory_budget_bytes: 60usize << 30,
+        memory_budget_bytes: 80usize << 30,
         ..Default::default()
     })
     .unwrap();
@@ -43,7 +52,7 @@ fn benches(c: &mut Criterion) {
         .map(|r| model.encode_record(r).unwrap().input_ids.len())
         .collect();
     assert!(
-        lengths.iter().all(|&n| n < 16384),
+        lengths.iter().all(|&n| n <= 65536),
         "check for input truncation"
     );
     let selected: BTreeSet<_> = [158usize, 235, 260, 620, 1024, 2048, 4032]

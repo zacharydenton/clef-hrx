@@ -1,0 +1,11 @@
+{
+  "model": "Cloudflare/clef-flash",
+  "revision": "8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3",
+  "release_code_sha256": "0e304cf7c6500e8bb59bef7e2afd2c6373f82596dfb3b57d1aa93c175e2dc3a3",
+  "torch": "2.14.0",
+  "transformers": "5.10.2",
+  "attention": "sdpa",
+  "dtype": "bfloat16",
+  "fla": "0.5.2",
+  "video_decoder": "pyav"
+}

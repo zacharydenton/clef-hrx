@@ -8,6 +8,9 @@ use std::{
 #[derive(Parser)]
 #[command(version, about = "Native CLEF typed decisions on AMD gfx1151")]
 struct Args {
+    /// Pinned checkpoint variant.
+    #[arg(long, global = true, value_enum, default_value_t = clef_hrx::ModelVariant::Clef)]
+    model: clef_hrx::ModelVariant,
     /// Read checkpoint files from a local snapshot.
     #[arg(long, global = true)]
     model_dir: Option<PathBuf>,
@@ -29,6 +32,9 @@ struct Args {
     /// Additional limit on state text tokens.
     #[arg(long, global = true)]
     max_state_tokens: Option<usize>,
+    /// Reject requests that would truncate state text.
+    #[arg(long, global = true)]
+    strict_context: bool,
     #[command(subcommand)]
     command: Action,
 }
@@ -72,10 +78,12 @@ fn request(path: &Path) -> Result<Request> {
 fn main() -> Result<()> {
     let args = Args::parse();
     let source = Source {
+        model: args.model,
         directory: args.model_dir,
         offline: args.offline,
     };
     let encoding = EncodeOptions {
+        strict_context: args.strict_context,
         max_length: args.max_length,
         max_state_tokens: args.max_state_tokens,
     };

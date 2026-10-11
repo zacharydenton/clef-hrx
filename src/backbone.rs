@@ -277,17 +277,17 @@ impl Engine {
         let n = qkv.rows;
         ensure!(
             n > 0
-                && qkv.cols == 10240
+                && [32, 48].contains(&a.cols)
+                && qkv.cols == 4096 + a.cols * 128
                 && a.rows == n
-                && a.cols == 48
+                && a.cols == b.cols
                 && b.rows == n
-                && b.cols == 48
-                && alog.len() == 48
-                && dt.len() == 48,
+                && alog.len() == a.cols
+                && dt.len() == a.cols,
             "persistent DeltaNet shape"
         );
         #[cfg(feature = "bench-internals")]
-        if n >= 128 && n <= self.prepared_delta_max {
+        if a.cols == 48 && n >= 128 && n <= self.prepared_delta_max {
             return self.delta_prepared::<4>(
                 qkv,
                 a,
@@ -309,7 +309,7 @@ impl Engine {
         // Operator savings were offset by preparation in complete evaluations.
         // Retain this ablation without changing production selection.
         #[cfg(feature = "bench-internals")]
-        if n >= 128 && n <= self.prepared_delta_v8_max {
+        if a.cols == 48 && n >= 128 && n <= self.prepared_delta_v8_max {
             return self.delta_prepared::<8>(
                 qkv,
                 a,
@@ -328,10 +328,18 @@ impl Engine {
                 ),
             );
         }
-        let out = self.alloc(n, 6144, DType::Bf16)?;
+        let out = self.alloc(n, a.cols * 128, DType::Bf16)?;
         // Qualified vector scheduling range; preserve the scalar implementation
         // for shorter inputs and long-context workloads outside this range.
-        let (source, values_per_wave) = if (128..=1024).contains(&n) {
+        let (source, values_per_wave) = if a.cols == 32 {
+            (
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/delta_persistent_flash.loom")
+                ),
+                8,
+            )
+        } else if (128..=1024).contains(&n) {
             (
                 concat!(
                     include_str!("../kernels/common.loom"),
@@ -358,7 +366,7 @@ impl Engine {
         };
         self.dispatch(
             source,
-            48 * 128 / values_per_wave * 32,
+            a.cols * 128 / values_per_wave * 32,
             &[("qkv", qkv), ("a", a), ("b", b), ("al", alog), ("dt", dt)],
             &out,
             &[("n", n.to_string()), ("output_len", out.len().to_string())],
@@ -485,13 +493,16 @@ pub(crate) fn text_rope(positions: &[[u32; 3]]) -> Vec<half::bf16> {
 }
 pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> Result<Tensor> {
     let n = x.rows;
+    let arch = e.architecture;
+    let attention_width = arch.attention_heads * 256;
+    let delta_width = arch.delta_heads * 128;
     let cs = e.input(
         n,
         128,
         DType::Bf16,
         bytemuck::cast_slice(&text_rope(positions)),
     )?;
-    for i in 0..64 {
+    for i in 0..arch.layers {
         let p = format!("model.language_model.layers.{i}");
         let first_projection = if i % 4 == 3 {
             "self_attn.q_proj"
@@ -507,22 +518,23 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             let p = format!("{p}.self_attn");
             let qg = e
                 .project(&norm, &format!("{p}.q_proj"), false)?
-                .reshape(n * 24, 512);
+                .reshape(n * arch.attention_heads, 512);
             let q = e.columns(&qg, 0, 256)?;
             let output_projection = format!("{p}.o_proj");
-            let fuse_gate = n >= 128
+            let fuse_gate = arch.attention_heads == 24
+                && n >= 128
                 && e.quantized
                     .weights
                     .contains_key(&format!("{output_projection}.weight"));
             let gate = if fuse_gate {
                 None
             } else {
-                Some(e.columns(&qg, 256, 256)?.reshape(n, 6144))
+                Some(e.columns(&qg, 256, 256)?.reshape(n, attention_width))
             };
             let q = e
                 .named_norm(&q, &format!("{p}.q_norm"), false, 1e-6)?
-                .reshape(n, 6144);
-            let q = e.rope(&q, 24, 64, &cs)?;
+                .reshape(n, attention_width);
+            let q = e.rope(&q, arch.attention_heads, 64, &cs)?;
             let k = e
                 .project(&norm, &format!("{p}.k_proj"), false)?
                 .reshape(n * 4, 256);
@@ -531,13 +543,18 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
                 .reshape(n, 1024);
             let k = e.rope(&k, 4, 64, &cs)?;
             let v = e.project(&norm, &format!("{p}.v_proj"), false)?;
-            let a = e.attention(&q, &k, &v, 24, 4, true)?;
+            let a = e.attention(&q, &k, &v, arch.attention_heads, 4, true)?;
             if let Some(gate) = gate {
                 let gate = e.unary(&gate, "sigmoid")?;
                 let a = e.binary(&a, &gate, "mulf")?;
                 e.project_residual(&a, &output_projection, &x)?
             } else {
-                e.project_attention_gate(&a, &qg.reshape(n, 12288), &output_projection, &x)?
+                e.project_attention_gate(
+                    &a,
+                    &qg.reshape(n, attention_width * 2),
+                    &output_projection,
+                    &x,
+                )?
             }
         } else {
             let p = format!("{p}.linear_attn");
@@ -551,7 +568,7 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             #[cfg(not(feature = "bench-internals"))]
             let use_chunked = false;
             #[cfg(feature = "bench-internals")]
-            let use_chunked = e.reference_kernels.delta;
+            let use_chunked = arch.delta_heads == 48 && e.reference_kernels.delta;
             let d = if use_chunked && n > 64 {
                 e.delta_chunked(&qkv, &a, &b, &al, &dt)?
             } else if use_chunked {
@@ -559,10 +576,10 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             } else {
                 e.delta_persistent(&qkv, &a, &b, &al, &dt)?
             };
-            let d = d.reshape(n * 48, 128);
+            let d = d.reshape(n * arch.delta_heads, 128);
             let w = e.w(&format!("{p}.norm.weight"))?;
             let z = e.project(&norm, &format!("{p}.in_proj_z"), false)?;
-            let d = e.delta_norm(&d, &w, &z)?.reshape(n, 6144);
+            let d = e.delta_norm(&d, &w, &z)?.reshape(n, delta_width);
             e.project_residual(&d, &format!("{p}.out_proj"), &x)?
         };
         if n > 16_384 {
@@ -609,6 +626,73 @@ fn mlp_chunked(e: &mut Engine, x: &Tensor, prefix: &str, chunk: usize) -> Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "requires gfx1151; independent FP64 Flash recurrence and replay oracle"]
+    fn flash_delta_fp64_oracle() -> crate::Result<()> {
+        use crate::gpu::{DType, Engine};
+        use hrx::inference::ModelContext;
+        let context = ModelContext::new(Default::default())?;
+        let mut e = Engine::new(&context)?;
+        let (n, heads, width) = (7, 32, 8192);
+        let values: Vec<_> = (0..n * width)
+            .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 512.))
+            .collect();
+        let qkv = e.input(n, width, DType::Bf16, bytemuck::cast_slice(&values))?;
+        let ab = e.input(
+            n,
+            heads,
+            DType::Bf16,
+            bytemuck::cast_slice(&vec![half::bf16::ZERO; n * heads]),
+        )?;
+        let al = e.input(
+            1,
+            heads,
+            DType::Bf16,
+            bytemuck::cast_slice(&vec![half::bf16::ZERO; heads]),
+        )?;
+        let out = e.delta_persistent(&qkv, &ab, &ab, &al, &al)?;
+        let mut graph = e.finish()?;
+        e.run(&mut graph)?;
+        let actual = e.read_f32(&out)?;
+        let mut maximum = 0f64;
+        for h in 0..heads {
+            let mut state = vec![0f64; 128 * 128];
+            for t in 0..n {
+                let base = t * width + (h / 2) * 128;
+                let q: Vec<_> = values[base..base + 128]
+                    .iter()
+                    .map(|v| v.to_f64())
+                    .collect();
+                let k: Vec<_> = values[base + 2048..base + 2176]
+                    .iter()
+                    .map(|v| v.to_f64())
+                    .collect();
+                let qi =
+                    (q.iter().map(|v| v * v).sum::<f64>() + 1e-6).sqrt().recip() / 128f64.sqrt();
+                let ki = (k.iter().map(|v| v * v).sum::<f64>() + 1e-6).sqrt().recip();
+                for channel in 0..128 {
+                    let row = &mut state[channel * 128..(channel + 1) * 128];
+                    for s in row.iter_mut() {
+                        *s *= 0.5;
+                    }
+                    let prediction: f64 = row.iter().zip(&k).map(|(s, k)| s * k * ki).sum();
+                    let value = values[t * width + 4096 + h * 128 + channel].to_f64();
+                    let delta = (value - prediction) * 0.5;
+                    for (s, k) in row.iter_mut().zip(&k) {
+                        *s += delta * k * ki;
+                    }
+                    let expected: f64 = row.iter().zip(&q).map(|(s, q)| s * q * qi).sum();
+                    maximum = maximum
+                        .max((f64::from(actual[t * 4096 + h * 128 + channel]) - expected).abs());
+                }
+            }
+        }
+        assert!(maximum < 0.002, "Flash recurrence error {maximum}");
+        e.run(&mut graph)?;
+        assert_eq!(actual, e.read_f32(&out)?);
+        Ok(())
+    }
+
     use super::*;
 
     #[test]

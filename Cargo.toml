@@ -106,3 +106,8 @@ required-features = ["bench-internals"]
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[[bench]]
+name = "flash"
+harness = false
+required-features = ["bench-internals"]

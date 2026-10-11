@@ -1,5 +1,5 @@
 //! Pinned Hub resolution and strict, memory-mapped checkpoint validation.
-use crate::Result;
+use crate::{ModelVariant, Result};
 use anyhow::{Context, ensure};
 use hrx::artifacts::{
     hf::{HubFile, Repository, Resolver},
@@ -221,6 +221,7 @@ pub fn ensure_tiled_shard(path: &Path) -> Result<bool> {
 const TILED_LAYOUT_KEY_METADATA: &str = "__metadata__";
 #[derive(Debug, Clone, Default)]
 pub struct Source {
+    pub model: ModelVariant,
     pub directory: Option<PathBuf>,
     pub offline: bool,
 }
@@ -237,11 +238,11 @@ impl Source {
             ensure!(p.is_file(), "missing checkpoint file {}", p.display());
             return Ok(p);
         }
-        Ok(
-            Resolver::new(Repository::new("Cloudflare", "clef").at(REVISION))
-                .offline(self.offline)
-                .resolve(&HubFile::new(name))?,
+        Ok(Resolver::new(
+            Repository::new("Cloudflare", self.model.name()).at(self.model.revision()),
         )
+        .offline(self.offline)
+        .resolve(&HubFile::new(name))?)
     }
     pub fn json(&self, name: &str) -> Result<Value> {
         Ok(serde_json::from_slice(&std::fs::read(
@@ -249,17 +250,12 @@ impl Source {
         )?)?)
     }
     pub fn validate_config(&self) -> Result<()> {
-        for (name, reference) in [
-            ("config.json", include_str!("../reference/config.json")),
-            (
-                "joint_head_config.json",
-                include_str!("../reference/joint_head_config.json"),
-            ),
-            (
-                "processor_config.json",
-                include_str!("../reference/processor_config.json"),
-            ),
+        for name in [
+            "config.json",
+            "joint_head_config.json",
+            "processor_config.json",
         ] {
+            let reference = self.model.reference(name);
             let actual = self.json(name)?;
             let expected: Value = serde_json::from_str(reference)?;
             // Only informational producer metadata may differ.
@@ -281,7 +277,7 @@ impl Source {
     pub fn inspect(&self) -> Result<Inspection> {
         self.validate_config()?;
         let index: Index = serde_json::from_value(self.json("model.safetensors.index.json")?)?;
-        validate_index(&index)?;
+        validate_index(&index, self.model)?;
         let mut files: Vec<_> = index
             .weight_map
             .values()
@@ -301,23 +297,26 @@ impl Source {
             .map(String::from),
         );
         let head: BTreeMap<String, Meta> =
-            serde_json::from_str(include_str!("../reference/joint_head_metadata.json"))?;
+            serde_json::from_str(self.model.reference("joint_head_metadata.json"))?;
         let head_bytes: usize = head
             .values()
             .map(|m| m.shape.iter().product::<usize>() * 2)
             .sum();
         Ok(Inspection {
-            revision: REVISION.into(),
+            model: self.model,
+            revision: self.model.revision().into(),
             architecture: "Qwen3_5 + JointSchemaHead".into(),
-            backbone_layers: 64,
+            backbone_layers: self.model.architecture().layers,
             vision_layers: 27,
             weight_bytes: index.metadata.total_size + head_bytes as u64,
             resident_weight_bytes: index.metadata.total_size + head_bytes as u64
-                - crate::embedding::TABLE_BYTES,
+                - self.model.architecture().embedding_bytes(),
             files,
-            workspace_estimate_bytes: workspace_estimate(crate::encoding::MAX_CONTEXT_TOKENS),
-            qualification:
-                "experimental; full corpus has a known BF16-reference probability deviation".into(),
+            workspace_estimate_bytes: self
+                .model
+                .architecture()
+                .workspace_estimate(crate::encoding::MAX_CONTEXT_TOKENS),
+            qualification: "see model-specific qualification in docs".into(),
         })
     }
 }
@@ -337,6 +336,7 @@ struct Meta {
 }
 #[derive(Debug, Serialize)]
 pub struct Inspection {
+    pub model: ModelVariant,
     pub revision: String,
     pub architecture: String,
     pub backbone_layers: usize,
@@ -351,9 +351,8 @@ pub fn workspace_estimate(tokens: usize) -> u64 {
     // Conservative live activation allowance, plus recurrent state, scratch and staging.
     (tokens as u64 * 17408 * 2 * 12) + (2 << 30)
 }
-fn validate_index(index: &Index) -> Result<()> {
-    let expected: Index =
-        serde_json::from_str(include_str!("../reference/model.safetensors.index.json"))?;
+fn validate_index(index: &Index, model: ModelVariant) -> Result<()> {
+    let expected: Index = serde_json::from_str(model.reference("model.safetensors.index.json"))?;
     ensure!(
         index.metadata.total_size == expected.metadata.total_size,
         "unexpected checkpoint size"
@@ -363,6 +362,57 @@ fn validate_index(index: &Index) -> Result<()> {
         "checkpoint tensor-to-shard index differs from pinned release"
     );
     Ok(())
+}
+/// Keep pristine downloaded weights intact; derived layouts live beside the snapshot.
+fn tiled_path(source: &Source, name: &str, path: &Path) -> Result<PathBuf> {
+    let (_, header) = read_header(&mut std::fs::File::open(path)?)?;
+    if header
+        .get(TILED_LAYOUT_KEY_METADATA)
+        .and_then(|v| v.get(TILED_LAYOUT_KEY))
+        .and_then(Value::as_str)
+        == Some(TILED_LAYOUT)
+        || !header.iter().any(|(key, value)| {
+            serde_json::from_value::<HeaderEntry>(value.clone()).is_ok_and(|entry| {
+                let (rows, cols) = rows_cols(&entry.shape);
+                tiled_projection(key, rows, cols)
+            })
+        })
+    {
+        return Ok(path.to_path_buf());
+    }
+    let root = path
+        .parent()
+        .context("checkpoint has no parent")?
+        .join(".clef-hrx")
+        .join(source.model.name())
+        .join(source.model.revision())
+        .join(TILED_LAYOUT);
+    std::fs::create_dir_all(&root)?;
+    let target = root.join(name);
+    // Hash source bytes before conversion. A different local checkpoint must not
+    // accidentally reuse a derived layout with matching tensor shapes.
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    let mut input = std::fs::File::open(path)?;
+    let mut buffer = vec![0u8; 8 << 20];
+    loop {
+        let n = input.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buffer[..n]);
+    }
+    let digest = format!("{:x}", hash.finalize());
+    let receipt = target.with_extension("sha256");
+    if target.is_file() && std::fs::read_to_string(&receipt).ok().as_deref() == Some(&digest) {
+        return Ok(target);
+    }
+    let temporary = target.with_extension(format!("copy.{}", std::process::id()));
+    std::fs::copy(path, &temporary)?;
+    ensure_tiled_shard(&temporary)?;
+    std::fs::rename(&temporary, &target)?;
+    std::fs::write(receipt, digest)?;
+    Ok(target)
 }
 pub struct Checkpoint {
     files: Vec<FileView>,
@@ -378,11 +428,11 @@ impl Checkpoint {
     pub unsafe fn open(source: &Source) -> Result<Self> {
         source.validate_config()?;
         let index: Index = serde_json::from_value(source.json("model.safetensors.index.json")?)?;
-        validate_index(&index)?;
+        validate_index(&index, source.model)?;
         let backbone: BTreeMap<String, Meta> =
-            serde_json::from_str(include_str!("../reference/backbone_metadata.json"))?;
+            serde_json::from_str(source.model.reference("backbone_metadata.json"))?;
         let head: BTreeMap<String, Meta> =
-            serde_json::from_str(include_str!("../reference/joint_head_metadata.json"))?;
+            serde_json::from_str(source.model.reference("joint_head_metadata.json"))?;
         let mut result = Self {
             files: Vec::new(),
             tensors: BTreeMap::new(),
@@ -397,7 +447,7 @@ impl Checkpoint {
         {
             let path = source.resolve(&name)?;
             // Projection weights are stored tiled; convert a pristine shard first.
-            ensure_tiled_shard(&path)?;
+            let path = tiled_path(source, &name, &path)?;
             // Safety: caller guarantees immutable checkpoint files.
             let file = unsafe { FileView::map(&path)? };
             let is_head = name == "joint_head.safetensors";
@@ -462,6 +512,58 @@ mod tests {
         (((n / TILE_ROWS) * (cols / TILE_COLS) + k / TILE_COLS) * TILE_ROWS + n % TILE_ROWS)
             * TILE_COLS
             + k % TILE_COLS
+    }
+
+    #[test]
+    fn local_model_variant_mismatch_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "config.json",
+            "joint_head_config.json",
+            "processor_config.json",
+        ] {
+            std::fs::write(
+                dir.path().join(name),
+                ModelVariant::ClefFlash.reference(name),
+            )
+            .unwrap();
+        }
+        let mut source = Source {
+            model: ModelVariant::ClefFlash,
+            directory: Some(dir.path().into()),
+            offline: true,
+        };
+        source.validate_config().unwrap();
+        source.model = ModelVariant::Clef;
+        assert!(source.validate_config().is_err());
+    }
+
+    #[test]
+    fn derived_layout_preserves_source_and_invalidates_changed_weights() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "test.safetensors";
+        let path = dir.path().join(name);
+        let key = "model.language_model.layers.0.mlp.up_proj.weight";
+        let dense: Vec<_> = (0..256 * 64 * 2).map(|i| (i % 251) as u8).collect();
+        write_safetensors(&path, &[(key, vec![256, 64], dense.clone())]);
+        let before = std::fs::read(&path).unwrap();
+        let source = Source {
+            directory: Some(dir.path().into()),
+            ..Default::default()
+        };
+        let derived = tiled_path(&source, name, &path).unwrap();
+        assert_ne!(path, derived);
+        assert_eq!(before, std::fs::read(&path).unwrap());
+        assert_eq!(derived, tiled_path(&source, name, &path).unwrap());
+        let old = std::fs::read(&derived).unwrap();
+        let other = Source {
+            model: ModelVariant::ClefFlash,
+            ..source.clone()
+        };
+        assert_ne!(derived, tiled_path(&other, name, &path).unwrap());
+        write_safetensors(&path, &[(key, vec![256, 64], vec![7; dense.len()])]);
+        tiled_path(&source, name, &path).unwrap();
+        assert_ne!(old, std::fs::read(derived).unwrap());
     }
 
     #[test]
@@ -593,6 +695,7 @@ mod tests {
     #[ignore = "rewrites the local checkpoint named by CLEF_MODEL_DIR"]
     fn retile_local_checkpoint() -> Result<()> {
         let source = Source {
+            model: Default::default(),
             directory: std::env::var_os("CLEF_MODEL_DIR").map(Into::into),
             offline: true,
         };

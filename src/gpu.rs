@@ -112,6 +112,7 @@ struct CompiledKernel {
     grids: HashMap<Vec<u64>, [u32; 3]>,
 }
 pub(crate) struct Engine {
+    pub architecture: crate::architecture::Architecture,
     #[cfg(feature = "bench-internals")]
     pub reference_kernels: crate::benchmarking::ReferenceKernels,
     pub quantized: crate::quantized::QuantizedProjections,
@@ -197,6 +198,7 @@ impl Engine {
             std::fs::create_dir_all(path)?;
         }
         Ok(Self {
+            architecture: crate::ModelVariant::Clef.architecture(),
             #[cfg(feature = "bench-internals")]
             reference_kernels: Default::default(),
             #[cfg(feature = "bench-internals")]

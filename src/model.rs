@@ -105,13 +105,15 @@ impl ClefModel {
         let info = options.source.inspect()?;
         // Context capacity is not an allocation request. HRX enforces the budget
         // and Engine checks available RAM as actual request buffers are allocated.
-        let required = info.resident_weight_bytes + crate::checkpoint::workspace_estimate(0);
+        let required =
+            info.resident_weight_bytes + options.source.model.architecture().workspace_estimate(0);
         ensure!(
             required <= options.memory_budget_bytes as u64,
             "memory budget cannot fit weights and minimum workspace"
         );
         crate::memory::require(required)?;
         let mut engine = Engine::new(context)?;
+        engine.architecture = options.source.model.architecture();
         if options.precision != Precision::Bf16 {
             engine.quantized =
                 crate::quantized::QuantizedProjections::for_precision(options.precision);
@@ -373,6 +375,15 @@ impl NativeState {
         // Include media bytes because EncodedRecord skips them during serialization.
         use sha2::{Digest, Sha256};
         let mut hash = Sha256::new();
+        for dimension in [
+            self.engine.architecture.layers,
+            self.engine.architecture.hidden,
+            self.engine.architecture.intermediate,
+            self.engine.architecture.attention_heads,
+            self.engine.architecture.delta_heads,
+        ] {
+            hash.update(dimension.to_le_bytes());
+        }
         hash.update(serde_json::to_vec(record)?);
         for item in &record.media.items {
             hash.update(bytemuck::cast_slice(&item.patches));

@@ -125,6 +125,7 @@ fn release_encoding_parity() {
     for f in fixtures {
         let req: Request = serde_json::from_value(f["request"].clone()).unwrap();
         let options = EncodeOptions {
+            strict_context: false,
             max_length: 512,
             max_state_tokens: f["max_state_tokens"].as_u64().map(|v| v as usize),
         };
@@ -150,6 +151,7 @@ fn release_encoding_parity() {
             .encode_record(
                 &req,
                 EncodeOptions {
+                    strict_context: false,
                     max_length: 1,
                     max_state_tokens: None
                 }
@@ -208,6 +210,7 @@ fn processor_patch_parity() {
 fn local_checkpoint_validation_and_offline_failures() {
     let root = tempfile::tempdir().unwrap();
     let source = crate::checkpoint::Source {
+        model: Default::default(),
         directory: Some(root.path().into()),
         offline: true,
     };
@@ -316,6 +319,7 @@ fn corpus_encoding_parity() -> crate::Result<()> {
         let encoded = encoder.encode_record(
             &request,
             EncodeOptions {
+                strict_context: false,
                 max_length: 1536,
                 max_state_tokens: None,
             },
@@ -361,16 +365,89 @@ fn cached_embedding_row_parity() -> crate::Result<()> {
 }
 
 #[test]
+#[ignore = "requires a tokenizer; set CLEF_MODEL_DIR"]
+fn strict_context_preserves_exact_fit() -> crate::Result<()> {
+    let source = crate::checkpoint::Source {
+        directory: std::env::var_os("CLEF_MODEL_DIR").map(Into::into),
+        offline: true,
+        ..Default::default()
+    };
+    let encoder = Encoder::load(source.resolve("tokenizer.json")?)?;
+    let mut request: Request =
+        serde_json::from_str(include_str!("../tests/fixtures/corpus/0.json"))?;
+    request.state = json!("");
+    let strict = EncodeOptions {
+        strict_context: true,
+        ..Default::default()
+    };
+    let fixed = encoder.encode_record(&request, strict)?.input_ids.len();
+    // This tokenizer maps each repeated ' x' to one token. Check the construction.
+    for length in [65535, 65536, 65537] {
+        request.state = json!(" x".repeat(length - fixed));
+        assert_eq!(
+            encoder.tokens(request.state.as_str().unwrap())?.len(),
+            length - fixed
+        );
+        let result = encoder.encode_record(&request, strict);
+        if length <= 65536 {
+            assert_eq!(result?.input_ids.len(), length);
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("context capacity exceeded:")
+            );
+        }
+    }
+    request.state = json!(" x");
+    assert!(
+        encoder
+            .encode_record(
+                &request,
+                EncodeOptions {
+                    max_state_tokens: Some(0),
+                    ..strict
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(
+        encoder
+            .encode_record(
+                &request,
+                EncodeOptions {
+                    max_state_tokens: Some(0),
+                    ..Default::default()
+                }
+            )?
+            .input_ids
+            .len(),
+        fixed
+    );
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires gfx1151, cached full checkpoint, ffmpeg, and at least 50 GiB available RAM; run alone"]
 fn full_checkpoint_corpus() -> crate::Result<()> {
     use crate::{ClefModel, LoadOptions, checkpoint::Source};
     let mut model = ClefModel::load(LoadOptions {
         source: Source {
+            model: match std::env::var("CLEF_TEST_MODEL")
+                .as_deref()
+                .unwrap_or("clef")
+            {
+                "clef" => crate::ModelVariant::Clef,
+                "clef-flash" => crate::ModelVariant::ClefFlash,
+                value => anyhow::bail!("unknown test model {value}"),
+            },
             directory: std::env::var_os("CLEF_MODEL_DIR").map(Into::into),
             offline: true,
         },
         memory_budget_bytes: 60usize << 30,
         encoding: EncodeOptions {
+            strict_context: false,
             max_length: 1536,
             max_state_tokens: None,
         },
@@ -385,7 +462,8 @@ fn full_checkpoint_corpus() -> crate::Result<()> {
             "tests/fixtures/corpus/{case}.json"
         ))?)?;
         let reference: Value = serde_json::from_slice(&std::fs::read(format!(
-            "tests/fixtures/corpus/{case}.reference.json"
+            "{}/{case}.reference.json",
+            std::env::var("CLEF_REFERENCE_DIR").unwrap_or_else(|_| "tests/fixtures/corpus".into())
         ))?)?;
         let encoded = model.encode_record(&request)?;
         assert_eq!(

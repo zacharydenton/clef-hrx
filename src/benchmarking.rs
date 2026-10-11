@@ -431,14 +431,22 @@ pub struct AttentionBenchmark {
 }
 impl AttentionBenchmark {
     pub fn new(tokens: usize, source: Option<&str>) -> Result<Self> {
-        Self::build(tokens, source, false)
+        Self::build(tokens, source, false, 24)
     }
     pub fn integrated(tokens: usize) -> Result<Self> {
-        Self::build(tokens, None, true)
+        Self::build(tokens, None, true, 24)
     }
-    fn build(tokens: usize, source: Option<&str>, integrated: bool) -> Result<Self> {
+    pub fn for_model(tokens: usize, model: crate::ModelVariant, integrated: bool) -> Result<Self> {
+        Self::build(
+            tokens,
+            None,
+            integrated,
+            model.architecture().attention_heads,
+        )
+    }
+    fn build(tokens: usize, source: Option<&str>, integrated: bool, heads: usize) -> Result<Self> {
         anyhow::ensure!(
-            tokens > 0 && tokens <= 4096,
+            tokens > 0 && tokens <= crate::encoding::MAX_CONTEXT_TOKENS,
             "unsupported attention probe shape"
         );
         let context = ModelContext::new(Default::default())?;
@@ -450,9 +458,9 @@ impl AttentionBenchmark {
         };
         let q = engine.input(
             tokens,
-            6144,
+            heads * 256,
             DType::Bf16,
-            bytemuck::cast_slice(&values(tokens * 6144, 17)),
+            bytemuck::cast_slice(&values(tokens * (heads * 256), 17)),
         )?;
         let k = engine.input(
             tokens,
@@ -470,9 +478,9 @@ impl AttentionBenchmark {
             let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
             engine.attention_tiled_source(&q, &k, &v, true, &source)?
         } else if integrated {
-            engine.attention_impl::<true>(&q, &k, &v, 24, 4, true)?
+            engine.attention_impl::<true>(&q, &k, &v, heads, 4, true)?
         } else {
-            engine.attention_impl::<false>(&q, &k, &v, 24, 4, true)?
+            engine.attention_impl::<false>(&q, &k, &v, heads, 4, true)?
         };
         let mut graph = engine.finish()?;
         engine.run(&mut graph)?;
@@ -613,6 +621,41 @@ impl DeltaBenchmark {
             true,
             Some((source, values_per_wave, Some(prepare_source))),
         )
+    }
+    pub fn for_model(tokens: usize, model: crate::ModelVariant) -> Result<Self> {
+        anyhow::ensure!((1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&tokens));
+        let arch = model.architecture();
+        let context = ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        let width = 4096 + arch.delta_heads * 128;
+        let values: Vec<_> = (0..tokens * width)
+            .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 512.))
+            .collect();
+        let gates: Vec<_> = (0..tokens * arch.delta_heads)
+            .map(|i| half::bf16::from_f32(((i * 13 % 131) as f32 - 65.) / 256.))
+            .collect();
+        let qkv = engine.input(tokens, width, DType::Bf16, bytemuck::cast_slice(&values))?;
+        let a = engine.input(
+            tokens,
+            arch.delta_heads,
+            DType::Bf16,
+            bytemuck::cast_slice(&gates),
+        )?;
+        let al = engine.input(
+            1,
+            arch.delta_heads,
+            DType::Bf16,
+            bytemuck::cast_slice(&vec![half::bf16::ZERO; arch.delta_heads]),
+        )?;
+        let output = engine.delta_persistent(&qkv, &a, &a, &al, &al)?;
+        let mut graph = engine.finish()?;
+        engine.run(&mut graph)?;
+        Ok(Self {
+            graph,
+            engine,
+            _output: output,
+            _context: context,
+        })
     }
     pub fn resident(tokens: usize) -> Result<Self> {
         Self::persistent(tokens, include_str!("../kernels/delta_persistent.loom"), 8)

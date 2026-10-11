@@ -8,7 +8,6 @@ use hrx::artifacts::safetensors::{DType as FileDType, FileView};
 use std::{fs::File, os::unix::fs::FileExt};
 
 pub(crate) const TABLES: [&str; 2] = ["model.language_model.embed_tokens.weight", "lm_head.weight"];
-pub(crate) const TABLE_BYTES: u64 = 2 * 248320 * 5120 * 2;
 
 pub(crate) struct EmbeddingRows {
     file: File,

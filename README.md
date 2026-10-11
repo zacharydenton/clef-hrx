@@ -1,6 +1,7 @@
 # clef-hrx
 
-[Cloudflare CLEF](https://huggingface.co/Cloudflare/clef) inference in Rust for
+[Cloudflare CLEF](https://huggingface.co/Cloudflare/clef) and
+[CLEF Flash](https://huggingface.co/Cloudflare/clef-flash) inference in Rust for
 AMD Strix Halo. The text backbone, vision encoder and decision head run as
 [Loom](https://github.com/ROCm/hrx-system) kernels through
 [HRX](https://github.com/zacharydenton/hrx-rs).
@@ -47,14 +48,14 @@ requests, keep the model loaded and pass newline-delimited JSON:
 ./target/release/clef --max-length 1536 decide requests.jsonl --jsonl
 ```
 
-First use downloads roughly 51.2 GiB of weights, then rewrites the text-backbone
-projection shards in place into a tiled GEMM layout (a one-time disk pass over
-about 45 GiB; tensor names and shapes are unchanged and each converted shard
-carries a `clef_weight_layout` marker). Binaries older than this layout cannot
-read a converted snapshot. Use `--model-dir PATH` for a
-local snapshot or `--offline` for cached files. Inputs support up to 65,536 tokens,
-subject to available memory. `--max-length` sets the token limit (default 65,536);
-`--memory-gib` sets the allocation budget (default 80 GiB).
+Select Flash with `--model clef-flash`; original CLEF remains the default.
+Use `--model-dir PATH` for a local snapshot or `--offline` for cached files.
+First use downloads weights and creates a tiled projection cache alongside them.
+Existing converted checkpoints remain readable.
+
+`--max-length` sets the token limit (default 65,536); `--strict-context` rejects
+requests that would truncate state. `--memory-gib` sets the allocation budget
+(default 80 GiB). See [Flash qualification and reproduction](docs/clef-flash.md).
 
 ## Precision
 

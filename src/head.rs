@@ -79,6 +79,13 @@ impl Engine {
         options: &Tensor,
         residual: &Tensor,
     ) -> Result<Tensor> {
+        anyhow::ensure!(
+            anchors.rows == fields.rows
+                && lexical.rows == fields.rows
+                && anchors.cols == lexical.cols
+                && [4096, 5120].contains(&anchors.cols),
+            "decision prior shape"
+        );
         let ps = self.w("head.prior_logit_scale")?;
         let js = self.w("head.joint_logit_scale")?;
         let gate = self.w("head.residual_gate")?;
@@ -100,7 +107,7 @@ impl Engine {
                 ("gate", &gate),
             ],
             &out,
-            &[],
+            &[("hidden_width", anchors.cols.to_string())],
         )?;
         Ok(out)
     }

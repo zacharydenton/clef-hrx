@@ -27,3 +27,6 @@ pub use encoding::{EncodeOptions, EncodedQuestion, EncodedRecord, Encoder};
 pub use model::{ClefModel, LoadOptions, Precision, Prediction};
 pub use schema::{Question, QuestionType, Request, Response};
 pub type Result<T> = anyhow::Result<T>;
+
+pub mod architecture;
+pub use architecture::ModelVariant;
