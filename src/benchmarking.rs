@@ -120,7 +120,7 @@ impl GemmBenchmark {
             padded,
             minimum_weight_bytes,
             None,
-            4,
+            (4, None),
         )
     }
     /// Include a separate or fused BF16 residual addition in every replay.
@@ -140,7 +140,7 @@ impl GemmBenchmark {
             padded,
             minimum_weight_bytes,
             Some(fused),
-            4,
+            (4, None),
         )
     }
     /// Change only workgroup ordering while retaining the packed operands and arithmetic.
@@ -151,6 +151,7 @@ impl GemmBenchmark {
         padded: bool,
         minimum_weight_bytes: usize,
         group_limit: usize,
+        export: Option<&str>,
     ) -> Result<Self> {
         Self::packed_integer_impl(
             shape,
@@ -159,7 +160,7 @@ impl GemmBenchmark {
             padded,
             minimum_weight_bytes,
             None,
-            group_limit,
+            (group_limit, export),
         )
     }
     fn packed_integer_impl(
@@ -169,7 +170,7 @@ impl GemmBenchmark {
         padded: bool,
         minimum_weight_bytes: usize,
         residual: Option<bool>,
-        group_limit: usize,
+        (group_limit, export): (usize, Option<&str>),
     ) -> Result<Self> {
         anyhow::ensure!(
             (1..=16).contains(&group_limit)
@@ -183,6 +184,10 @@ impl GemmBenchmark {
                 && minimum_weight_bytes <= 512 << 20,
             "unsupported packed integer benchmark shape"
         );
+        let reference_fused_export = (residual == Some(false))
+            .then(|| std::env::var("CLEF_BENCH_INTEGER_REFERENCE_RESIDUAL_EXPORT").ok())
+            .flatten();
+        let fuse_residual = residual == Some(true) || reference_fused_export.is_some();
         let context = ModelContext::new(Default::default())?;
         let mut engine = Engine::new(&context)?;
         let stride = k + if padded && k.is_multiple_of(1024) {
@@ -240,8 +245,12 @@ impl GemmBenchmark {
             let symbol = if residual == Some(true) {
                 std::env::var("CLEF_BENCH_INTEGER_RESIDUAL_EXPORT")
                     .unwrap_or_else(|_| format!("h3_gemm_i{bits}_256"))
+            } else if let Some(symbol) = &reference_fused_export {
+                symbol.clone()
             } else {
-                format!("h3_gemm_i{bits}_256")
+                export
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("h3_gemm_i{bits}_256"))
             };
             let mut spec = hrx::loom::Specialization::new(symbol);
             for (key, value) in [
@@ -255,11 +264,11 @@ impl GemmBenchmark {
             let mut constants = hrx::Constants::new();
             constants.push(m as u32)?;
             let mut inputs = vec![&x, &w, &ws, &xs];
-            if residual == Some(true) {
+            if fuse_residual {
                 inputs.push(residual_input.as_ref().unwrap());
             }
             engine.emit_special(source, spec, constants, &[m as u64], &inputs, &output)?;
-            let output = if residual == Some(false) {
+            let output = if residual == Some(false) && !fuse_residual {
                 // Retain intermediates across all rotating graphs and replays.
                 engine.retained.push(output.clone());
                 engine.binary(residual_input.as_ref().unwrap(), &output, "addf")?

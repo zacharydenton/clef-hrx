@@ -755,6 +755,81 @@ at 1,025 rows but little change at aligned controls. The expanded sweeps cover
 both endpoints of each partial-group band at 1,025–3,840 rows, in both cache
 modes (`unpadded-groups-mlp-{up-gate,down}-boundaries`). All 72 pairs matched
 output bits. Up/gate ranged 0.994–1.022× and is not selected. MLP down improved
-**1.017–1.097× in all 36 pairs**, with every 99% lower bound above 1.0. Native
-integration and full-model qualification of this MLP-down candidate remain
-pending; the currently qualified model still uses the original raster mapping.
+**1.017–1.097× in all 36 pairs**, with every 99% lower bound above 1.0.
+The rejected native experiment is described below.
+
+## Partial MLP-down raster groups
+
+**Rejected for native dispatch:** paired kernel gains did not establish a
+full-model improvement. The candidate source and results remain in the
+experiment archives; the production kernel and dispatch are restored.
+
+The experimental wide-K INT4 kernel exposes separate compact-grid entry points,
+with and without fused residual addition. A compile-time flag selects the final
+partial group's mapping; full four-tile groups keep the original ordering.
+The candidate selected this mapping only for 17,408-to-5,120 MLP-down
+projections at 1,025–4,032 rows when `ceil(rows / 256) % 4 != 0`.
+Complete groups, MLP up/gate and other shapes retained their prior dispatch.
+This changes no dot product, scale or BF16 rounding operation.
+
+`CLEF_BENCH_INTEGER_EXPORT` selects only the plain integer candidate export;
+the reference retains its original export and the chosen reference source.
+The native six-pair check at 1,025, 2,305 and 3,585 rows measured
+**1.020–1.090×**, with all 99% lower bounds above 1.0 and bit-identical outputs
+(`benches/results/compact-raster-native-paired`). These final pairs use uniform
+scales; the expanded GPU fixture independently varies activation and weight
+scales, includes zero and extreme scales, nonfinite residuals, sliced buffers,
+all partial-group boundaries and fallback shapes, and checks two replays
+against the original padded K128 projection plus separate residual addition.
+CPU tests and Clippy passed.
+
+```sh
+CLEF_BENCH_INTEGER_SOURCE=artifacts/throughput-1000/compact-raster-source/kernels/gemm_integer_wide_k.loom \
+  CLEF_BENCH_INTEGER_REFERENCE_SOURCE=artifacts/throughput-1000/compact-raster-source/kernels/gemm_integer_wide_k.loom \
+  CLEF_BENCH_INTEGER_EXPORT=h3_gemm_i4_256_compact \
+  CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  CLEF_BENCH_LENGTHS=1025,2305,3585 \
+  python3 scripts/bench_workload.py compact-raster-repro --profile quick \
+  --filter paired_integer_gemm/mlp_down
+cargo test --locked --release --lib residual_projection_matches_separate_addition -- --ignored
+```
+
+Add `CLEF_BENCH_INTEGER_ROW_SCALES=1` for independently varied operand scales.
+Use fresh run names; the harness retains raw timing pairs, source snapshots,
+binary/compiler identities and GPU telemetry.
+
+For a comparison of two fused residual entry points, set
+`CLEF_BENCH_INTEGER_RESIDUAL=1`, choose the candidate with
+`CLEF_BENCH_INTEGER_RESIDUAL_EXPORT`, and choose the fused reference with
+`CLEF_BENCH_INTEGER_REFERENCE_RESIDUAL_EXPORT`. Without the latter, the
+reference remains the original projection plus separate addition. Both paths
+receive identical independent residual tensors; paired records identify the
+reference export so the timed operations are explicit.
+
+The matched fused-residual sweep uses actual JevBench lengths 1,088, 1,290,
+2,163, 2,390, 3,338 and 3,683, with independently varied row scales and both
+cache modes. All **12 pairs improved by 1.007–1.078×**, with every 99% lower
+bound above 1.0 and exact outputs (`compact-raster-fused-native-paired`). Both
+compiled variants retain 256 VGPRs, 55,296 bytes LDS and zero spills; reports
+are in `artifacts/throughput-1000/compact-raster-fused-reports`.
+
+```sh
+CLEF_BENCH_INTEGER_SOURCE=artifacts/throughput-1000/compact-raster-source/kernels/gemm_integer_wide_k.loom \
+  CLEF_BENCH_INTEGER_REFERENCE_SOURCE=artifacts/throughput-1000/conv-rows8-source/kernels/gemm_integer_wide_k.loom \
+  CLEF_BENCH_INTEGER_RESIDUAL=1 \
+  CLEF_BENCH_INTEGER_RESIDUAL_EXPORT=h3_gemm_i4_256_residual_compact \
+  CLEF_BENCH_INTEGER_REFERENCE_RESIDUAL_EXPORT=h3_gemm_i4_256_residual \
+  CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  CLEF_BENCH_INTEGER_ROW_SCALES=1 CLEF_BENCH_LENGTHS=1088,1290,2163,2390,3338,3683 \
+  python3 scripts/bench_workload.py compact-raster-fused-repro --profile quick \
+  --filter paired_integer_gemm/mlp_down
+```
+
+Full JevBench retained all outputs and accuracy floors in every mode, but the
+initial 1,018.33 tok/s INT4 result fell to 985.73 on repeat. A fresh sequential
+control/candidate pair measured 1,007.05/976.79 tok/s. Device clocks and power
+varied between runs, so these are not a paired model-level confidence interval
+or proof that the kernel itself causes a regression. They do not qualify a
+model-level gain. The compact production entry points and dispatch were removed;
+the benchmark export controls and expanded independent GPU boundary fixture
+are retained. See [all full-run results](evaluation.md#partial-mlp-down-raster-groups).

@@ -1011,7 +1011,9 @@ mod tests {
                 bits: 4,
             };
             for rows in [
-                127, 128, 129, 158, 257, 384, 513, 640, 769, 896, 1024, 4032, 4033,
+                127, 128, 129, 158, 257, 384, 513, 640, 769, 896, 1024, 1025, 1280, 1281, 1536,
+                1537, 1792, 1793, 2048, 2049, 2304, 2305, 2560, 2561, 2816, 2817, 3072, 3073, 3328,
+                3329, 3584, 3585, 3840, 3841, 4032, 4033,
             ] {
                 e.reset_plan()?;
                 let a = e
@@ -1053,7 +1055,27 @@ mod tests {
                 let residual = e
                     .input(rows + 1, n, DType::Bf16, bytemuck::cast_slice(&residual))?
                     .slice_rows(1, rows);
-                let plain = e.project_prepared(rows, &weight, &a, &scales, None)?;
+                // Keep the independent reference on the original padded K128 kernel.
+                let plain = e.alloc(rows, n, DType::Bf16)?;
+                let mut spec = Specialization::new("h3_gemm_i4_256");
+                for (key, value) in [
+                    ("k_size", k),
+                    ("n_size", n),
+                    ("k_stride", stride),
+                    ("m_group", rows.div_ceil(256).min(4)),
+                ] {
+                    spec.set_config(format!("h3.gemm_i4_256.{key}"), value.to_string());
+                }
+                let mut constants = Constants::new();
+                constants.push(rows as u32)?;
+                e.emit_special(
+                    include_str!("../kernels/gemm_integer.loom"),
+                    spec,
+                    constants,
+                    &[rows as u64],
+                    &[&a, &weight.codes, &weight.scales, &scales],
+                    &plain,
+                )?;
                 let reference = e.binary(&residual, &plain, "addf")?;
                 let mut reference_graph = e.finish()?;
                 let fused = e.project_prepared(rows, &weight, &a, &scales, Some(&residual))?;

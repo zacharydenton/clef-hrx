@@ -62,14 +62,16 @@ the trained decision head retain their existing arithmetic. Packed weights are
 prepared from the same pinned checkpoint, with no additional model download.
 
 Full JevBench measurements were 752 tok/s and 199/231 for MLP-only INT4,
-986–1,003 tok/s and 194/231 for broader INT4, and 516 tok/s and 202/231 in BF16.
+986–1,007 tok/s and 194/231 for broader INT4, and 516 tok/s and 202/231 in BF16.
 The [latest qualification](evaluation.md#eight-row-causal-convolution) uses the
 same binary for all modes and preserves every output of each prior baseline.
-The broader INT4 range retains both the initial run and the unchanged-binary
-repeat; only the initial run passed 1,000 tok/s. Peak engine allocation was
+The broader INT4 range retains the initial run, unchanged-binary repeat and a
+fresh control; the repeat remains below 1,000 tok/s. Peak engine allocation was
 14.08 GiB for broader INT4 and 23.96 GiB for MLP-only INT4. Eight-row causal
 convolution reuses overlapping inputs while preserving FMA order and both BF16
 rounding boundaries; selected INT4 projection epilogues also fuse residuals.
+A [compact-grid follow-up](evaluation.md#partial-mlp-down-raster-groups) retained
+accuracy but failed to establish a model-level speedup, so it is not selected.
 The modes are explicit accuracy/speed choices, not replacements for the default.
 The ordinary CLI exposes the same tested packing and matrix kernels; retain the
 exact binary, flags and results when comparing subsequent builds.

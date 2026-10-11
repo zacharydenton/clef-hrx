@@ -597,6 +597,17 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
     assert!([4, 8].contains(&bits));
     let residual = integer && std::env::var("CLEF_BENCH_INTEGER_RESIDUAL").as_deref() == Ok("1");
     assert!(!residual || bits == 4, "residual experiment requires INT4");
+    let reference_residual_export =
+        std::env::var("CLEF_BENCH_INTEGER_REFERENCE_RESIDUAL_EXPORT").ok();
+    assert!(
+        reference_residual_export.is_none() || residual,
+        "fused reference export requires a residual comparison"
+    );
+    let candidate_export = std::env::var("CLEF_BENCH_INTEGER_EXPORT").ok();
+    assert!(
+        candidate_export.is_none() || (integer && !residual),
+        "integer export selection requires a plain integer comparison"
+    );
     let group_limit = std::env::var("CLEF_BENCH_INTEGER_M_GROUP").ok().map(|s| {
         s.parse::<usize>()
             .expect("integer M group must be an integer")
@@ -673,8 +684,8 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                         }.unwrap();
                         let mut candidate = if residual {
                             GemmBenchmark::packed_integer_residual(m, k, n, &source, padded, minimum_bytes, true)
-                        } else if let Some(group_limit) = group_limit {
-                            GemmBenchmark::packed_integer_group((m, k, n), &source, bits, padded, minimum_bytes, group_limit)
+                        } else if group_limit.is_some() || candidate_export.is_some() {
+                            GemmBenchmark::packed_integer_group((m, k, n), &source, bits, padded, minimum_bytes, group_limit.unwrap_or(4), candidate_export.as_deref())
                         } else if integer { GemmBenchmark::packed_integer(
                             m,
                             k,
@@ -750,8 +761,8 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                     };
                     std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
                         "rows": m, "k": k, "columns": n, "bits": if integer { bits } else { 16 },
-                        "padded": integer && padded, "includes_residual": residual,
-                        "candidate_m_group_limit": group_limit, "reference_m_group_limit": 4,
+                        "padded": integer && padded, "includes_residual": residual, "reference_residual_export": reference_residual_export,
+                        "candidate_export": candidate_export, "candidate_m_group_limit": group_limit, "reference_m_group_limit": 4,
                         "bf16_candidate": candidate_kind, "minimum_weight_bytes_per_variant": minimum_bytes,
                         "varying_row_scales": integer && std::env::var("CLEF_BENCH_INTEGER_ROW_SCALES").as_deref() == Ok("1"),
                         "bitwise_identical": true, "sample_size": 20,

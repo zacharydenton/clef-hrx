@@ -69,19 +69,22 @@ BF16 is the default. Normal builds also support explicit INT4 modes:
 | --- | ---: | ---: |
 | BF16 | 202/231 (87.4%) | 516 |
 | INT4 MLP only | 199/231 (86.1%) | 752 |
-| INT4 eligible backbone projections | 194/231 (84.0%) | 986–1,003 |
+| INT4 eligible backbone projections | 194/231 (84.0%) | 986–1,007 |
 
 INT4 trades accuracy for speed; it is never selected automatically. These full
 sequential runs use the same binary and preserve every output of each mode's
-previous baseline. The INT4 range covers the initial run and an unchanged-binary
-repeat: the first cleared 1,000 tok/s, while the repeat fell below it. DeltaNet
+previous baseline. The INT4 range covers the initial run, an unchanged-binary
+repeat and a fresh control. The repeat remains below 1,000 tok/s. DeltaNet
 convolution now reuses overlapping inputs across eight adjacent rows, preserving
 FMA order and BF16 rounding. Peak engine allocation is 14.08 GiB for broader
 INT4 and 23.96 GiB for MLP-only INT4.
 See [qualification and reproduction](docs/evaluation.md#eight-row-causal-convolution),
 [precision details](docs/usage.md#precision)
 and [recorded experiments](docs/optimization.md). Vision, normalization and the
-trained decision head retain their original precision.
+trained decision head retain their original precision. A subsequent compact-grid
+experiment improved kernel benchmarks but did not establish a full-model gain;
+[its results and reproduction](docs/evaluation.md#partial-mlp-down-raster-groups)
+are recorded, and the previously qualified dispatch is retained.
 
 ## Evaluation
 

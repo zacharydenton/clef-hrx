@@ -998,3 +998,135 @@ engine allocation. Mean preparation/GPU time was 28.47/930.61 ms. Records:
 `artifacts/throughput-1000/conv-rows8-int4-mlp-eval-telemetry.jsonl`.
 BF16 and MLP-only telemetry also contain only their respective evaluator's KFD
 client. Both modes use the same normal binary and unchanged pinned workload.
+
+## Partial MLP-down raster groups
+
+**Outcome: rejected for native dispatch.** The measured candidate preserves
+accuracy and improves paired operator timings, but does not establish a
+full-model gain. The production kernel and dispatch remain at the previously
+qualified convolution revision.
+
+The candidate removes empty workgroups from the final partial four-tile raster
+group of INT4 MLP-down projections. Candidate selection covers 17,408-to-5,120
+projections at 1,025–4,032 rows when `ceil(rows / 256) % 4 != 0`; other shapes
+retain their previous dispatch. The dot products, scales, residual addition
+and BF16 rounding order are unchanged. The expanded GPU fixture compares
+against the original padded K128 projection plus separate addition, with
+sliced operands, varied and extreme scales, nonfinite residuals, boundary
+lengths and two replays. CPU tests and Clippy passed.
+
+Full pinned JevBench results from the same ordinary binary:
+
+| Mode/run | Correct / strictly valid | Resident wall seconds | Input tok/s |
+| --- | ---: | ---: | ---: |
+| INT4 initial | 194 / 231 | 163.399 | 1,018.33 |
+| INT4 unchanged-binary repeat | 194 / 231 | 168.802 | 985.73 |
+| BF16 | 202 / 231 | 319.235 | 521.23 |
+| MLP-only INT4 | 199 / 231 | 221.411 | 751.52 |
+
+Each run completed all 231 cases and exactly preserved every output question
+array and input token count against its prior same-mode baseline. Resident
+throughput is 166,394 tokens divided by wall time for the final 230 sequential
+requests. Encoding, preparation, compilation, GPU execution and readback remain
+included; only the first request, which includes model loading, is excluded.
+The first INT4 run passes the 1,000 tok/s gate and the repeat fails it.
+These results do not establish repeatable throughput above the target.
+
+Records: `tests/results/jevbench-20261011-{int4,bf16,int4-mlp}-compact-raster`
+and `tests/results/jevbench-20261011-int4-compact-raster-repeat`, each with
+`comparison.json` and `output-equality.json`. Normal binary:
+`artifacts/throughput-1000/clef-compact-raster`, SHA-256
+`6de4f2b34e7ecde1f46c58bd6023d0c86184537e9b565ddca48885e16cb2bad7`.
+Its `-source.json` hashes 108 files under `compact-raster-source`.
+Later additions to the benchmark harness support comparisons between two
+fused residual entry points; they do not change the ordinary runtime binary.
+
+Telemetry files under `artifacts/throughput-1000` are named
+`compact-raster-{int4,bf16,int4-mlp}-eval-telemetry.jsonl` and
+`compact-raster-repeat-int4-eval-telemetry.jsonl`. They contain 247, 334, 236
+and 183 samples, respectively, with only each run's evaluator as a KFD client.
+INT4 initial/repeat active-client samples averaged 2.618/2.522 GHz and
+135.9/122.0 W from the device sensors; these observational readings are not a
+controlled explanation of the throughput difference. No power or clock
+settings were changed. Peak engine allocations remain 14.078 GiB for broader
+INT4, 23.962 GiB for MLP-only INT4 and 47.816 GiB for BF16.
+
+[Paired operator checks and reproduction](optimization.md#partial-mlp-down-raster-groups)
+cover plain and fused-residual entry points with replay and rotating weights.
+Use fresh result names and an idle GPU for full reproduction. Build the archived
+`compact-raster-source` candidate for these experiments; the main branch has
+removed its compact production entry points:
+
+```sh
+# Overlay the local snapshot on its base commit to retain reference/ and fixtures.
+git worktree add --detach ../clef-raster-repro 1d07de1
+cp -a artifacts/throughput-1000/compact-raster-source/. ../clef-raster-repro/
+cargo test --manifest-path ../clef-raster-repro/Cargo.toml --locked --release \
+  --lib residual_projection_matches_separate_addition -- --ignored
+cargo build --manifest-path ../clef-raster-repro/Cargo.toml --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --binary ../clef-raster-repro/target/release/clef \
+  --precision int4 --output tests/results/jevbench-int4-raster-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-conv-rows8-repeat \
+  tests/results/jevbench-int4-raster-repro --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --binary ../clef-raster-repro/target/release/clef \
+  --precision int4 --output tests/results/jevbench-int4-raster-repeat \
+  --prepared tests/results/jevbench-int4-raster-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-int4-raster-repro \
+  tests/results/jevbench-int4-raster-repeat --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --binary ../clef-raster-repro/target/release/clef \
+  --precision bf16 --output tests/results/jevbench-bf16-raster-repro \
+  --prepared tests/results/jevbench-int4-raster-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-bf16-conv-rows8 \
+  tests/results/jevbench-bf16-raster-repro
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --binary ../clef-raster-repro/target/release/clef \
+  --precision int4-mlp --output tests/results/jevbench-int4-mlp-raster-repro \
+  --prepared tests/results/jevbench-int4-raster-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-mlp-conv-rows8 \
+  tests/results/jevbench-int4-mlp-raster-repro
+```
+
+For this exact measured version, build from the archived source when the main
+branch has advanced. `--prepared` checks the binary, dataset and model source
+before reusing input files and length preflight; request encoding still runs
+inside every timed native request. Retain failed throughput comparisons as
+well as passing ones.
+
+
+A fresh sequential control/candidate comparison used the two archived ordinary
+binaries, the same pinned workload and validated preflight files:
+
+| Run | Binary | Correct / strictly valid | Resident wall seconds | Input tok/s |
+| --- | --- | ---: | ---: | ---: |
+| Fresh control | `clef-conv-rows8` | 194 / 231 | 165.228 | 1,007.05 |
+| Candidate after control | `clef-compact-raster` | 194 / 231 | 170.347 | 976.79 |
+
+Both preserve every output and token count exactly. Records:
+`tests/results/jevbench-20261011-int4-conv-rows8-raster-control` and
+`tests/results/jevbench-20261011-int4-compact-raster-clean`; telemetry files use
+those suffixes as `artifacts/throughput-1000/<suffix>-int4-eval-telemetry.jsonl`.
+The candidate's 1,000 tok/s comparison fails. These sequential runs do not
+provide a paired model confidence interval and are subject to the observed
+clock/power variation. A full-model gain remains unproven, so the compact
+production path is removed rather than selected from its best initial result.
+The stronger independent GPU fixture and benchmark export controls are retained.
+
+The retained binary's observed broader INT4 range is now **986.28–1,007.05 tok/s**,
+including the original initial run, original repeat and this fresh control.
+The repeat still misses 1,000 tok/s; the throughput goal remains open.
+
+
+The final normal rebuild after removing the candidate exactly matches the
+retained `clef-conv-rows8` binary SHA-256 above. The expanded GPU test, CPU suite
+and Clippy passed after restoration. The independent record audit
+`artifacts/throughput-1000/compact-raster-qualification-audit.json` checks all six
+runs' binary identities, pinned dataset metadata, request bytes, CLI arguments,
+strict validity, exact outputs, raw token/wall totals and sole GPU clients.
+It records the candidate as unselected and the throughput goal as incomplete.
