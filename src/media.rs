@@ -295,7 +295,7 @@ fn item(
     let gw = rw / 16;
     ensure!(
         t * gh * gw / 4 <= budget,
-        "media alone exceeds token budget; lower max_pixels/num_frames"
+        "context capacity exceeded: media alone exceeds token budget; lower max_pixels/num_frames"
     );
     let resized: Vec<_> = frames.iter().map(|im| resize(im, rh, rw)).collect();
     let mut patches = Vec::with_capacity(t * gh * gw * 1536);

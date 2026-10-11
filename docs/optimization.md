@@ -23,7 +23,46 @@ The **1,000 tok/s target remains unmet for BF16**, and the
 [arithmetic ceiling](#tiled-weight-layout) shows BF16 WMMA cannot reach it on
 this GPU.
 
+## Original MLP INT4: current bottleneck
+
+The Flash-support regression run retained every original CLEF probability:
+202/231 BF16, 204/231 MLP INT4 and 194/231 broader INT4. Resident input rates were
+623.67, 850.75 and 1,004.39 tok/s respectively. These changes are within the 3%
+benchmark noise threshold of the accepted runs. MLP INT4 still misses 1,000 tok/s;
+no kernel optimization is claimed from this support work.
+
+A fresh three-round serialized profile of actual JevBench requests gives:
+
+| Input tokens | INT4 GEMM share | BF16 GEMM share | Total serialized GPU ms |
+| --- | ---: | ---: | ---: |
+| 235 | 38.2% | 44.1% | 276.85 |
+| 620 | 41.0% | 36.6% | 662.35 |
+| 2,729 | 39.9% | 33.9% | 2,876.55 |
+
+Profiling inserts barriers; these are diagnostic shares, not end-to-end speed
+claims. Outputs before and after profiling matched exactly. Reaching 1,000 tok/s
+from 850.75 needs about a 15% reduction in complete request time. The next useful
+candidates therefore need to improve the large matrix multiplies; small head or
+normalization changes alone cannot close that gap. Existing rejected tiling
+experiments remain documented below.
+
+Raw log: `artifacts/flash-qualification/profile-mlp-int4.log`. The three requests
+are cases 0, 137 and 121 from the frozen JevBench `requests.jsonl`, respectively.
+Reproduce with:
+
+```sh
+cargo build --release --features bench-internals --example profile_inference
+CLEF_MODEL_DIR=artifacts/model target/release/examples/profile_inference \
+  --model clef --precision int4-mlp --max-length 4032 --rounds 3 \
+  REQUEST_235.json REQUEST_620.json REQUEST_2729.json
+```
+
 ## Criterion coverage
+
+Flash has its own `flash` suite covering its projection, packing, attention and
+32-head DeltaNet shapes. See [Flash benchmarks](clef-flash.md#benchmarks).
+Full-model benchmarks accept `CLEF_BENCH_MODEL` and `CLEF_BENCH_PRECISION`; a
+long-context request corpus also adds targets through 65,536 tokens.
 
 | Suite | Coverage | Timing boundary |
 | --- | --- | --- |

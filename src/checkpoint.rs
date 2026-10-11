@@ -269,7 +269,8 @@ impl Source {
             }
             ensure!(
                 actual == expected,
-                "unsupported {name}; expected pinned CLEF architecture/processor"
+                "unsupported {name}; expected pinned {} architecture/processor",
+                self.model.name()
             );
         }
         Ok(())
@@ -349,7 +350,7 @@ pub struct Inspection {
 }
 pub fn workspace_estimate(tokens: usize) -> u64 {
     // Conservative live activation allowance, plus recurrent state, scratch and staging.
-    (tokens as u64 * 17408 * 2 * 12) + (2 << 30)
+    ModelVariant::Clef.architecture().workspace_estimate(tokens)
 }
 fn validate_index(index: &Index, model: ModelVariant) -> Result<()> {
     let expected: Index = serde_json::from_str(model.reference("model.safetensors.index.json"))?;

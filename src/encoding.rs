@@ -105,7 +105,7 @@ impl Encoder {
                 .context("media grid overflow")?;
             ensure!(
                 patches <= options.max_length.saturating_mul(4),
-                "media exceeds token budget"
+                "context capacity exceeded: media exceeds token budget"
             );
             ensure!(
                 item.patches.len() == patches * 1536 && item.patches.iter().all(|x| x.is_finite()),
@@ -124,7 +124,7 @@ impl Encoder {
         }
         ensure!(
             visual_tokens <= options.max_length,
-            "media exceeds total token budget"
+            "context capacity exceeded: media exceeds total token budget"
         );
         let mut schema = self.tokens("\n\nSCHEMA FIELDS:\n")?;
         let mut questions = Vec::new();

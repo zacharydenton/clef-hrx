@@ -16,7 +16,7 @@ CLEF answers structured questions about text, images and video:
 
 ## Build and run
 
-Requires Rust 1.91+, Linux and a `gfx1151` GPU. BF16 needs at least 50 GiB of
+Requires Rust 1.91+, Linux and a `gfx1151` GPU. Original CLEF BF16 needs at least 50 GiB of
 available RAM for short requests. Video input needs ffmpeg and ffprobe.
 
 ```sh

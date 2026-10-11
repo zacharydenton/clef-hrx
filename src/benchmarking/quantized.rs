@@ -17,6 +17,15 @@ pub struct PackingBenchmark {
 
 impl PackingBenchmark {
     pub fn new(rows: usize, width: usize, bits: usize) -> Result<Self> {
+        Self::build(rows, width, bits, false)
+    }
+
+    /// Compare the production selector with the independent two-pass baseline.
+    pub fn production(rows: usize, width: usize, bits: usize) -> Result<Self> {
+        Self::build(rows, width, bits, true)
+    }
+
+    fn build(rows: usize, width: usize, bits: usize, production: bool) -> Result<Self> {
         ensure!(
             (1..=8192).contains(&rows)
                 && (256..=32768).contains(&width)
@@ -124,6 +133,8 @@ impl PackingBenchmark {
                 stride,
                 candidate_source.as_deref().unwrap(),
             )?
+        } else if production && candidate_source.is_none() {
+            prepare(&mut engine, &activated, bits, stride)?
         } else {
             crate::quantized::prepare_with_inputs(
                 &mut engine,

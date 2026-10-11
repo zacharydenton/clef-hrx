@@ -21,7 +21,13 @@ fn benches(c: &mut Criterion) {
     .collect();
     assert!(!requests.is_empty());
     let start = Instant::now();
+    let precision = <clef_hrx::Precision as clap::ValueEnum>::from_str(
+        &std::env::var("CLEF_BENCH_PRECISION").unwrap_or_else(|_| "bf16".into()),
+        false,
+    )
+    .unwrap();
     let mut model = ClefModel::load(LoadOptions {
+        precision,
         source: Source {
             model: match std::env::var("CLEF_BENCH_MODEL")
                 .as_deref()
@@ -55,7 +61,11 @@ fn benches(c: &mut Criterion) {
         lengths.iter().all(|&n| n <= 65536),
         "check for input truncation"
     );
-    let selected: BTreeSet<_> = [158usize, 235, 260, 620, 1024, 2048, 4032]
+    let mut targets = vec![158usize, 235, 260, 620, 1024, 2048, 4032];
+    if lengths.iter().any(|&n| n > 4032) {
+        targets.extend([8192, 16384, 32768, 49152, 65536]);
+    }
+    let selected: BTreeSet<_> = targets
         .into_iter()
         .map(|target| {
             lengths

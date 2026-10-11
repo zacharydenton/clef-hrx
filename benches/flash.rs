@@ -94,7 +94,7 @@ fn flash(c: &mut Criterion) {
                 group.bench_function(
                     BenchmarkId::new("packing_int4", format!("{rows}x{width}")),
                     |b| {
-                        let mut graph = PackingBenchmark::new(rows, width, 4).unwrap();
+                        let mut graph = PackingBenchmark::production(rows, width, 4).unwrap();
                         b.iter(|| graph.run(true).unwrap());
                         graph.check().unwrap();
                     },

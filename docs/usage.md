@@ -16,6 +16,10 @@ Commands run from the repository root.
 ./target/release/clef --max-length 1536 decide requests.jsonl --jsonl
 ```
 
+Select Flash with `--model clef-flash`; default model selection is original CLEF.
+The CLI selection controls loaded weights. The request's `model` field remains a
+response label and does not switch checkpoints in a resident process.
+
 Responses contain `model`, `answers`, and `usage`, with probabilities rounded to
 four decimals. `--raw` includes logits, unrounded probabilities, and timings.
 
@@ -44,15 +48,18 @@ Paths are relative to the working directory; images support PNG, JPEG, and WebP.
 storage is capped at 1 GiB.
 
 `--max-length` limits the total input to 1–65,536 tokens (default 65,536).
-State text is truncated to fit; oversized schemas and media are rejected.
+State text is truncated to fit by default; `--strict-context` rejects truncation.
+Oversized schemas and media are rejected in either mode.
 `--max-state-tokens` further limits state text. `--memory-gib` sets an allocation
 budget (default 80), not a reservation. Run full-model jobs sequentially.
 
 ## Precision
 
-`--precision bf16` is the default. `--precision int4-mlp` packs the 192 MLP
+`--precision bf16` is the default for both models. For original CLEF,
+`--precision int4-mlp` packs the 192 MLP
 projections; `--precision int4` additionally packs eligible large attention and
-DeltaNet projections (368 matrices total). Both are available in ordinary builds.
+DeltaNet projections (368 matrices total). Both modes also support Flash (96 MLP projections, 184 broader projections).
+All modes are available in ordinary builds.
 The Rust API accepts `LoadOptions { precision: Precision::Int4, ..Default::default() }`.
 
 Weights are rotated in 256-element groups and packed once when loading. Each
@@ -63,7 +70,7 @@ packing operations are fused, with a different FP32 RMS summation order and
 the original BF16 rounding boundary. Packed weights are
 prepared from the same pinned checkpoint, with no additional model download.
 
-Full JevBench measurements were 847 tok/s and 204/231 for MLP-only INT4,
+Original CLEF full JevBench measurements were 847 tok/s and 204/231 for MLP-only INT4,
 1,032 tok/s and 194/231 for broader INT4, and 616 tok/s and 202/231 in BF16.
 The [latest qualification](evaluation.md#tiled-weight-layout) uses the same
 binary for all modes and reproduces every output of the prior runs exactly, so

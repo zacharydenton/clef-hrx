@@ -14,7 +14,36 @@ The native limit remains 65,536 total encoded tokens, including schema and media
 BF16 passes the eight-case independent text/image/video corpus with identical
 winners, maximum probability error 0.002057 (limit 0.003), and exact changed-input replay. Reference
 fixtures and their environment manifest are in `tests/fixtures/flash/`.
-Full JevBench, WorkflowEvals, throughput and 64k execution qualification are pending.
+All three Flash JevBench runs are complete. WorkflowEvals and 64k execution
+qualification are pending.
+
+## Initial JevBench results
+
+The complete 231-case public suite on gfx1151, using the same binary and input
+lengths in every mode:
+
+| Precision | Correct | Resident input tok/s | Peak engine GiB |
+| --- | ---: | ---: | ---: |
+| bf16 | 191/231 | 1,165.68 | 14.91 |
+| int4-mlp | 183/231 | 2,215.67 | 8.23 |
+| int4 | 165/231 | 2,518.98 | 5.50 |
+
+Relative to Flash BF16, MLP INT4 gains three correct cases and loses eleven;
+broader INT4 gains thirteen and loses thirty-nine. Maximum probability changes
+are 0.7532 and 0.9068, respectively. These are explicit quantization tradeoffs,
+not numerical parity claims.
+
+All responses were strictly valid. Telemetry recorded at most one KFD client.
+These are initial runs; compilation is included, so the BF16 result includes
+first-use compilation for previously unseen Flash shapes. Warm-cache repeats
+will be reported separately. Only the first request containing model loading is
+excluded from resident throughput.
+
+Implementation: `787b2bb`; evaluation tooling: `891353c`.
+Frozen executable SHA256:
+`3a430b14b418cb01c9f87aa9472848ee18a8f1ff773d2c8f745f9fa9521dd0d2`.
+Raw results: `tests/results/flash-support-baseline/clef-flash-{bf16,int4-mlp,int4}`.
+
 
 ## Loading and storage
 
@@ -42,7 +71,19 @@ Use pristine Flash weights and the release's `joint_schema_model.py`. Run refere
 and native GPU processes sequentially. The generator records package versions and
 the release code hash; it does not use native predictions to construct references.
 
+The following creates an isolated environment over the host's working ROCm
+PyTorch/torchvision installation. Install the extra reference dependencies without
+replacing that GPU stack:
+
 ```sh
+uv venv --python /usr/bin/python3 --system-site-packages artifacts/flash-reference-py314
+uv pip install --python artifacts/flash-reference-py314/bin/python \
+  'transformers==5.10.2' 'tokenizers==0.22.2'
+uv pip install --python artifacts/flash-reference-py314/bin/python --no-deps \
+  'accelerate==1.15.0' 'flash-linear-attention==0.5.2' 'fla-core==0.5.2' \
+  'av==19.0.1' 'sentencepiece==0.2.2'
+artifacts/flash-reference-py314/bin/hf download Cloudflare/clef-flash \
+  --revision 8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3 --local-dir artifacts/model-flash
 artifacts/flash-reference-py314/bin/python scripts/generate_flash_reference.py \
   --model-dir artifacts/model-flash --output artifacts/flash-qualification/reference
 ```
@@ -62,6 +103,17 @@ CLEF_MODEL_DIR=artifacts/model-flash CLEF_TEST_MODEL=clef-flash \
 ```sh
 CLEF_MODEL_DIR=artifacts/model cargo test --lib strict_context_preserves_exact_fit -- --ignored
 ```
+
+Check all three precision modes against this corpus, including changed-input and
+identical-input replay:
+
+```sh
+python3 scripts/qualify_corpus.py --model clef-flash --model-dir artifacts/model-flash \
+  --reference tests/fixtures/flash --output tests/results/flash-multimodal-all-modes
+```
+
+The BF16 reference tolerance stays 0.003. Initial INT4 differences are reported;
+all modes must produce valid probabilities and exact same-mode replay.
 
 ## Evaluations
 
@@ -103,6 +155,10 @@ threshold. Explicit lengths above 4,032 exercise attention and DeltaNet only, up
 to 65,536. Operator timings exclude allocation, compilation and upload; full-model
 evaluations include request preparation and compilation. GEMM operation rates are
 not model token throughput.
+
+The GPU smoke sweep passed 144 cases at 128, 235, 620 and 4,032 tokens, including
+packing width 12,288 through the production selector. Artifacts:
+`benches/results/flash-support-smoke-fixed`. Smoke timings are not speed claims.
 
 ## Full context and workflow matrix
 

@@ -6,6 +6,8 @@ use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 
 #[derive(Parser)]
 struct Args {
+    #[arg(long, value_enum, default_value_t = clef_hrx::ModelVariant::Clef)]
+    model: clef_hrx::ModelVariant,
     /// Requests to profile with one resident model.
     paths: Vec<PathBuf>,
     #[arg(long, default_value_t = 1536)]
@@ -27,16 +29,16 @@ fn main() -> Result<()> {
     let started = Instant::now();
     let mut model = ClefModel::load(LoadOptions {
         source: Source {
-            model: Default::default(),
+            model: args.model,
             directory: std::env::var_os("CLEF_MODEL_DIR").map(Into::into),
             offline: true,
         },
         encoding: EncodeOptions {
-            strict_context: false,
+            strict_context: true,
             max_length: args.max_length,
             ..Default::default()
         },
-        memory_budget_bytes: 60usize << 30,
+        memory_budget_bytes: 80usize << 30,
         precision: args.precision,
         ..Default::default()
     })?;
