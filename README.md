@@ -71,11 +71,17 @@ See [precision options](docs/usage.md#precision).
 
 Full JevBench results on AMD Strix Halo, with the model already loaded:
 
-| Mode | Full JevBench accuracy | Resident input tok/s |
+| Runtime / mode | Full JevBench accuracy | Resident input tok/s |
 | --- | ---: | ---: |
-| BF16 | 202/231 (87.4%) | 616 |
-| INT4 MLP only | 204/231 (88.3%) | 847 |
-| INT4 backbone | 194/231 (84.0%) | 1,032 |
+| clef-hrx BF16 | 202/231 (87.4%) | 616 |
+| llama.cpp HIP BF16 | 203/231 (87.9%) | 343 |
+| clef-hrx INT4 MLP only | 204/231 (88.3%) | 847 |
+| llama.cpp HIP Q4_K_M | 204/231 (88.3%) | 335–351 |
+| clef-hrx INT4 backbone | 194/231 (84.0%) | 1,032 |
+
+BF16 is **1.79× faster** than llama.cpp HIP BF16. MLP-only INT4 is
+**2.42–2.53× faster** than llama.cpp HIP Q4_K_M, with both scoring 204/231.
+[llama.cpp comparison and reproduction](docs/llama-jevbench.md).
 
 [Results and reproduction](docs/evaluation.md#tiled-weight-layout).
 [WorkflowEvals](docs/workflowevals.md) is still in progress.
