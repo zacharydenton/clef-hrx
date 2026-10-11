@@ -35,6 +35,7 @@ results are retained. The **1,000 tok/s target remains unmet**.
 | `workload` / `paired_packing` | INT4 packing at widths 5,120, 6,144 and 8,192; an external candidate also adds 17,408; exact logical codes and scales | Completed graph with alternating order and paired confidence intervals; default compares two-pass/one-pass LDS, external candidates use the pre-register production baseline |
 | `workload` / `paired_integer_gemm` | Original packed GEMM versus `CLEF_BENCH_INTEGER_SOURCE`, eight projection families including K/V and joint head, repeated and rotating weights, all workload lengths | Alternating-order completed graphs; prepacked identical operands; exact output bits checked before and after timing |
 | `workload` / `paired_bf16_gemm` | BF16 GEMM versus `CLEF_BENCH_GEMM_SOURCE`, the same eight projection families at 128 or more rows, repeated and rotating weights | Alternating-order completed graphs; exact output bits before and after timing, combined allocation capped at 1 GiB |
+| `workload` / `paired_convolution` | Scalar versus adjacent-row causal convolution and SiLU, replay and at least 64 MiB rotating inputs | Alternating completed graphs; exact bits and replay checked; separate identical inputs |
 | `preprocessing` / `kernel_cache_key` (with `bench-internals`) | CPU cache-hit key generation and two map lookups; three real kernel source lengths and a fixed eight-entry configuration | Full-source keys versus content-verified cached SHA-256 fingerprints; no GPU execution |
 | `normalization`, `preprocessing` | Normalization shapes and CPU request processing | Existing suite-specific boundaries |
 | `workload_inference` | Seven representative requests selected by nearest token length from an actual request corpus; exact-input replay and graph rebuilding | Complete `infer` calls, including preparation in rebuild cases |
@@ -670,3 +671,90 @@ fixture also passed sliced 5,120-to-48 projections from 1 through 4,033 rows
 with replay. This tile is not selected for narrow gates: boundary performance
 and complete-model qualification remain pending. No model-throughput gain is
 claimed from this probe.
+
+## Causal convolution row reuse
+
+`paired_convolution` compares the original four-tap causal convolution plus
+SiLU with `CLEF_BENCH_CONV_SOURCE`. `CLEF_BENCH_CONV_ROWS` sets output rows per
+thread (1, 2, 4 or 8). Both paths retain the original sequential FP32 FMA order,
+BF16 convolution rounding, SiLU and final BF16 store. Each candidate thread
+loads an overlapping input window and four weights once, then produces several
+adjacent time rows. Missing history skips its FMA, which matters for nonfinite
+weights. Ragged final rows are guarded separately.
+
+The harness alternates execution order with 20 measured batches, records raw
+paired times and 99% bootstrap intervals, and retains each variant's separate
+inputs and outputs. Rotating cases use at least 64 MiB of input per variant;
+shorter-than-128-row cases use replay only. Outputs must match the reference
+bits before timing and the saved initial reference after timing. Inputs and
+weights use nonzero row slices. Compilation and upload are excluded from this
+operator measurement; full-model qualification includes request preparation.
+
+The initial two/four/eight-row quick sweeps all preserved output bits. Two rows
+measured 1.308–1.561×; four rows 1.744–3.132×; eight rows 1.654–3.051× over
+235, 620 and 4,032 tokens in both cache modes. Eight rows were strongest for
+long inputs. The compact eight-row implementation then passed 27 smoke cases
+covering 1–9-row causal startup, 65, 127–129, 158, 235, 620, 1,024, 2,048 and
+4,031–4,032 rows. Its expanded 20-pair timing sweep measured **1.522–3.135×**;
+every 99% lower bound exceeded 1.0. Records under `benches/results`:
+`conv-rows{2,4,8}-paired`, `conv-rows8-compact-smoke` and
+`conv-rows8-compact-full`. All variants and source snapshots are retained.
+
+The final native source's six quick pairs measured **2.188–3.055×** with exact
+outputs and every 99% lower bound above 1.0 (`conv-rows8-native-paired`).
+Compiler reports for the compact kernel used 23–29 VGPRs at the measured
+128–4,032-row shapes versus 8 for the scalar reference, with no LDS or spills
+in either. Reports: `artifacts/throughput-1000/conv-rows8-compact-reports`.
+
+Native dispatch selects eight rows per thread only for BF16 10,240-channel
+convolution at 128–4,032 rows. Other shapes retain the scalar path. The GPU
+fixture compares the candidate and native dispatch to the scalar reference at
+19 lengths through 4,033, using independent input/weight slices, missing causal
+history, partial row tiles, zeros, subnormals, large values, infinities, NaNs and
+two replays. Non-NaN results match bits; NaNs remain NaNs. Selected finite
+outputs also pass an independent FP64 convolution/SiLU oracle. CPU tests and
+Clippy passed. Full JevBench qualification retained all 231 output arrays in
+each mode: 202 correct for BF16, 199 for MLP-only INT4, and 194 for broader INT4.
+Broader INT4 measured 1,002.98 tok/s initially and 986.28 on an unchanged-binary
+repeat. Both are retained; the repeat misses the goal. BF16/MLP-only measured
+516.08/752.25 tok/s. See [full results and reproduction](evaluation.md#eight-row-causal-convolution).
+
+```sh
+CLEF_BENCH_CONV_SOURCE=kernels/conv_delta_rows8.loom CLEF_BENCH_CONV_ROWS=8 \
+  CLEF_BENCH_LENGTHS=128,129,158,235,260,620,1024,2048,4031,4032 \
+  python3 scripts/bench_workload.py convolution-rows8-repro \
+  --filter paired_convolution
+cargo test --locked --release --lib convolution_row_reuse_preserves_outputs -- --ignored
+```
+
+`CLEF_BENCH_INTEGER_M_GROUP` lets `paired_integer_gemm` change only the candidate's
+maximum row-tile group (1–16); the reference remains at four. The effective group
+is capped by `ceil(rows / 256)`, matching the native rule. Use a source whose
+`m_group` configuration accepts the chosen limit and a matching reference tile.
+This is a benchmark-only probe of weight reuse; native dispatch remains unchanged
+until paired operator and full-model results qualify a different ordering.
+
+The initial row-group sweeps retained exact outputs in all 48 pairs across MLP
+up/gate and down at 1,025, 2,048 and 4,032 rows, in replay and rotating modes.
+Increasing the group cap to eight or sixteen improved the 1,025-row boundary
+but regressed both longer shapes, reaching 0.892× for sixteen-row-group
+MLP up/gate at 4,032. Caps of one or two were mostly unchanged on aligned long
+shapes, with boundary gains up to 1.089×. These sweeps do not justify changing
+the general four-tile rule. Records: `int4-group{1,2,8,16}-mlp-{up-gate,down}`
+under `benches/results`; candidate sources are archived with each run.
+
+A separate prototype keeps four-tile raster groups for the interior but removes
+padding from the last group. Gfx11 lowering rejected a dynamic divisor; the
+working version selects constant division/remainder cases for group sizes one
+through four. The two compiler-failed smoke attempts are retained separately;
+`unpadded-groups-smoke-v3` passed six exact cases. Its MLP-down report retained
+256 VGPRs, 54 KiB LDS and zero spills, matching the original wide-K kernel.
+
+Quick paired probes (`unpadded-groups-mlp-{up-gate,down}`) found boundary gains
+at 1,025 rows but little change at aligned controls. The expanded sweeps cover
+both endpoints of each partial-group band at 1,025–3,840 rows, in both cache
+modes (`unpadded-groups-mlp-{up-gate,down}-boundaries`). All 72 pairs matched
+output bits. Up/gate ranged 0.994–1.022× and is not selected. MLP down improved
+**1.017–1.097× in all 36 pairs**, with every 99% lower bound above 1.0. Native
+integration and full-model qualification of this MLP-down candidate remain
+pending; the currently qualified model still uses the original raster mapping.

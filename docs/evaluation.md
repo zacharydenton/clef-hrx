@@ -900,3 +900,101 @@ The preceding control's preparation/GPU time was 31.65/720.43 ms. Records:
 access. The control uses the archived attention-gate-packing binary above;
 the candidate uses the residual-projection binary. Both clean candidate runs
 are retained, giving the **967.61–969.78 tok/s** range in the README.
+
+## Eight-row causal convolution
+
+Reusing an eleven-value input window and four weights produces eight adjacent
+DeltaNet convolution rows per thread. The kernel preserves tap order, skips
+missing causal history, rounds convolution to BF16 before SiLU, and rounds the
+stored result to BF16. Native selection covers BF16 10,240-channel inputs at
+128–4,032 rows; other shapes retain the original kernel. This applies to all
+precision modes because convolution remains BF16 in each.
+
+The first full sequential INT4 run passed the **1,000 input tok/s gate** at
+**1,002.98 tok/s**: 166,394 resident tokens / 165.899 seconds. It retained
+194/231 correct, all 231 strictly valid, and every question output array and
+token count exactly matched the residual-fusion baseline. Median/p95 request
+latency was 0.281/2.530 seconds; mean preparation/GPU time was 38.80/679.78 ms.
+Preparation and compilation remain included. Only the first request including
+model loading is excluded. No request batching or prefix/output reuse is used.
+
+Records: `tests/results/jevbench-20261011-int4-conv-rows8`, including the passing
+`comparison.json` with `required_tok_s: 1000` and `output-equality.json`.
+Normal binary `artifacts/throughput-1000/clef-conv-rows8` has SHA-256
+`8819672d71bc2afb325f8bca1667d663fe170a9e5372628aff2704ddd569cd68`.
+Its `-source.json` hashes all 108 files in `conv-rows8-source`. Telemetry:
+`artifacts/throughput-1000/conv-rows8-int4-eval-telemetry.jsonl`.
+
+[Operator measurements and reproduction](optimization.md#causal-convolution-row-reuse)
+include paired timing, rotating inputs, exact output checks, compiler resources
+and rejected smaller tiles. The native GPU fixture covers 19 lengths through
+4,033, causal startup, sliced operands, partial rows, exceptional values,
+selection boundaries, replay and an independent scalar oracle. CPU tests and
+Clippy passed.
+
+Reproduce on an idle GPU with fresh output names. Use the archived source above
+for the exact measured version if the main branch has advanced:
+
+```sh
+CLEF_BENCH_CONV_SOURCE=kernels/conv_delta_rows8.loom CLEF_BENCH_CONV_ROWS=8 \
+  python3 scripts/bench_workload.py convolution-rows8-repro --profile quick \
+  --filter paired_convolution
+cargo test --locked --release --lib convolution_row_reuse_preserves_outputs -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4-convolution-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-residual-projection-clean \
+  tests/results/jevbench-int4-convolution-repro --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4-convolution-repeat \
+  --prepared tests/results/jevbench-int4-convolution-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-int4-convolution-repro \
+  tests/results/jevbench-int4-convolution-repeat --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision bf16 --output tests/results/jevbench-bf16-convolution-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-bf16-residual-projection \
+  tests/results/jevbench-bf16-convolution-repro
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4-mlp --output tests/results/jevbench-int4-mlp-convolution-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-mlp-residual-projection \
+  tests/results/jevbench-int4-mlp-convolution-repro
+```
+
+The comparison exits nonzero if the throughput target, full-suite validity or
+same-mode accuracy floor fails. `--prepared` reuses validated input files and
+length preflight; it does not remove native request encoding from measured time.
+Keep initial and repeat results and their cache snapshots when comparing runs.
+
+The unchanged-binary repeat measured **986.28 tok/s** (166,394 / 168.709 seconds),
+again retaining all 231 output arrays and token counts at 194/231 correct and
+231 strictly valid. Median/p95 latency was 0.272/2.557 seconds. Mean preparation
+fell to 30.04 ms, but GPU time rose to 700.77 ms, outweighing that reduction.
+Both runs used 14.078 GiB peak engine allocation. Their 249/183 telemetry
+samples each contain only the evaluation process's KFD client when one is
+present. Repeat records: `tests/results/jevbench-20261011-int4-conv-rows8-repeat`;
+telemetry: `conv-rows8-repeat-int4-eval-telemetry.jsonl`.
+
+The initial run passes the 1,000 tok/s gate; the repeat fails it. Both results
+are retained, giving an observed **986.28–1,002.98 tok/s** range. This is progress
+over the prior 967.61–969.78 tok/s candidate runs, but does not establish
+repeatable throughput above the target. Further optimization remains necessary.
+
+BF16 qualification retained **202/231**, all strictly valid, and all 231 output
+arrays and token counts exactly. It measured **516.08 tok/s** (166,394 / 322.420
+seconds), 0.656/4.595-second median/p95 latency, and 47.816 GiB peak engine
+allocation. Mean preparation/GPU time was 30.94/1,368.12 ms. Records:
+`tests/results/jevbench-20261011-bf16-conv-rows8`; telemetry:
+`artifacts/throughput-1000/conv-rows8-bf16-eval-telemetry.jsonl`.
+
+MLP-only INT4 qualification retained **199/231**, all strictly valid, and every
+output array and token count exactly. It measured **752.25 tok/s** (166,394 /
+221.196 seconds), 0.417/3.179-second median/p95 latency, and 23.962 GiB peak
+engine allocation. Mean preparation/GPU time was 28.47/930.61 ms. Records:
+`tests/results/jevbench-20261011-int4-mlp-conv-rows8`; telemetry:
+`artifacts/throughput-1000/conv-rows8-int4-mlp-eval-telemetry.jsonl`.
+BF16 and MLP-only telemetry also contain only their respective evaluator's KFD
+client. Both modes use the same normal binary and unchanged pinned workload.

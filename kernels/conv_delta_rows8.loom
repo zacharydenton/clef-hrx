@@ -1,0 +1,109 @@
+// Eight adjacent causal convolution rows per thread; reuse the overlapping window.
+// Preserve sequential FP32 FMAs and both BF16 rounding boundaries.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.width : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %w_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %x_len = config.get @clef.x_len : index
+ %x_dtype = config.get @clef.x_dtype : index
+ %w_len = config.get @clef.w_len : index
+ %w_dtype = config.get @clef.w_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%width = config.get @clef.width : index
+%tile = index.constant 8 : index
+%window = index.constant 11 : index
+%three = index.constant 3 : index
+%four = index.constant 4 : index
+%rows = index.div %out_len, %width : index
+%end = index.add %rows, %three : index
+%block = index.div %id, %width : index
+%row = index.mul %block, %tile : index
+%col = index.rem %id, %width : index
+%wb = index.mul %col, %four : index
+// Cache the overlapping causal window once per channel and output tile.
+%empty = vector.constant 0.0 : vector<11xf32>
+%xs = scf.for %j = [%zero to %window step %one](%cache = %empty : vector<11xf32>) -> (vector<11xf32>) unroll {
+ %rj = index.add %row, %j : index
+ %left = index.cmp uge, %rj, %three : index
+ %right = index.cmp ult, %rj, %end : index
+ %valid = scalar.andi %left, %right : i1
+ %value = scf.if %valid -> (f32) {
+  %rr = index.sub %rj, %three : index
+  %rb = index.mul %rr, %width : index
+  %p = index.add %rb, %col : index
+  %v = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %p) : (index, buffer, index, index) -> (f32)
+  scf.yield %v : f32
+ } else {scf.yield %fzero : f32}
+ %next = vector.insert %value into %cache[%j] : f32, vector<11xf32>
+ scf.yield %next : vector<11xf32>
+}
+%empty_w = vector.constant 0.0 : vector<4xf32>
+%ws = scf.for %j = [%zero to %four step %one](%cache = %empty_w : vector<4xf32>) -> (vector<4xf32>) unroll {
+ %wi = index.add %wb, %j : index
+ %w = template.apply<@clef.load>(%w_dtype, %w_buffer, %w_len, %wi) : (index, buffer, index, index) -> (f32)
+ %next = vector.insert %w into %cache[%j] : f32, vector<4xf32>
+ scf.yield %next : vector<4xf32>
+}
+scf.for %i = [%zero to %tile step %one] unroll {
+ %outrow = index.add %row, %i : index
+ %outvalid = index.cmp ult, %outrow, %rows : index
+ scf.if %outvalid {
+  // Preserve tap order and skip missing history, including nonfinite weights.
+  %sum = scf.for %j = [%zero to %four step %one](%acc = %fzero : f32) -> (f32) unroll {
+   %slot = index.add %i, %j : index
+   %rj = index.add %row, %slot : index
+   %left = index.cmp uge, %rj, %three : index
+   %next = scf.if %left -> (f32) {
+    %x = vector.extract %xs[%slot] : vector<11xf32> -> f32
+    %w = vector.extract %ws[%j] : vector<4xf32> -> f32
+    %f = scalar.fmaf %x, %w, %acc : f32
+    scf.yield %f : f32
+   } else {scf.yield %acc : f32}
+   scf.yield %next : f32
+  }
+  // Convolution rounds to BF16 before SiLU, then the store rounds again.
+  %bf = scalar.fptrunc %sum : f32 to bf16
+  %rounded = scalar.extf %bf : bf16 to f32
+  %neg = scalar.negf %rounded : f32
+  %exp = scalar.expf<afn> %neg : f32
+  %den = scalar.addf %fone, %exp : f32
+  %result = scalar.divf %rounded, %den : f32
+  %ob = index.mul %outrow, %width : index
+  %oi = index.add %ob, %col : index
+  template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi, %result) : (index, buffer, index, index, f32) -> ()
+ }
+}
+
+
+
+ }
+ kernel.return
+}

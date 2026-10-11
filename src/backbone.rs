@@ -224,16 +224,45 @@ impl Engine {
         Ok(out)
     }
     pub fn conv_delta(&mut self, x: &Tensor, w: &Tensor) -> Result<Tensor> {
+        let tiled = (128..=4032).contains(&x.rows)
+            && x.cols == 10240
+            && x.dtype == DType::Bf16
+            && w.dtype == DType::Bf16;
+        self.conv_delta_source(
+            x,
+            w,
+            if tiled {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/conv_delta_rows8.loom")
+                )
+            } else {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/conv_delta.loom")
+                )
+            },
+            if tiled { 8 } else { 1 },
+        )
+    }
+    pub(crate) fn conv_delta_source(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        source: &str,
+        tile: usize,
+    ) -> Result<Tensor> {
+        ensure!(
+            x.rows > 0 && x.cols > 0 && w.len() == x.cols * 4 && [1, 2, 4, 8].contains(&tile),
+            "causal convolution dimensions"
+        );
         let out = self.alloc(x.rows, x.cols, DType::Bf16)?;
         self.dispatch(
-            concat!(
-                include_str!("../kernels/common.loom"),
-                include_str!("../kernels/conv_delta.loom")
-            ),
-            out.len(),
+            source,
+            x.rows.div_ceil(tile) * x.cols,
             &[("x", x), ("w", w)],
             &out,
-            &[("width", (x.cols).to_string())],
+            &[("width", x.cols.to_string())],
         )?;
         Ok(out)
     }
@@ -566,6 +595,111 @@ fn mlp_chunked(e: &mut Engine, x: &Tensor, prefix: &str, chunk: usize) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151; checks causal history, row tails, slices, rounding and replay"]
+    fn convolution_row_reuse_preserves_outputs() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        let width = 10240;
+        for rows in [
+            1, 2, 3, 4, 7, 8, 9, 127, 128, 129, 158, 235, 620, 1023, 1024, 2048, 4031, 4032, 4033,
+        ] {
+            let mut e = Engine::new(&context)?;
+            let xv: Vec<_> = (0..(rows + 1) * width)
+                .map(|i| {
+                    half::bf16::from_f32(match i % width {
+                        0 => f32::NAN,
+                        1 => f32::INFINITY,
+                        2 => f32::NEG_INFINITY,
+                        3 => -0.,
+                        4 => 0.,
+                        5 => half::bf16::from_bits(1).to_f32(),
+                        6 => half::bf16::MAX.to_f32(),
+                        _ => {
+                            ((i * 17 % 1031) as f32 - 515.) / if i % 7 == 0 { 65536. } else { 128. }
+                        }
+                    })
+                })
+                .collect();
+            let wv: Vec<_> = (0..(width + 2) * 4)
+                .map(|i| {
+                    half::bf16::from_f32(match (i / 4, i % 4) {
+                        (9, 0) => f32::NAN,
+                        (10, 1) => f32::INFINITY,
+                        (11, 2) => f32::NEG_INFINITY,
+                        _ => ((i * 31 % 127) as f32 - 63.) / 128.,
+                    })
+                })
+                .collect();
+            let x = e
+                .input(rows + 1, width, DType::Bf16, bytemuck::cast_slice(&xv))?
+                .slice_rows(1, rows);
+            let w = e
+                .input(width + 2, 4, DType::Bf16, bytemuck::cast_slice(&wv))?
+                .slice_rows(2, width);
+            let reference = e.conv_delta_source(
+                &x,
+                &w,
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/conv_delta.loom")
+                ),
+                1,
+            )?;
+            let candidate = e.conv_delta_source(
+                &x,
+                &w,
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/conv_delta_rows8.loom")
+                ),
+                8,
+            )?;
+            let selected = e.conv_delta(&x, &w)?;
+            let mut graph = e.finish()?;
+            let mut first = None;
+            for _ in 0..2 {
+                e.run(&mut graph)?;
+                let expected = e.read_f32(&reference)?;
+                for output in [&candidate, &selected] {
+                    let actual = e.read_f32(output)?;
+                    for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
+                        if b.is_nan() {
+                            assert!(a.is_nan(), "NaN at {rows}, {i}");
+                        } else {
+                            assert_eq!(a.to_bits(), b.to_bits(), "convolution {rows}, {i}");
+                        }
+                    }
+                }
+                let bits: Vec<_> = expected.iter().map(|x| x.to_bits()).collect();
+                if let Some(first) = &first {
+                    assert_eq!(first, &bits, "reference replay {rows}");
+                } else {
+                    first = Some(bits);
+                }
+                // Independent scalar oracle at startup, interior and final rows.
+                for row in [0, 1.min(rows - 1), 3.min(rows - 1), rows / 2, rows - 1] {
+                    for col in [31, 127, 5120, width - 1] {
+                        let mut sum = 0f64;
+                        for tap in 0..4 {
+                            if row + tap >= 3 {
+                                sum += xv[(row + tap - 3 + 1) * width + col].to_f64()
+                                    * wv[(col + 2) * 4 + tap].to_f64();
+                            }
+                        }
+                        let rounded = half::bf16::from_f64(sum).to_f64();
+                        let oracle = rounded / (1. + (-rounded).exp());
+                        let actual = f64::from(expected[row * width + col]);
+                        assert!(
+                            (actual - oracle).abs() <= 0.004 * oracle.abs() + 1e-6,
+                            "convolution oracle row={row} col={col}: {actual} vs {oracle}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires gfx1151; checks prepared recurrence boundaries, slices and replay"]

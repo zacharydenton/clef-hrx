@@ -1,7 +1,7 @@
 //! Shape coverage for the public JevBench workload; no checkpoint required.
 use clef_hrx::benchmarking::{
-    AttentionBenchmark, DeltaBenchmark, GemmBenchmark, GemmKernel, PackingBenchmark,
-    SwiGluBenchmark,
+    AttentionBenchmark, ConvolutionBenchmark, DeltaBenchmark, GemmBenchmark, GemmKernel,
+    PackingBenchmark, SwiGluBenchmark,
 };
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::time::{Duration, Instant};
@@ -433,6 +433,65 @@ fn swiglu(c: &mut Criterion) {
     }
     group.finish();
 }
+fn convolution(c: &mut Criterion) {
+    let Some(path) = std::env::var_os("CLEF_BENCH_CONV_SOURCE") else {
+        return;
+    };
+    let source = std::fs::read_to_string(path).unwrap();
+    let tile: usize = std::env::var("CLEF_BENCH_CONV_ROWS")
+        .unwrap_or_else(|_| "4".to_owned())
+        .parse()
+        .unwrap();
+    let mut group = c.benchmark_group("paired_convolution");
+    configure(&mut group);
+    for rows in lengths() {
+        for (cache, rotating) in [("replay", false), ("rotating", true)] {
+            if rotating && rows < 128 {
+                continue;
+            }
+            let mut graph = None;
+            let mut samples = Vec::new();
+            let mut sequence = 0u64;
+            let shape = format!("{rows}x10240");
+            group.throughput(Throughput::Elements(rows as u64 * 10240));
+            group.bench_function(BenchmarkId::new(cache, &shape), |b| {
+                let graph = graph.get_or_insert_with(|| ConvolutionBenchmark::new(rows, &source, tile, rotating).unwrap());
+                b.iter_custom(|iterations| {
+                    let mut times = [Duration::ZERO; 2];
+                    for _ in 0..iterations {
+                        for candidate in [sequence.is_multiple_of(2), !sequence.is_multiple_of(2)] {
+                            let started = Instant::now();
+                            graph.run(candidate).unwrap();
+                            times[usize::from(candidate)] += started.elapsed();
+                        }
+                        sequence += 1;
+                    }
+                    samples.push(serde_json::json!({"iterations": iterations, "reference_ns": times[0].as_nanos() as u64, "optimized_ns": times[1].as_nanos() as u64}));
+                    times[1]
+                });
+            });
+            if let Some(mut graph) = graph {
+                graph.check().unwrap();
+                let root = std::path::PathBuf::from("target/criterion/paired_convolution")
+                    .join(cache)
+                    .join(&shape);
+                std::fs::create_dir_all(&root).unwrap();
+                let measured = if samples.len() >= 20 {
+                    &samples[samples.len() - 20..]
+                } else {
+                    &[]
+                };
+                std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
+                    "rows": rows, "width": 10240, "rows_per_thread": tile, "rotating": rotating,
+                    "minimum_input_bytes_per_variant": if rotating {64 << 20} else {0},
+                    "bitwise_identical": true, "sample_size": 20, "samples": samples, "measurement_samples": measured,
+                    "note": "Separate identical inputs per variant; causal convolution, BF16 rounding and SiLU included. Compilation and uploads excluded."
+                })).unwrap()).unwrap();
+            }
+        }
+    }
+    group.finish();
+}
 fn packing(c: &mut Criterion) {
     let mut group = c.benchmark_group("paired_packing");
     configure(&mut group);
@@ -538,6 +597,14 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
     assert!([4, 8].contains(&bits));
     let residual = integer && std::env::var("CLEF_BENCH_INTEGER_RESIDUAL").as_deref() == Ok("1");
     assert!(!residual || bits == 4, "residual experiment requires INT4");
+    let group_limit = std::env::var("CLEF_BENCH_INTEGER_M_GROUP").ok().map(|s| {
+        s.parse::<usize>()
+            .expect("integer M group must be an integer")
+    });
+    assert!(
+        group_limit.is_none() || (integer && !residual),
+        "M group override requires plain paired integer GEMM"
+    );
     let padded = std::env::var("CLEF_BENCH_INTEGER_PADDED").as_deref() == Ok("1");
     let group_name = if integer {
         "paired_integer_gemm"
@@ -606,6 +673,8 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                         }.unwrap();
                         let mut candidate = if residual {
                             GemmBenchmark::packed_integer_residual(m, k, n, &source, padded, minimum_bytes, true)
+                        } else if let Some(group_limit) = group_limit {
+                            GemmBenchmark::packed_integer_group((m, k, n), &source, bits, padded, minimum_bytes, group_limit)
                         } else if integer { GemmBenchmark::packed_integer(
                             m,
                             k,
@@ -682,6 +751,7 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                     std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
                         "rows": m, "k": k, "columns": n, "bits": if integer { bits } else { 16 },
                         "padded": integer && padded, "includes_residual": residual,
+                        "candidate_m_group_limit": group_limit, "reference_m_group_limit": 4,
                         "bf16_candidate": candidate_kind, "minimum_weight_bytes_per_variant": minimum_bytes,
                         "varying_row_scales": integer && std::env::var("CLEF_BENCH_INTEGER_ROW_SCALES").as_deref() == Ok("1"),
                         "bitwise_identical": true, "sample_size": 20,
@@ -703,6 +773,7 @@ criterion_group!(
     swiglu,
     packing,
     paired_integer_gemm,
-    paired_bf16_gemm
+    paired_bf16_gemm,
+    convolution
 );
 criterion_main!(workload);

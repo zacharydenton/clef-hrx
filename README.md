@@ -67,17 +67,18 @@ BF16 is the default. Normal builds also support explicit INT4 modes:
 
 | Mode | Full JevBench accuracy | Resident input tok/s |
 | --- | ---: | ---: |
-| BF16 | 202/231 (87.4%) | 511 |
-| INT4 MLP only | 199/231 (86.1%) | 740 |
-| INT4 eligible backbone projections | 194/231 (84.0%) | 968–970 |
+| BF16 | 202/231 (87.4%) | 516 |
+| INT4 MLP only | 199/231 (86.1%) | 752 |
+| INT4 eligible backbone projections | 194/231 (84.0%) | 986–1,003 |
 
 INT4 trades accuracy for speed; it is never selected automatically. These full
 sequential runs use the same binary and preserve every output of each mode's
-previous baseline. The INT4 range covers two clean runs; a fresh previous-binary
-control measured 958 tok/s. INT4 projection residuals now fuse into GEMM while
-preserving both BF16 rounding boundaries. Peak engine allocation is 14.08 GiB
-for broader INT4 and 23.96 GiB for MLP-only INT4.
-See [qualification and reproduction](docs/evaluation.md#projection-residual-fusion),
+previous baseline. The INT4 range covers the initial run and an unchanged-binary
+repeat: the first cleared 1,000 tok/s, while the repeat fell below it. DeltaNet
+convolution now reuses overlapping inputs across eight adjacent rows, preserving
+FMA order and BF16 rounding. Peak engine allocation is 14.08 GiB for broader
+INT4 and 23.96 GiB for MLP-only INT4.
+See [qualification and reproduction](docs/evaluation.md#eight-row-causal-convolution),
 [precision details](docs/usage.md#precision)
 and [recorded experiments](docs/optimization.md). Vision, normalization and the
 trained decision head retain their original precision.
@@ -92,11 +93,11 @@ On all 231 public JevBench cases, CLEF-HRX scored **202/231 (87.4%)**, compared
 with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
 completed with valid probabilities and no input truncation.
 
-On AMD Strix Halo, BF16 resident latency was **0.66 s median / 4.64 s p95**, with
-**511 input tokens/s (42.4 decisions/minute)** throughput. This single sequential
+On AMD Strix Halo, BF16 resident latency was **0.66 s median / 4.59 s p95**, with
+**516 input tokens/s (42.8 decisions/minute)** throughput. This single sequential
 run used a populated compiler cache; the first request including model loading
 is excluded from these speed figures.
-[Results, measurement details and reproduction instructions](docs/evaluation.md#projection-residual-fusion).
+[Results, measurement details and reproduction instructions](docs/evaluation.md#eight-row-causal-convolution).
 
 ## Library
 

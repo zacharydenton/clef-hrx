@@ -5,8 +5,10 @@ use crate::{
 };
 use hrx::{GraphExec, inference::ModelContext};
 mod activation;
+mod convolution;
 pub(crate) mod quantized;
 pub use activation::SwiGluBenchmark;
+pub use convolution::ConvolutionBenchmark;
 pub use quantized::PackingBenchmark;
 
 /// CPU-only cache-hit work with the same source/configuration in both maps.
@@ -111,7 +113,15 @@ impl GemmBenchmark {
         padded: bool,
         minimum_weight_bytes: usize,
     ) -> Result<Self> {
-        Self::packed_integer_impl((m, k, n), source, bits, padded, minimum_weight_bytes, None)
+        Self::packed_integer_impl(
+            (m, k, n),
+            source,
+            bits,
+            padded,
+            minimum_weight_bytes,
+            None,
+            4,
+        )
     }
     /// Include a separate or fused BF16 residual addition in every replay.
     pub fn packed_integer_residual(
@@ -130,6 +140,26 @@ impl GemmBenchmark {
             padded,
             minimum_weight_bytes,
             Some(fused),
+            4,
+        )
+    }
+    /// Change only workgroup ordering while retaining the packed operands and arithmetic.
+    pub fn packed_integer_group(
+        shape: (usize, usize, usize),
+        source: &str,
+        bits: usize,
+        padded: bool,
+        minimum_weight_bytes: usize,
+        group_limit: usize,
+    ) -> Result<Self> {
+        Self::packed_integer_impl(
+            shape,
+            source,
+            bits,
+            padded,
+            minimum_weight_bytes,
+            None,
+            group_limit,
         )
     }
     fn packed_integer_impl(
@@ -139,9 +169,11 @@ impl GemmBenchmark {
         padded: bool,
         minimum_weight_bytes: usize,
         residual: Option<bool>,
+        group_limit: usize,
     ) -> Result<Self> {
         anyhow::ensure!(
-            [4, 8].contains(&bits)
+            (1..=16).contains(&group_limit)
+                && [4, 8].contains(&bits)
                 && (bits != 4 || k.is_multiple_of(128))
                 && (1..=4096).contains(&m)
                 && (64..=17408).contains(&k)
@@ -216,7 +248,7 @@ impl GemmBenchmark {
                 ("k_size", k),
                 ("n_size", n),
                 ("k_stride", stride),
-                ("m_group", m.div_ceil(256).min(4)),
+                ("m_group", m.div_ceil(256).min(group_limit)),
             ] {
                 spec.set_config(format!("h3.gemm_i{bits}_256.{key}"), value.to_string());
             }
