@@ -714,7 +714,7 @@ mod tests {
 
     fn rotated(row: &[half::bf16]) -> Vec<f32> {
         let mut out: Vec<_> = row.iter().map(|x| x.to_f32()).collect();
-        for group in out.chunks_exact_mut(256) {
+        for group in out.as_chunks_mut::<256>().0 {
             for stride in [1, 4, 16, 64] {
                 for base in (0..256).step_by(4 * stride) {
                     for i in 0..stride {
@@ -838,7 +838,7 @@ mod tests {
                 "model.language_model.layers.0.mlp.up_proj.weight",
                 "model.language_model.layers.1.mlp.up_proj.weight",
             ];
-            let quantize = |row: &[half::bf16]| {
+            let quantize = |row: &[half::bf16; 256]| {
                 let values = rotated(row);
                 let max_code = ((1 << (bits - 1)) - 1) as f32;
                 let scale = (values.iter().map(|v| v.abs()).fold(0f32, f32::max) / 16.).max(1e-30)
@@ -861,7 +861,14 @@ mod tests {
                     })
                     .collect();
                 assert!(e.load_quantized_weight(name, 256, 256, bytemuck::cast_slice(&values))?);
-                weight_oracles.push(values.chunks_exact(256).map(quantize).collect::<Vec<_>>());
+                weight_oracles.push(
+                    values
+                        .as_chunks::<256>()
+                        .0
+                        .iter()
+                        .map(quantize)
+                        .collect::<Vec<_>>(),
+                );
             }
             assert!(e.weights.is_empty());
             for rows in [1, 17, 1] {
@@ -871,7 +878,7 @@ mod tests {
                     .map(|i| half::bf16::from_f32(((i * 31 % 257) as f32 - 128.) / 64.))
                     .collect();
                 let input = e.input(rows + 1, 256, DType::Bf16, bytemuck::cast_slice(&values))?;
-                let oracles: Vec<_> = values.chunks_exact(256).map(quantize).collect();
+                let oracles: Vec<_> = values.as_chunks::<256>().0.iter().map(quantize).collect();
                 // Shared input reuse, then a different view of the same allocation.
                 // Matching only the slot or lease would return stale packed rows.
                 let mut outputs = Vec::new();
