@@ -69,15 +69,16 @@ BF16 is the default. Normal builds also support explicit INT4 modes:
 | --- | ---: | ---: |
 | BF16 | 202/231 (87.4%) | 525 |
 | INT4 MLP only | 199/231 (86.1%) | 625 |
-| INT4 eligible backbone projections | 194/231 (84.0%) | 907 |
+| INT4 eligible backbone projections | 194/231 (84.0%) | 944 |
 
 INT4 trades accuracy for speed; it is never selected automatically. These are
 archived full-suite measurements of the respective kernel configurations. The
 BF16 and broader INT4 results include fused SwiGLU, vectorized DeltaNet and
-cached kernel-source fingerprints; broader INT4 also uses single-pass packing.
-The MLP-only result is from an earlier build. Broader INT4
+cached kernel-source fingerprints; broader INT4 also uses register-based packing.
+BF16 was measured before this INT4-only packing change; the MLP-only result is
+from an earlier build. Broader INT4
 uses 14.51 GiB peak engine allocation and preserves all outputs of its previous
-run. See [qualification and reproduction](docs/evaluation.md#kernel-source-fingerprint-cache),
+run. See [qualification and reproduction](docs/evaluation.md#register-based-integer-packing),
 [precision details](docs/usage.md#precision)
 and [recorded experiments](docs/optimization.md). Vision, normalization and the
 trained decision head retain their original precision.

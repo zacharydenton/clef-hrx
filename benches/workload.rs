@@ -332,7 +332,12 @@ fn swiglu(c: &mut Criterion) {
 fn packing(c: &mut Criterion) {
     let mut group = c.benchmark_group("paired_packing");
     configure(&mut group);
-    for width in [5120, 6144, 8192] {
+    let widths = if std::env::var_os("CLEF_BENCH_PACKING_SOURCE").is_some() {
+        vec![5120, 6144, 8192, 17408]
+    } else {
+        vec![5120, 6144, 8192]
+    };
+    for width in widths {
         for rows in lengths() {
             let mut graph = None;
             let mut samples = Vec::new();

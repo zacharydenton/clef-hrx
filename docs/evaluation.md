@@ -467,3 +467,57 @@ python3 scripts/compare_jevbench.py \
 The INT4 comparison returns nonzero when throughput is below the target, even
 when accuracy passes. Use the archived binary or source snapshot to reproduce
 the exact measured implementation after subsequent changes.
+
+## Register-based integer packing
+
+The selected packing kernel keeps transformed FP32 values in registers until
+the row scale is known. Wave shuffles implement the same radix-4 Hadamard
+arithmetic; only the maximum reduction crosses waves. It replaces LDS packing
+at backbone widths 5,120, 6,144 and 17,408. The BF16 path is unchanged.
+
+The complete INT4 JevBench run scored **194/231**, with all 231 requests strictly
+valid and every logit/probability array identical to the source-fingerprint
+baseline. It processed 166,394 resident input tokens in **176.344 seconds**:
+**943.58 input tok/s**, compared with 906.55 previously. Median/p95 resident
+latency was 0.282/2.697 seconds, and peak engine allocation stayed 14.508 GiB.
+The **1,000 tok/s target remains unmet**.
+
+The timing includes encoding, preparation, compilation, GPU execution and
+readback, excluding only the first request including model loading. The compiler
+cache was populated. Mean GPU time fell from 764.58 to 732.84 ms; mean preparation
+was 31.08 ms versus 30.74 previously. This is a 4.1% increase between sequential
+full runs, not a paired full-model estimate. Telemetry covers preflight through
+completion and reports only the native evaluation PID in KFD.
+
+Records are in `tests/results/jevbench-20261011-int4-register-packing`.
+`comparison.json` includes the failed 1,000 tok/s gate alongside unchanged
+accuracy; `output-equality.json` records all 231 exact arrays and peak allocation.
+Telemetry is `artifacts/throughput-1000/register-packing-eval-telemetry.jsonl`.
+Archived normal binary: `artifacts/throughput-1000/clef-register-packing`, SHA-256
+`3f8bfc3605c46757ab73d5afbc3b0155fef92441cad1ca8cb650a56214ec1483`.
+Its `-source.json` hashes all 103 files in
+`benches/results/register-packing-selected-smoke/source`.
+
+All 44 paired operator cases matched code and scale bits, with 1.32–4.30×
+speedups and every 99% lower bound above 1.0. CPU tests, all-target/all-feature
+Clippy, the independent packing CPU oracle, exceptional-value/slice/replay GPU
+checks and the 12-case selected-source smoke sweep passed. BF16's unchanged path
+retains the preceding 202/231, 524.73 tok/s measurement; it was not remeasured for
+this INT4-only change.
+
+Reproduce with fresh result directories:
+
+```sh
+CLEF_BENCH_PACKING_SOURCE=kernels/prepare_integer_register.loom \
+  python3 scripts/bench_workload.py register-packing-repro --filter paired_packing
+cargo test --locked --release --lib packing_ -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-register-packing-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-source-fingerprint \
+  tests/results/jevbench-register-packing-repro --min-tps 1000
+```
+
+The last command returns nonzero below 1,000 tok/s even if accuracy passes.
+Use the archived binary/source snapshot for the exact recorded implementation.

@@ -222,7 +222,9 @@ pub(crate) fn prepare(
         x,
         bits,
         stride,
-        if x.cols <= 6144 {
+        if matches!(x.cols, 5120 | 6144 | 17408) {
+            include_str!("../kernels/prepare_integer_register.loom")
+        } else if x.cols <= 6144 {
             include_str!("../kernels/prepare_integer_single.loom")
         } else {
             include_str!("../kernels/prepare_integer.loom")
@@ -527,6 +529,62 @@ mod tests {
                         &replay[start..start + width / (32 / bits)]
                     );
                 }
+                e.reset_plan()?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151; checks register packing, slices, exceptional rows and replay"]
+    fn register_packing_matches_reference() -> Result<()> {
+        let context = ModelContext::new(Default::default())?;
+        let mut e = Engine::new(&context)?;
+        for bits in [4, 8] {
+            for width in [5120, 6144, 17408] {
+                let mut values = vec![half::bf16::from_f32(19.0); 9 * width];
+                for row in 0..7 {
+                    for col in 0..width {
+                        values[(row + 1) * width + col] = half::bf16::from_f32(match row {
+                            0 => 0.0,
+                            1 => 1.0,
+                            2 => ((col * 37 % 257) as f32 - 128.0) / 91.0,
+                            3 if col == 259 => f32::NAN,
+                            4 if col == 515 => f32::INFINITY,
+                            5 => half::bf16::MAX.to_f32(),
+                            6 => f32::from_bits(0x0001_0000),
+                            _ => -0.5,
+                        });
+                    }
+                }
+                let input = e.input(9, width, DType::Bf16, bytemuck::cast_slice(&values))?;
+                let input = input.slice_rows(1, 7);
+                let stride = width + 512 / bits;
+                let mut results = Vec::new();
+                for source in [
+                    include_str!("../kernels/prepare_integer.loom"),
+                    include_str!("../kernels/prepare_integer_register.loom"),
+                ] {
+                    let (codes, scales) =
+                        prepare_with_source(&mut e, &input, bits, stride, source)?;
+                    let mut graph = e.finish()?;
+                    let mut runs = Vec::new();
+                    for _ in 0..2 {
+                        e.run(&mut graph)?;
+                        let raw: Vec<_> =
+                            e.read_f32(&codes)?.into_iter().map(f32::to_bits).collect();
+                        let logical: Vec<_> = raw
+                            .chunks_exact(codes.cols)
+                            .flat_map(|row| row[..width / (32 / bits)].iter().copied())
+                            .collect();
+                        let scales: Vec<_> =
+                            e.read_f32(&scales)?.into_iter().map(f32::to_bits).collect();
+                        runs.push((logical, scales));
+                    }
+                    assert_eq!(runs[0], runs[1], "replay: bits={bits}, width={width}");
+                    results.push(runs.remove(0));
+                }
+                assert_eq!(results[0], results[1], "bits={bits}, width={width}");
                 e.reset_plan()?;
             }
         }

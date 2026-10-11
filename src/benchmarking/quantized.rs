@@ -17,7 +17,7 @@ impl PackingBenchmark {
     pub fn new(rows: usize, width: usize, bits: usize) -> Result<Self> {
         ensure!(
             (1..=8192).contains(&rows)
-                && (256..=8192).contains(&width)
+                && (256..=32768).contains(&width)
                 && width.is_multiple_of(256)
                 && [4, 8].contains(&bits),
             "unsupported packing benchmark shape"
@@ -34,12 +34,21 @@ impl PackingBenchmark {
             } else {
                 0
             };
+        let candidate_source = std::env::var("CLEF_BENCH_PACKING_SOURCE")
+            .ok()
+            .map(std::fs::read_to_string)
+            .transpose()?;
+        // Keep the pre-register production baseline reproducible after selection.
         let reference = crate::quantized::prepare_with_source(
             &mut engine,
             &input,
             bits,
             stride,
-            include_str!("../../kernels/prepare_integer.loom"),
+            if candidate_source.is_some() && width <= 6144 {
+                include_str!("../../kernels/prepare_integer_single.loom")
+            } else {
+                include_str!("../../kernels/prepare_integer.loom")
+            },
         )?;
         let reference_graph = engine.finish()?;
         let candidate = crate::quantized::prepare_with_source(
@@ -47,7 +56,9 @@ impl PackingBenchmark {
             &input,
             bits,
             stride,
-            include_str!("../../kernels/prepare_integer_single.loom"),
+            candidate_source
+                .as_deref()
+                .unwrap_or(include_str!("../../kernels/prepare_integer_single.loom")),
         )?;
         let candidate_graph = engine.finish()?;
         let mut benchmark = Self {

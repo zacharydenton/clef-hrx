@@ -136,6 +136,13 @@ with every 99% upper bound below 1.0 (`int4-global-paired-mlp`). It was rejected
 The results do not isolate the cause; Gufo's operand layout and memory access
 pattern differ, so removing staging alone does not reproduce its performance.
 
+The opposite tile-size experiment, M256/N64 with eight accumulator fragments per
+wave, passed 36 varied-scale correctness cases. It reduced registers from 200 to
+156 VGPRs and LDS from 30 to 25 KiB, but all twelve paired MLP cases slowed down:
+speedups were 0.821–0.926× and all 99% upper bounds were below 1.0
+(`int4-n64-paired-mlp`). This tile was also rejected; register count alone is not
+a performance criterion.
+
 ## Hosted comparison
 
 [Cloudflare's October 9 post](https://blog.cloudflare.com/clef-faster-cheaper-multimodal/)

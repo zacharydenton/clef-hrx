@@ -99,7 +99,7 @@ def main():
         dest.write_bytes(data)
         metadata['requests_sha256'] = hashlib.sha256(data).hexdigest()
     metadata['candidates'] = {}
-    for key in ('CLEF_BENCH_GEMM_SOURCE', 'CLEF_BENCH_DELTA_SOURCE', 'CLEF_BENCH_DELTA_REFERENCE_SOURCE', 'CLEF_BENCH_DELTA_PREPARE_SOURCE', 'CLEF_BENCH_ATTENTION_SOURCE', 'CLEF_BENCH_INT8_SOURCE', 'CLEF_BENCH_INTEGER_SOURCE'):
+    for key in ('CLEF_BENCH_GEMM_SOURCE', 'CLEF_BENCH_DELTA_SOURCE', 'CLEF_BENCH_DELTA_REFERENCE_SOURCE', 'CLEF_BENCH_DELTA_PREPARE_SOURCE', 'CLEF_BENCH_ATTENTION_SOURCE', 'CLEF_BENCH_INT8_SOURCE', 'CLEF_BENCH_INTEGER_SOURCE', 'CLEF_BENCH_PACKING_SOURCE'):
         if key in env:
             data = Path(env[key]).read_bytes()
             dest = root / 'candidates' / f'{key}.loom'

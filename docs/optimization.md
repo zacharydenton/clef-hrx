@@ -15,9 +15,9 @@ reference tests; do not loosen their tolerances to qualify a candidate. The
 speed/accuracy modes, gate kernel optimizations against the qualified baseline
 of the same precision mode and report the difference from BF16 separately.
 
-The latest qualified full runs measure **906.55 tok/s INT4** and **524.73 tok/s
-BF16**, with every output unchanged. See [CPU cache work and complete reproduction
-instructions](evaluation.md#kernel-source-fingerprint-cache). The 1,000 tok/s
+The latest qualified full runs measure **943.58 tok/s INT4** and **524.73 tok/s
+BF16**, with every output unchanged. See [register packing and reproduction
+instructions](evaluation.md#register-based-integer-packing). The 1,000 tok/s
 target remains unmet.
 
 ## Criterion coverage
@@ -30,7 +30,7 @@ target remains unmet.
 | `kernels` / `paired_delta_prefill/prepared` and `/candidate` | Prepared or external DeltaNet kernels at 158, 235, 620, 1,024 and 2,048 tokens; external candidates additionally cover 128 and 260, plus 4,032 without preparation; alternating order, maximum error and bitwise equality | Completed graph replay, including preparation when selected |
 | `workload` / `workload_attention` | Causal 24-query/4-KV-head attention, 256 dimensions; 16 through 4,032 tokens | Completed graph, including GPU value transpose/padding and the selected attention kernel |
 | `workload` / `paired_swiglu` | MLP width 17,408 at all eleven workload lengths; separate SiLU/multiply versus fused activation, alternating execution order | Completed graph; raw paired batches and 99% bootstrap speedup intervals |
-| `workload` / `paired_packing` | INT4 packing at widths 5,120, 6,144 and 8,192; two-pass reference versus one-pass FP32 transform; exact logical codes and scales | Completed graph with alternating order and paired confidence intervals |
+| `workload` / `paired_packing` | INT4 packing at widths 5,120, 6,144 and 8,192; an external candidate also adds 17,408; exact logical codes and scales | Completed graph with alternating order and paired confidence intervals; default compares two-pass/one-pass LDS, external candidates use the pre-register production baseline |
 | `workload` / `paired_integer_gemm` | Current packed GEMM versus `CLEF_BENCH_INTEGER_SOURCE`, six projection families, repeated and rotating weights, all workload lengths | Alternating-order completed graphs; prepacked identical operands; exact output bits checked before and after timing |
 | `preprocessing` / `kernel_cache_key` (with `bench-internals`) | CPU cache-hit key generation and two map lookups; three real kernel source lengths and a fixed eight-entry configuration | Full-source keys versus content-verified cached SHA-256 fingerprints; no GPU execution |
 | `normalization`, `preprocessing` | Normalization shapes and CPU request processing | Existing suite-specific boundaries |
@@ -163,10 +163,10 @@ counts are unchanged. See [full results and reproduction](evaluation.md#fused-sw
 python3 scripts/bench_workload.py swiglu-paired-repro --filter paired_swiglu
 ```
 
-The single-pass packing candidate keeps transformed FP32 values in local memory
-until the scale is known, eliminating the repeated transform. The selected
-production cutoff is 6,144 columns: quick paired measurements at 8,192 columns
-showed no benefit at 4,032 rows. Wider operands keep the two-pass implementation.
+The earlier single-pass packing candidate keeps transformed FP32 values in local
+memory until the scale is known, eliminating the repeated transform. Its selected
+cutoff was 6,144 columns: quick paired measurements at 8,192 columns showed no
+benefit at 4,032 rows. Wider operands retained the two-pass implementation.
 The independent CPU packing oracle covers INT4 and INT8, zero/constant/random
 rows, widths 256/768/1,280/5,120/6,144/8,192/17,408 and replay. Scratch-boundedness
 and weight lifetime tests also pass.
@@ -183,6 +183,42 @@ not paired timing evidence. See [results and reproduction](evaluation.md#single-
 python3 scripts/bench_workload.py packing-paired-repro \
   --filter 'paired_packing/pair/.*x(5120|6144)$'
 ```
+
+The register-packing candidate retains FP32 transformed values in registers and
+uses wave shuffles for the four radix-4 stages. Only the row maximum crosses
+wave boundaries. It preserves the transform's pair sums/differences, quantization
+rounding and row scales. `packing-register-generic-paired` covers all eleven row
+lengths at four widths; all 44 pairs have identical logical codes and scale bits,
+and every 99% speedup lower bound exceeds 1.0:
+
+| Width | Reference | Paired speedup range | Candidate VGPRs / LDS |
+| ---: | --- | ---: | ---: |
+| 5,120 | One-pass LDS | 1.32–2.57× | 47 / 32 bytes |
+| 6,144 | One-pass LDS | 1.46–2.69× | 48 / 32 bytes |
+| 8,192 | Two-pass LDS | 1.97–3.69× | 55 / 32 bytes |
+| 17,408 | Two-pass LDS | 2.14–4.30× | 96 / 32 bytes |
+
+All four compiler reports have zero materialized spill bytes. External packing
+candidates use the previous production LDS selection as a fixed reference,
+so reproduction remains meaningful after the new implementation is selected:
+
+```sh
+CLEF_BENCH_PACKING_SOURCE=kernels/prepare_integer_register.loom \
+  python3 scripts/bench_workload.py register-packing-repro --filter paired_packing
+cargo test --locked --release --lib packing_ -- --ignored
+```
+
+The external source is copied and hashed with the other benchmark inputs. The
+GPU checks compare against the independent CPU oracle and the original packing
+kernel, including nonzero input slices, INT4/INT8, zero/constant/random rows,
+NaN/Inf, overflow, subnormals and repeated execution. Operator speedups alone
+do not establish the 1,000 tok/s model target.
+
+Full INT4 qualification retained all 231 logit/probability arrays and scored
+194/231 at **943.58 resident input tok/s**, up from 906.55 in the preceding
+sequential run. Register packing is selected for the backbone widths 5,120,
+6,144 and 17,408. BF16 does not use this path. See
+[complete measurement conditions](evaluation.md#register-based-integer-packing).
 
 `CLEF_BENCH_PAD_GEMM=1` tests the h3-hrx approach of adding 64 elements to operand
 row strides when K is a multiple of 1,024. This preserves logical matrix values
