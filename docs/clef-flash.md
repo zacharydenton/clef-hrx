@@ -16,7 +16,7 @@ winners, maximum probability error 0.002057 (limit 0.003), and exact changed-inp
 fixtures and their environment manifest are in `tests/fixtures/flash/`.
 All three Flash JevBench runs and their warm-cache repeats are complete. The
 six-configuration context/workflow matrix is running; full qualification remains
-pending.
+pending. Flash BF16 has passed the complete 64k ladder and exact long/short replay.
 
 ## JevBench results
 
@@ -182,7 +182,8 @@ CLEF_BENCH_LENGTHS=235,620 python3 scripts/bench_workload.py flash-tiled-baselin
 
 Flash BF16 has executed every length through 65,536 tokens, without truncation,
 and answered all three beginning/middle/end retrieval questions correctly at
-each length. The six-configuration matrix and final long replay are still running.
+each length. Long→short→long replay was exact. The broader six-configuration
+matrix remains in progress.
 
 | Encoded tokens | Request wall seconds | Input tok/s | Peak engine GiB |
 | --- | ---: | ---: | ---: |
@@ -197,7 +198,9 @@ The first request includes model loading. Later requests include encoding,
 preparation, compilation, execution and readback. These are actual full-model
 requests with three joint questions. Long-context throughput differs substantially
 from short-request JevBench throughput. The subsequent 4k replay reproduced its
-original output exactly in 2.02 seconds.
+original output exactly in 2.02 seconds. The final 65,536-token replay reproduced
+every probability exactly in 291.20 seconds (225.06 tok/s). Telemetry recorded
+at most one KFD client throughout the complete ladder.
 
 Raw records: `tests/results/flash-support-matrix/context-clef-flash-bf16`.
 Matrix executable SHA256:
