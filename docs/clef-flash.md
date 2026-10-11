@@ -180,6 +180,29 @@ CLEF_BENCH_LENGTHS=235,620 python3 scripts/bench_workload.py flash-tiled-baselin
 
 ## Full context and workflow matrix
 
+Flash BF16 has executed every length through 65,536 tokens, without truncation,
+and answered all three beginning/middle/end retrieval questions correctly at
+each length. The six-configuration matrix and final long replay are still running.
+
+| Encoded tokens | Request wall seconds | Input tok/s | Peak engine GiB |
+| --- | ---: | ---: | ---: |
+| 4,096 | 12.80 | 320.06 | 14.81 |
+| 8,192 | 5.40 | 1,517.57 | 15.87 |
+| 16,384 | 16.65 | 983.86 | 18.00 |
+| 32,768 | 62.04 | 528.21 | 20.00 |
+| 49,152 | 127.72 | 384.84 | 23.00 |
+| 65,536 | 309.38 | 211.83 | 28.00 |
+
+The first request includes model loading. Later requests include encoding,
+preparation, compilation, execution and readback. These are actual full-model
+requests with three joint questions. Long-context throughput differs substantially
+from short-request JevBench throughput. The subsequent 4k replay reproduced its
+original output exactly in 2.02 seconds.
+
+Raw records: `tests/results/flash-support-matrix/context-clef-flash-bf16`.
+Matrix executable SHA256:
+`18b7de8cc007ad00149cae61084de29d0a596c92e3fe370b25b7a300190ba708`.
+
 The matrix runner freezes the executable and schedules the six combinations on
 one GPU. It runs the actual context ladder before the full WorkflowEvals matrix.
 Each context run includes facts at the beginning, middle and end, all three
