@@ -15,8 +15,8 @@ CLEF answers structured questions about text, images and video:
 
 ## Build and run
 
-Requires Rust 1.91+, Linux, a `gfx1151` GPU and at least 50 GiB of available RAM
-for short requests. Video input needs ffmpeg and ffprobe.
+Requires Rust 1.91+, Linux and a `gfx1151` GPU. BF16 needs at least 50 GiB of
+available RAM for short requests. Video input needs ffmpeg and ffprobe.
 
 ```sh
 git clone https://github.com/zacharydenton/clef-hrx.git
@@ -47,61 +47,34 @@ requests, keep the model loaded and pass newline-delimited JSON:
 ./target/release/clef --max-length 1536 decide requests.jsonl --jsonl
 ```
 
-First use downloads roughly 51.2 GiB of BF16 weights. Resident weights occupy
-about 46.5 GiB plus workspace. Use `--model-dir PATH` for a local snapshot or
-`--offline` for cached files. `--memory-gib` sets the allocation budget (default
-80 GiB); `--max-length` limits input tokens (default and maximum 65,536).
-The checkpoint supports 262,144 positions; this build uses a 64k operating limit
-without changing RoPE. Workspace is allocated for each actual request, with
-8,192-row MLP chunks above 16k tokens. Available RAM and the allocation budget
-still determine whether a request fits.
+First use downloads roughly 51.2 GiB of weights. Use `--model-dir PATH` for a
+local snapshot or `--offline` for cached files. Inputs support up to 65,536 tokens,
+subject to available memory. `--max-length` sets the token limit (default 65,536);
+`--memory-gib` sets the allocation budget (default 80 GiB).
 
 ## Precision
 
-BF16 is the default. Normal builds also support explicit INT4 modes:
+BF16 is the default. Use `--precision` to select INT4:
 
 ```sh
 ./target/release/clef --precision int4-mlp decide examples/invoice.json
 ./target/release/clef --precision int4 decide examples/invoice.json
 ```
 
+See [precision options](docs/usage.md#precision).
+
+## Evaluation
+
+Full JevBench results on AMD Strix Halo, with the model already loaded:
+
 | Mode | Full JevBench accuracy | Resident input tok/s |
 | --- | ---: | ---: |
 | BF16 | 202/231 (87.4%) | 519 |
 | INT4 MLP only | 204/231 (88.3%) | 747 |
-| INT4 eligible backbone projections | 194/231 (84.0%) | 1,003–1,035 |
+| INT4 backbone | 194/231 (84.0%) | 1,003–1,035 |
 
-INT4 is an explicit speed/accuracy choice. Both full
-sequential broader INT4 runs exceeded 1,000 resident input tok/s, including encoding,
-preparation, compilation, GPU execution and readback. Only the first request
-with model loading is excluded. The repeat reproduced every output exactly;
-its margin above 1,000 tok/s is narrow.
-
-Fused RMS normalization and activation packing retain the same-mode accuracy
-floors. FP32 summation order changes in INT4: broader INT4 gained five correct
-cases and lost five versus its previous baseline, with a maximum probability
-change of 0.6601. BF16 outputs remain exact. Peak engine allocation is
-14.08 GiB for broader INT4 and 23.96 GiB for MLP-only INT4.
-See [qualification and reproduction](docs/evaluation.md#parallel-reduction-and-input-normalization),
-[precision details](docs/usage.md#precision) and
-[operator experiments](docs/optimization.md#rmsnorm-and-integer-packing-fusion).
-Vision and the trained decision head retain their original precision.
-
-## Evaluation
-
-The [WorkflowEvals runner and reproduction notes](docs/workflowevals.md) cover
-all four workflows in the pinned public collection. The first resumable batch
-completed 4/705 cases, including a 36,916-token request. Full results are pending.
-
-On all 231 public JevBench cases, default BF16 scored **202/231 (87.4%)**, compared
-with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
-completed with valid probabilities and no input truncation.
-
-On AMD Strix Halo, BF16 resident latency was **0.66 s median / 4.52 s p95**, with
-**519 input tokens/s (43.0 decisions/minute)** throughput. This single sequential
-run used a populated compiler cache; the first request including model loading
-is excluded from these speed figures.
-[Results, measurement details and reproduction instructions](docs/evaluation.md#parallel-reduction-and-input-normalization).
+[Results and reproduction](docs/evaluation.md#parallel-reduction-and-input-normalization).
+[WorkflowEvals](docs/workflowevals.md) is still in progress.
 
 ## Library
 
@@ -119,10 +92,8 @@ python3 scripts/bench_workload.py baseline --profile quick
 CLEF_BENCH_FULL_MODEL=1 cargo bench --locked --bench inference
 ```
 
-GPU and checkpoint tests are ignored by default. Full-model benchmarks report
-loading and first-request time separately from resident requests.
-[Validation, kernel benchmarks and profiling](docs/development.md).
-[Workload benchmarks, recorded comparisons and evaluation gate](docs/optimization.md).
+GPU and checkpoint tests are ignored by default.
+See [development](docs/development.md) and [kernel benchmarks](docs/optimization.md).
 
 ## License
 
