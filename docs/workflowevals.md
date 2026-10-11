@@ -143,6 +143,12 @@ binary, runner, precision, context limit and dataset pins when resuming.
 
 ## Context validation
 
+The current [six-configuration matrix](clef-flash.md#full-context-and-workflow-matrix)
+has completed actual 65,536-token inference for CLEF and Flash in all three
+precisions, with all retrieval answers correct and exact long/short replay.
+Its full 705-case WorkflowEvals runs are in progress. Inspect current case counts
+and request throughput with `python3 scripts/report_matrix.py tests/results/flash-support-matrix`.
+
 The 64k build passes GPU attention indexing checks with 65,536 query rows and
 65,536 key rows (tested separately against a uniform-softmax oracle), as well as
 the existing causal, grouped-query, tail and graph-replay checks. Chunked MLP

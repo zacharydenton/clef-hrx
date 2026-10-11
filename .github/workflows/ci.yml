@@ -8,6 +8,18 @@ permissions:
   contents: read
 
 jobs:
+  evaluation-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install adapter contract dependency
+        # Match the pinned WorkflowEvals lock; no model or API key is needed.
+        run: python -m pip install typesafe-sdk==0.7.2
+      - name: Test evaluation accounting and resume contracts
+        run: python -m unittest discover -s scripts -p 'test_*.py'
   test:
     runs-on: ubuntu-latest
     strategy:

@@ -245,6 +245,17 @@ Completing this matrix can take many hours: the existing original CLEF invoice
 example alone took about 314 seconds of GPU execution for 36,916 tokens and 55
 joint questions. Partial matrices are not reported as full qualification.
 
+Inspect checkpoint counts, execution failures, memory and resident throughput
+without taking the GPU or changing the active run:
+
+```sh
+python3 scripts/report_matrix.py tests/results/flash-support-matrix
+```
+
+The report excludes the first native request of every process, including resumed
+processes. Partial throughput covers completed calls only; different workflow
+branches and case mixes prevent direct speed comparisons between partial runs.
+
 For later kernel candidates, compare all consensus metrics per workflow; a gain
 in one workflow must not conceal a regression in another:
 
