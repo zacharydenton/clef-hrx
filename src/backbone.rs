@@ -465,7 +465,7 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
     for i in 0..64 {
         let p = format!("model.language_model.layers.{i}");
         let norm = e.named_norm(&x, &format!("{p}.input_layernorm"), false, 1e-6)?;
-        let attn = if i % 4 == 3 {
+        x = if i % 4 == 3 {
             let p = format!("{p}.self_attn");
             let qg = e
                 .project(&norm, &format!("{p}.q_proj"), false)?
@@ -497,9 +497,9 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             if let Some(gate) = gate {
                 let gate = e.unary(&gate, "sigmoid")?;
                 let a = e.binary(&a, &gate, "mulf")?;
-                e.project(&a, &output_projection, false)?
+                e.project_residual(&a, &output_projection, &x)?
             } else {
-                e.project_attention_gate(&a, &qg.reshape(n, 12288), &output_projection)?
+                e.project_attention_gate(&a, &qg.reshape(n, 12288), &output_projection, &x)?
             }
         } else {
             let p = format!("{p}.linear_attn");
@@ -525,22 +525,20 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             let w = e.w(&format!("{p}.norm.weight"))?;
             let z = e.project(&norm, &format!("{p}.in_proj_z"), false)?;
             let d = e.delta_norm(&d, &w, &z)?.reshape(n, 6144);
-            e.project(&d, &format!("{p}.out_proj"), false)?
+            e.project_residual(&d, &format!("{p}.out_proj"), &x)?
         };
-        x = e.binary(&x, &attn, "addf")?;
         if n > 16_384 {
-            drop(attn);
             drop(norm);
         }
         let norm = e.named_norm(&x, &format!("{p}.post_attention_layernorm"), false, 1e-6)?;
-        let down = if n > 16_384 {
+        x = if n > 16_384 {
             // MLP rows are independent. Bound the wide activations and keep all
             // kernel extents below u32::MAX throughout the supported context.
-            mlp_chunked(e, &norm, &format!("{p}.mlp"), 8192)?
+            let down = mlp_chunked(e, &norm, &format!("{p}.mlp"), 8192)?;
+            e.binary(&x, &down, "addf")?
         } else {
-            mlp(e, &norm, &format!("{p}.mlp"))?
+            mlp(e, &norm, &format!("{p}.mlp"), Some(&x))?
         };
-        x = e.binary(&x, &down, "addf")?;
         e.trace(format!("layer_{i}"), &x);
     }
     let x = e.named_norm(&x, "model.language_model.norm", false, 1e-6)?;
@@ -548,10 +546,10 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
     Ok(x)
 }
 
-fn mlp(e: &mut Engine, x: &Tensor, prefix: &str) -> Result<Tensor> {
+fn mlp(e: &mut Engine, x: &Tensor, prefix: &str, residual: Option<&Tensor>) -> Result<Tensor> {
     let gate = e.project(x, &format!("{prefix}.gate_proj"), false)?;
     let up = e.project(x, &format!("{prefix}.up_proj"), false)?;
-    e.project_swiglu(&gate, &up, &format!("{prefix}.down_proj"))
+    e.project_swiglu(&gate, &up, &format!("{prefix}.down_proj"), residual)
 }
 
 fn mlp_chunked(e: &mut Engine, x: &Tensor, prefix: &str, chunk: usize) -> Result<Tensor> {
@@ -559,7 +557,7 @@ fn mlp_chunked(e: &mut Engine, x: &Tensor, prefix: &str, chunk: usize) -> Result
     let out = e.alloc(x.rows, x.cols, x.dtype)?;
     for start in (0..x.rows).step_by(chunk) {
         let rows = chunk.min(x.rows - start);
-        let part = mlp(e, &x.slice_rows(start, rows), prefix)?;
+        let part = mlp(e, &x.slice_rows(start, rows), prefix, None)?;
         e.copy_into(&part, &out.slice_rows(start, rows))?;
     }
     Ok(out)
@@ -739,7 +737,7 @@ mod tests {
         let x = e
             .input(131, 128, DType::Bf16, bytemuck::cast_slice(&values))?
             .slice_rows(1, 130);
-        let expected = mlp(&mut e, &x, "test")?;
+        let expected = mlp(&mut e, &x, "test", None)?;
         let actual = mlp_chunked(&mut e, &x, "test", 64)?;
         let mut graph = e.finish()?;
         for _ in 0..2 {

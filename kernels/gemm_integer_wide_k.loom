@@ -11,9 +11,9 @@ template.def<@h3.packed_schema> @h3_packed_i4(%registers: index) -> (encoding<sc
 
 
 
-template.decl @h3.packed_256(%m_size: index, %a: buffer, %w: buffer, %scale: buffer, %a_scale: buffer, %c: buffer, %cfg_k_size: index, %cfg_n_size: index, %cfg_k_stride: index, %cfg_m_group: index, %registers: index, %k_step: index, %packed_per_word: index, %output_f32: i1, %compact_qkv: i1, %rows_bound: index)
+template.decl @h3.packed_256(%m_size: index, %a: buffer, %w: buffer, %scale: buffer, %a_scale: buffer, %residual: buffer, %fuse_residual: i1, %c: buffer, %cfg_k_size: index, %cfg_n_size: index, %cfg_k_stride: index, %cfg_m_group: index, %registers: index, %k_step: index, %packed_per_word: index, %output_f32: i1, %compact_qkv: i1, %rows_bound: index)
 
-template.def<@h3.packed_256> @h3_packed_256(%m_size: index, %a: buffer, %w: buffer, %scale: buffer, %a_scale: buffer, %c: buffer, %cfg_k_size: index, %cfg_n_size: index, %cfg_k_stride: index, %cfg_m_group: index, %registers: index, %k_step: index, %packed_per_word: index, %output_f32: i1, %compact_qkv: i1, %rows_bound: index) {
+template.def<@h3.packed_256> @h3_packed_256(%m_size: index, %a: buffer, %w: buffer, %scale: buffer, %a_scale: buffer, %residual: buffer, %fuse_residual: i1, %c: buffer, %cfg_k_size: index, %cfg_n_size: index, %cfg_k_stride: index, %cfg_m_group: index, %registers: index, %k_step: index, %packed_per_word: index, %output_f32: i1, %compact_qkv: i1, %rows_bound: index) {
   %k_size = index.assume %cfg_k_size [range(%cfg_k_size, 64, 65536), mul(%cfg_k_size, 64)] : index
   // the operand rows' pitch (k elements); K itself when it is not a multiple of 1024, else K + 64,
   // so that the 384 rows a step touches do not alias in the cache (K = 7168: 36.7 -> 41.2 TOPS, K = 21504: 33.4 -> 41.4)
@@ -394,7 +394,18 @@ template.def<@h3.packed_256> @h3_packed_256(%m_size: index, %a: buffer, %w: buff
           %range_finite = vector.cmpf olt, %range_abs, %range_inf : vector<4xf32> -> vector<4xi1>
           %range_checked = vector.select %range_finite, %sat, %scaled : vector<4xf32>
           %narrow = vector.fptrunc %range_checked : vector<4xf32> to vector<4xbf16>
-          vector.store %narrow, %c_view[%bounded, %qk_col] : vector<4xbf16>, view<[%m_bounded]x[%out_stride]xbf16>
+          %with_residual = scf.if %fuse_residual -> (vector<4xbf16>) {
+            // Match a separate BF16 store/load before the residual addition.
+            %residual_global = buffer.assume.memory_space<global> %residual : buffer
+            %residual_view = buffer.view %residual_global[%c0_offset] : buffer -> view<[%m_bounded]x[%n_size]xbf16>
+            %residual_bf16 = vector.load %residual_view[%bounded, %out_col] : view<[%m_bounded]x[%n_size]xbf16> -> vector<4xbf16>
+            %residual_f32 = vector.extf %residual_bf16 : vector<4xbf16> to vector<4xf32>
+            %rounded = vector.extf %narrow : vector<4xbf16> to vector<4xf32>
+            %residual_sum = vector.addf %residual_f32, %rounded : vector<4xf32>
+            %residual_out = vector.fptrunc %residual_sum : vector<4xf32> to vector<4xbf16>
+            scf.yield %residual_out : vector<4xbf16>
+          } else { scf.yield %narrow : vector<4xbf16> }
+          vector.store %with_residual, %c_view[%bounded, %qk_col] : vector<4xbf16>, view<[%m_bounded]x[%out_stride]xbf16>
           }
         }
       }
@@ -443,6 +454,41 @@ kernel.def target(@h3_gemm_i4_256_gfx11) export("h3_gemm_i4_256") @h3_gemm_i4_25
   %output_f32 = scalar.constant false : i1
   %compact_qkv = scalar.constant false : i1
   %rows_bound = index.constant 16777216 : index
-  template.apply<@h3.packed_256>(%m_size, %a, %w, %scale, %a_scale, %c, %cfg_k_size, %cfg_n_size, %cfg_k_stride, %cfg_m_group, %registers, %k_step, %packed_per_word, %output_f32, %compact_qkv, %rows_bound) : (index, buffer, buffer, buffer, buffer, buffer, index, index, index, index, index, index, index, i1, i1, index)
+  %fuse_residual = scalar.constant false : i1
+  template.apply<@h3.packed_256>(%m_size, %a, %w, %scale, %a_scale, %c, %fuse_residual, %c, %cfg_k_size, %cfg_n_size, %cfg_k_stride, %cfg_m_group, %registers, %k_step, %packed_per_word, %output_f32, %compact_qkv, %rows_bound) : (index, buffer, buffer, buffer, buffer, buffer, i1, buffer, index, index, index, index, index, index, index, i1, i1, index)
+  kernel.return
+}
+
+// Optional residual uses the same tile and preserves both BF16 rounding boundaries.
+kernel.def target(@h3_gemm_i4_256_gfx11) export("h3_gemm_i4_256_residual") @h3_gemm_i4_256_residual(%m_size: index) {
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %n_size0 = config.get @h3.gemm_i4_256.n_size : index
+  %m_rounded = index.add %m_size, %c255 : index
+  %m_tiles = index.div %m_rounded, %c256 : index
+  %m_group = config.get @h3.gemm_i4_256.m_group : index
+  %m_group_less = index.sub %m_group, %c1 : index
+  %m_tiles3 = index.add %m_tiles, %m_group_less : index
+  %m_groups = index.div %m_tiles3, %m_group : index
+  %m_tiles_padded = index.mul %m_groups, %m_group : index
+  %n_tiles = index.div %n_size0, %c128 : index
+  kernel.launch.config workgroups(%n_tiles, %m_tiles_padded, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%m_size: index, %a: buffer, %w: buffer, %scale: buffer, %a_scale: buffer, %residual: buffer, %c: buffer) {
+  %cfg_k_size = config.get @h3.gemm_i4_256.k_size : index
+  %cfg_n_size = config.get @h3.gemm_i4_256.n_size : index
+  %cfg_k_stride = config.get @h3.gemm_i4_256.k_stride : index
+  %cfg_m_group = config.get @h3.gemm_i4_256.m_group : index
+  %registers = index.constant 2 : index
+  %k_step = index.constant 256 : index
+  %packed_per_word = index.constant 8 : index
+  %output_f32 = scalar.constant false : i1
+  %compact_qkv = scalar.constant false : i1
+  %rows_bound = index.constant 16777216 : index
+  %fuse_residual = scalar.constant true : i1
+  template.apply<@h3.packed_256>(%m_size, %a, %w, %scale, %a_scale, %residual, %fuse_residual, %c, %cfg_k_size, %cfg_n_size, %cfg_k_stride, %cfg_m_group, %registers, %k_step, %packed_per_word, %output_f32, %compact_qkv, %rows_bound) : (index, buffer, buffer, buffer, buffer, buffer, i1, buffer, index, index, index, index, index, index, index, i1, i1, index)
   kernel.return
 }

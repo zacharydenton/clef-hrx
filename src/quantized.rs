@@ -163,6 +163,15 @@ impl Engine {
         Ok(true)
     }
     pub(crate) fn project_quantized(&mut self, x: &Tensor, w: &QuantizedWeight) -> Result<Tensor> {
+        self.project_quantized_with_residual(x, w, None)
+    }
+
+    fn project_quantized_with_residual(
+        &mut self,
+        x: &Tensor,
+        w: &QuantizedWeight,
+        residual: Option<&Tensor>,
+    ) -> Result<Tensor> {
         ensure!(
             x.cols == w.cols && x.dtype == DType::Bf16,
             "quantized projection shape/dtype mismatch"
@@ -187,7 +196,26 @@ impl Engine {
             }
             (a, scales)
         };
-        self.project_prepared(x.rows, w, &a, &scales)
+        self.project_prepared(x.rows, w, &a, &scales, residual)
+    }
+
+    pub(crate) fn project_residual(
+        &mut self,
+        x: &Tensor,
+        name: &str,
+        residual: &Tensor,
+    ) -> Result<Tensor> {
+        if let Some(weight) = self
+            .quantized
+            .weights
+            .get(&format!("{name}.weight"))
+            .cloned()
+        {
+            self.project_quantized_with_residual(x, &weight, Some(residual))
+        } else {
+            let output = self.project(x, name, false)?;
+            self.binary(residual, &output, "addf")
+        }
     }
 
     pub(crate) fn project_swiglu(
@@ -195,6 +223,7 @@ impl Engine {
         gate: &Tensor,
         up: &Tensor,
         name: &str,
+        residual: Option<&Tensor>,
     ) -> Result<Tensor> {
         if gate.rows >= 158
             && gate.cols == 17408
@@ -213,10 +242,14 @@ impl Engine {
                 include_str!("../kernels/prepare_integer_register.loom"),
             )?;
             self.quantized.clear_activation();
-            self.project_prepared(gate.rows, &weight, &codes, &scales)
+            self.project_prepared(gate.rows, &weight, &codes, &scales, residual)
         } else {
             let activated = self.swiglu(gate, up)?;
-            self.project(&activated, name, false)
+            if let Some(residual) = residual {
+                self.project_residual(&activated, name, residual)
+            } else {
+                self.project(&activated, name, false)
+            }
         }
     }
 
@@ -225,6 +258,7 @@ impl Engine {
         attention: &Tensor,
         q_gate: &Tensor,
         name: &str,
+        residual: &Tensor,
     ) -> Result<Tensor> {
         let weight = self
             .quantized
@@ -245,7 +279,7 @@ impl Engine {
             include_str!("../kernels/prepare_integer_register.loom"),
         )?;
         self.quantized.clear_activation();
-        self.project_prepared(attention.rows, &weight, &codes, &scales)
+        self.project_prepared(attention.rows, &weight, &codes, &scales, Some(residual))
     }
 
     fn project_prepared(
@@ -254,9 +288,22 @@ impl Engine {
         w: &QuantizedWeight,
         a: &Tensor,
         scales: &Tensor,
+        residual: Option<&Tensor>,
     ) -> Result<Tensor> {
+        if let Some(residual) = residual {
+            ensure!(
+                residual.rows == rows && residual.cols == w.rows && residual.dtype == DType::Bf16,
+                "projection residual shape/dtype mismatch"
+            );
+        }
+        let fuse_residual = residual.is_some()
+            && w.bits == 4
+            && (128..=4032).contains(&rows)
+            && w.rows == 5120
+            && [6144, 17408].contains(&w.cols);
         let out = self.alloc(rows, w.rows, DType::Bf16)?;
-        let mut spec = Specialization::new(format!("h3_gemm_i{}_256", w.bits));
+        let suffix = if fuse_residual { "_residual" } else { "" };
+        let mut spec = Specialization::new(format!("h3_gemm_i{}_256{suffix}", w.bits));
         for (key, value) in [
             ("k_size", w.cols),
             ("n_size", w.rows),
@@ -288,15 +335,16 @@ impl Engine {
         } else {
             include_str!("../kernels/gemm_integer.loom")
         };
-        self.emit_special(
-            source,
-            spec,
-            constants,
-            &[rows as u64],
-            &[a, &w.codes, &w.scales, scales],
-            &out,
-        )?;
-        Ok(out)
+        let mut inputs = vec![a, &w.codes, &w.scales, scales];
+        if fuse_residual {
+            inputs.push(residual.unwrap());
+        }
+        self.emit_special(source, spec, constants, &[rows as u64], &inputs, &out)?;
+        if let Some(residual) = residual.filter(|_| !fuse_residual) {
+            self.binary(residual, &out, "addf")
+        } else {
+            Ok(out)
+        }
     }
 }
 
@@ -906,6 +954,127 @@ mod tests {
                     );
                 }
                 e.reset_plan()?;
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires gfx1151; checks residual rounding, slices, tile boundaries and replay"]
+    fn residual_projection_matches_separate_addition() -> Result<()> {
+        let context = ModelContext::new(Default::default())?;
+        for k in [6144usize, 17408] {
+            let mut e = Engine::new(&context)?;
+            let n = 5120;
+            let stride = k + if k.is_multiple_of(1024) { 128 } else { 0 };
+            let words = stride / 8;
+            let packed = |rows: usize| {
+                let mut data = vec![0u32; rows * words];
+                for row in 0..rows {
+                    for word in 0..k / 8 {
+                        for lane in 0..8 {
+                            let code = ((row * 17 + word * 7 + lane * 3) % 15) as i32 - 7;
+                            data[row * words + word] |= ((code as u32) & 15) << (lane * 4);
+                        }
+                    }
+                }
+                data
+            };
+            let codes = e
+                .input(
+                    n + 1,
+                    words,
+                    DType::U32,
+                    bytemuck::cast_slice(&packed(n + 1)),
+                )?
+                .slice_rows(1, n);
+            let scales: Vec<_> = (0..n + 3)
+                .map(|i| {
+                    if i % 23 == 0 {
+                        0.0
+                    } else if i % 29 == 0 {
+                        1e34
+                    } else {
+                        (i % 31 + 1) as f32 / 257.
+                    }
+                })
+                .collect();
+            let scales = e
+                .input(n + 3, 1, DType::F32, bytemuck::cast_slice(&scales))?
+                .slice_rows(3, n)
+                .reshape(1, n);
+            let weight = QuantizedWeight {
+                codes,
+                scales,
+                rows: n,
+                cols: k,
+                stride,
+                bits: 4,
+            };
+            for rows in [
+                127, 128, 129, 158, 257, 384, 513, 640, 769, 896, 1024, 4032, 4033,
+            ] {
+                e.reset_plan()?;
+                let a = e
+                    .input(
+                        rows + 2,
+                        words,
+                        DType::U32,
+                        bytemuck::cast_slice(&packed(rows + 2)),
+                    )?
+                    .slice_rows(2, rows);
+                let scales: Vec<_> = (0..rows + 2)
+                    .map(|i| {
+                        if i % 17 == 0 {
+                            0.0
+                        } else {
+                            (i % 19 + 1) as f32 / 131.
+                        }
+                    })
+                    .collect();
+                let scales = e
+                    .input(rows + 2, 1, DType::F32, bytemuck::cast_slice(&scales))?
+                    .slice_rows(2, rows)
+                    .reshape(1, rows);
+                let residual: Vec<_> = (0..(rows + 1) * n)
+                    .map(|i| {
+                        half::bf16::from_f32(match i % 1009 {
+                            0 => f32::NAN,
+                            1 => f32::INFINITY,
+                            2 => f32::NEG_INFINITY,
+                            3 => half::bf16::MAX.to_f32(),
+                            4 => -half::bf16::MAX.to_f32(),
+                            5 => -0.0,
+                            6 => 0.0,
+                            7 => half::bf16::from_bits(1).to_f32(),
+                            _ => ((i * 43 % 997) as f32 - 498.) / 257.,
+                        })
+                    })
+                    .collect();
+                let residual = e
+                    .input(rows + 1, n, DType::Bf16, bytemuck::cast_slice(&residual))?
+                    .slice_rows(1, rows);
+                let plain = e.project_prepared(rows, &weight, &a, &scales, None)?;
+                let reference = e.binary(&residual, &plain, "addf")?;
+                let mut reference_graph = e.finish()?;
+                let fused = e.project_prepared(rows, &weight, &a, &scales, Some(&residual))?;
+                let mut fused_graph = e.finish()?;
+                for _ in 0..2 {
+                    e.run(&mut reference_graph)?;
+                    let expected = e.read_f32(&reference)?;
+                    e.run(&mut fused_graph)?;
+                    let actual = e.read_f32(&fused)?;
+                    for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
+                        if b.is_nan() {
+                            assert!(a.is_nan(), "NaN at {rows}x{k}, element {i}");
+                        } else {
+                            assert_eq!(
+                                a.to_bits(),
+                                b.to_bits(),
+                                "residual at {rows}x{k}, element {i}"
+                            );
+                        }
+                    }
+                }
             }
         }
         Ok(())

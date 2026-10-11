@@ -474,6 +474,17 @@ mod tests {
             (127, 63, 129),
             (129, 65, 127),
             (33, 128, 32),
+            (1, 5120, 48),
+            (65, 5120, 48),
+            (127, 5120, 48),
+            (128, 5120, 48),
+            (129, 5120, 48),
+            (158, 5120, 48),
+            (235, 5120, 48),
+            (620, 5120, 48),
+            (1024, 5120, 48),
+            (4032, 5120, 48),
+            (4033, 5120, 48),
         ] {
             let values = |len, factor| {
                 (0..len)
@@ -493,7 +504,15 @@ mod tests {
             let mut graph = engine.finish()?;
             engine.run(&mut graph)?;
             let actual = engine.read_f32(&new)?;
+            assert!(actual.iter().all(|v| v.is_finite()));
             assert_eq!(actual, engine.read_f32(&old)?, "{m}x{k}x{n}");
+            engine.run(&mut graph)?;
+            assert_eq!(actual, engine.read_f32(&new)?, "replay {m}x{k}x{n}");
+            assert_eq!(
+                actual,
+                engine.read_f32(&old)?,
+                "reference replay {m}x{k}x{n}"
+            );
             engine.reset_plan()?;
         }
         Ok(())

@@ -111,6 +111,35 @@ impl GemmBenchmark {
         padded: bool,
         minimum_weight_bytes: usize,
     ) -> Result<Self> {
+        Self::packed_integer_impl((m, k, n), source, bits, padded, minimum_weight_bytes, None)
+    }
+    /// Include a separate or fused BF16 residual addition in every replay.
+    pub fn packed_integer_residual(
+        m: usize,
+        k: usize,
+        n: usize,
+        source: &str,
+        padded: bool,
+        minimum_weight_bytes: usize,
+        fused: bool,
+    ) -> Result<Self> {
+        Self::packed_integer_impl(
+            (m, k, n),
+            source,
+            4,
+            padded,
+            minimum_weight_bytes,
+            Some(fused),
+        )
+    }
+    fn packed_integer_impl(
+        (m, k, n): (usize, usize, usize),
+        source: &str,
+        bits: usize,
+        padded: bool,
+        minimum_weight_bytes: usize,
+        residual: Option<bool>,
+    ) -> Result<Self> {
         anyhow::ensure!(
             [4, 8].contains(&bits)
                 && (bits != 4 || k.is_multiple_of(128))
@@ -162,13 +191,27 @@ impl GemmBenchmark {
         let x = engine.input(m, stride / per_word, DType::U32, &values(m))?;
         let xs = engine.input(1, m, DType::F32, bytemuck::cast_slice(&scales(m, 3, 17)))?;
         let ws = engine.input(1, n, DType::F32, bytemuck::cast_slice(&scales(n, 7, 23)))?;
+        let residual_input = if residual.is_some() {
+            let values: Vec<_> = (0..m * n)
+                .map(|i| half::bf16::from_f32(((i * 43 % 997) as f32 - 498.) / 257.))
+                .collect();
+            Some(engine.input(m, n, DType::Bf16, bytemuck::cast_slice(&values))?)
+        } else {
+            None
+        };
         let copies = minimum_weight_bytes.div_ceil(n * row_bytes).max(1);
         let mut graphs = Vec::with_capacity(copies);
         let mut first_output = None;
         for _ in 0..copies {
             let w = engine.input(n, stride / per_word, DType::U32, &values(n))?;
             let output = engine.alloc(m, n, DType::Bf16)?;
-            let mut spec = hrx::loom::Specialization::new(format!("h3_gemm_i{bits}_256"));
+            let symbol = if residual == Some(true) {
+                std::env::var("CLEF_BENCH_INTEGER_RESIDUAL_EXPORT")
+                    .unwrap_or_else(|_| format!("h3_gemm_i{bits}_256"))
+            } else {
+                format!("h3_gemm_i{bits}_256")
+            };
+            let mut spec = hrx::loom::Specialization::new(symbol);
             for (key, value) in [
                 ("k_size", k),
                 ("n_size", n),
@@ -179,14 +222,18 @@ impl GemmBenchmark {
             }
             let mut constants = hrx::Constants::new();
             constants.push(m as u32)?;
-            engine.emit_special(
-                source,
-                spec,
-                constants,
-                &[m as u64],
-                &[&x, &w, &ws, &xs],
-                &output,
-            )?;
+            let mut inputs = vec![&x, &w, &ws, &xs];
+            if residual == Some(true) {
+                inputs.push(residual_input.as_ref().unwrap());
+            }
+            engine.emit_special(source, spec, constants, &[m as u64], &inputs, &output)?;
+            let output = if residual == Some(false) {
+                // Retain intermediates across all rotating graphs and replays.
+                engine.retained.push(output.clone());
+                engine.binary(residual_input.as_ref().unwrap(), &output, "addf")?
+            } else {
+                output
+            };
             let mut graph = engine.finish()?;
             engine.run(&mut graph)?;
             graphs.push(graph);

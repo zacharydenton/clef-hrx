@@ -49,6 +49,9 @@ Each kernel case constructs and validates its graph once, outside warmup and tim
 samples. Repeated samples reuse the same allocations; rotating cases advance to
 the next resident weight buffer after each completed dispatch.
 
+Hardware telemetry also records active KFD process IDs so shared-GPU runs can
+be identified. Exclusive access is checked separately from output correctness.
+
 The `quick` profile limits GEMM and DeltaNet to 235, 620 and 4,032 tokens. Attention
 retains its tile-aligned sweep. Use filters to investigate a specific bottleneck;
 run the full shape sweep before selecting an implementation. Attention uses stable
@@ -604,3 +607,66 @@ CLEF_BENCH_ATTENTION_SOURCE=artifacts/throughput-1000/attention-probability-bf16
   python3 scripts/bench_workload.py attention-probability-boundary-repro \
   --filter paired_attention
 ```
+
+## Fused projection residuals
+
+`CLEF_BENCH_INTEGER_RESIDUAL=1` includes a separate BF16 residual addition in
+the reference graph and fuses that addition into the candidate GEMM epilogue.
+Use INT4, varied row scales and a matching reference tile. Set
+`CLEF_BENCH_INTEGER_RESIDUAL_EXPORT=h3_gemm_i4_256_residual` for the native
+optional export; omit it for external prototypes using the original export name
+with a residual binding. Both the projection rounding and final addition
+rounding remain explicit. Reference intermediates remain leased across all
+rotating graphs, and output bits are checked before and after timing.
+
+The external wide-K prototype passed six smoke cases and measured 1.034–1.050×
+in the quick sweep. The expanded sweep at 158, 235, 1,024, 2,048 and 4,032 rows
+measured 1.024–1.048× (`residual-wide-k-full`). The original attention-output
+tile measured 1.028–1.164× over 128, 158, 235, 1,024, 2,048 and 4,032 rows
+(`residual-original-paired`). All outputs matched bits and all 99% lower bounds
+exceeded 1.0. Compiler reports retained 256/200 VGPRs and 54/30 KiB LDS,
+respectively, without spills.
+
+M128 boundary measurements covered 128, 257, 384, 513, 640, 769 and 896 rows for
+both projection roles (`residual-m128-boundaries`). All 28 pairs matched bits;
+two MLP-down comparisons were initially inconclusive. Retesting with the native
+optional export at 257, 384, 620 and 896 rows resolved those cases: all 16 pairs
+improved 1.009–1.119×, with every 99% lower bound above 1.0
+(`residual-native-m128-paired`). The original observations are retained.
+The M128 compiler reports used 218 VGPRs and 36 KiB LDS without spills.
+
+The final native original-tile and wide-K export checks at 235, 1,024 and
+4,032 rows also preserve exact outputs. Their six pairs each measured
+1.071–1.163× and 1.025–1.116×, respectively, with every 99% lower bound above
+1.0 (`residual-native-original-paired`, `residual-native-wide-k-paired`).
+
+The GPU fixture checks both roles at 13 lengths, including selection boundaries
+and 4,033-row fallback, independently sliced codes/scales/residuals, zeros,
+subnormals, large values, infinities, NaNs and two replays. Non-NaN outputs must
+match bits; NaNs must remain NaNs. Full JevBench qualification preserves every
+output in BF16 (202/231), MLP-only INT4 (199/231) and broader INT4 (194/231).
+Two clean broader INT4 runs measured 967.61–969.78 tok/s; a fresh control measured
+958.48 tok/s. The fusion is retained, although this sequential comparison does
+not establish a paired model-level confidence interval and remains below
+1,000 tok/s. The contended first run is retained separately.
+See [all full-run records and reproduction](evaluation.md#projection-residual-fusion).
+
+For native BF16 tile comparisons, `CLEF_BENCH_GEMM_CANDIDATE` accepts `auto`,
+`reference`, `wide` or `pipelined` instead of `CLEF_BENCH_GEMM_SOURCE`.
+The paired harness also covers `delta_gate` (5,120 inputs, 48 outputs), including
+short lengths, with `auto`, `reference` or `wide` candidates. The pipelined
+kernel does not support this narrow shape. For example:
+
+```sh
+CLEF_BENCH_GEMM_CANDIDATE=wide CLEF_BENCH_GEMM_REFERENCE=reference \
+  python3 scripts/bench_workload.py delta-gate-wide-repro --profile quick \
+  --filter paired_bf16_gemm/delta_gate
+```
+
+The initial native wide-K DeltaNet gate sweep (`delta-gate-wide-paired`) matched
+output bits at 235, 620 and 4,032 rows in both cache modes. Six paired speedups
+were 1.023–1.044×, each with a 99% lower bound above 1.0. The expanded GPU GEMM
+fixture also passed sliced 5,120-to-48 projections from 1 through 4,033 rows
+with replay. This tile is not selected for narrow gates: boundary performance
+and complete-model qualification remain pending. No model-throughput gain is
+claimed from this probe.

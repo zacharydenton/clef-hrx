@@ -795,3 +795,108 @@ python3 scripts/compare_jevbench.py \
 ```
 
 The INT4 comparison returns nonzero below 1,000 tok/s even when accuracy passes.
+
+## Projection residual fusion
+
+The candidate adds the residual in the INT4 projection epilogue at 128–4,032
+rows for attention/DeltaNet output and MLP down projections. It preserves the
+projection's BF16 rounding before adding the residual, followed by the original
+BF16 result rounding. Other shapes and precisions retain separate addition.
+Matched operator results and reproduction are in
+[the optimization log](optimization.md#fused-projection-residuals).
+
+The first full INT4 run shared the GPU with an unrelated server. It preserved
+all 231 output arrays (194 correct, all strictly valid) but measured only
+629.70 input tok/s. It is retained as
+`tests/results/jevbench-20261011-int4-residual-projection`; this is not a clean
+throughput comparison. Its telemetry records both KFD clients.
+
+After the other GPU workload stopped, the complete repeat measured **969.78
+input tok/s**: 166,394 resident tokens in 171.579 seconds, median/p95 latency
+0.275/2.597 seconds, and 14.078 GiB peak engine allocation. All 231 output arrays
+and token counts again matched exactly. Its 186 telemetry samples contain only
+the evaluator's KFD client when a client is present. Records:
+`tests/results/jevbench-20261011-int4-residual-projection-repeat`.
+The 1,000 tok/s gate failed; the preceding warm binary measured 992.76 tok/s
+in an earlier run, so kernel-level savings alone do not establish an
+end-to-end improvement.
+
+BF16 measured **511.20 input tok/s** (166,394 / 325.498 seconds), 202/231 correct,
+all strictly valid and all output arrays exact. Median/p95 latency was
+0.660/4.642 seconds and peak engine allocation was 47.816 GiB. Records:
+`tests/results/jevbench-20261011-bf16-residual-projection`. Mean preparation and
+GPU time were 31.36 and 1,381.08 ms, respectively. This was also an exclusive-GPU
+run. BF16 projection arithmetic is unchanged; host temporary lifetimes differ.
+
+These runs use the normal binary
+`artifacts/throughput-1000/clef-residual-projection`, SHA-256
+`1fd2083d29b3013139cc6482e21eb3b7ee54f59cf45f2c0cdb6040356503542b`.
+Its `-source.json` hashes all 106 files in `residual-projection-source`.
+Telemetry is recorded alongside it as
+`residual-projection-{int4,bf16,int4-mlp}-eval-telemetry.jsonl` and
+`residual-projection-repeat-int4-eval-telemetry.jsonl`.
+
+MLP-only INT4 measured **740.23 input tok/s** (166,394 / 224.786 seconds),
+199/231 correct, all strictly valid and all 231 arrays and token counts exact
+against its earlier qualified run. Median/p95 latency was 0.419/3.244 seconds;
+peak engine allocation was 23.962 GiB. Mean preparation/GPU time was
+28.67/945.97 ms. Records:
+`tests/results/jevbench-20261011-int4-mlp-residual-projection`.
+This updates the older 625.29 tok/s, 32.532 GiB observation after several
+intervening optimizations; the difference cannot be attributed solely to
+residual fusion.
+
+Reproduce with an idle GPU and fresh output names. Use the archived candidate
+source above if later changes supersede this experiment:
+
+```sh
+CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  CLEF_BENCH_INTEGER_ROW_SCALES=1 CLEF_BENCH_INTEGER_RESIDUAL=1 \
+  CLEF_BENCH_INTEGER_RESIDUAL_EXPORT=h3_gemm_i4_256_residual \
+  CLEF_BENCH_INTEGER_REFERENCE_SOURCE=kernels/gemm_integer_wide_k.loom \
+  CLEF_BENCH_INTEGER_SOURCE=kernels/gemm_integer_wide_k.loom \
+  python3 scripts/bench_workload.py residual-wide-k-repro --profile quick \
+  --filter paired_integer_gemm/mlp_down
+cargo test --locked --release --lib residual_projection_matches_separate_addition -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4-residual-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-attention-gate-packing-warm \
+  tests/results/jevbench-int4-residual-repro --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision bf16 --output tests/results/jevbench-bf16-residual-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-bf16-attention-gate-packing \
+  tests/results/jevbench-bf16-residual-repro
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4-mlp --output tests/results/jevbench-int4-mlp-residual-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261010-int4-mlp \
+  tests/results/jevbench-int4-mlp-residual-repro
+```
+
+The INT4 comparison returns nonzero below 1,000 tok/s even when accuracy passes.
+For attention-output operators, use `gemm_integer.loom` for both source flags
+and filter `paired_integer_gemm/attention_output`. For M128 boundary cases,
+use `gemm_integer_m128.loom` for both flags, set
+`CLEF_BENCH_LENGTHS=257,384,620,896`, and include both projection filters.
+
+A fresh unchanged-binary control measured **958.48 tok/s**, followed immediately
+by a second candidate run at **967.61 tok/s**, an observed 0.95% increase.
+Both scored 194/231, all strictly valid, with every question array and token
+count exact. This is a sequential comparison, not a paired model-level
+confidence interval. It supports retaining the fusion alongside the matched
+operator gains, while the 1,000 tok/s target remains unmet.
+
+The control processed 166,394 tokens in 173.601 seconds; the candidate took
+171.963 seconds. Candidate median/p95 latency was 0.273/2.616 seconds, mean
+preparation/GPU time 30.06/714.87 ms, and peak engine allocation 14.078 GiB.
+The preceding control's preparation/GPU time was 31.65/720.43 ms. Records:
+`tests/results/jevbench-20261011-int4-residual-control` and
+`tests/results/jevbench-20261011-int4-residual-projection-clean`; telemetry:
+`residual-control-int4-eval-telemetry.jsonl` and
+`residual-projection-clean-int4-eval-telemetry.jsonl`. Both used exclusive GPU
+access. The control uses the archived attention-gate-packing binary above;
+the candidate uses the residual-projection binary. Both clean candidate runs
+are retained, giving the **967.61–969.78 tok/s** range in the README.

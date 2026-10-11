@@ -34,7 +34,9 @@ def hardware():
             if sensor.name.startswith(('temp', 'power', 'freq')):
                 values[sensor.name] = read(sensor)
         devices[card.name] = values
-    return {'time': time.time(), 'devices': devices, 'meminfo': read('/proc/meminfo')}
+    return {'time': time.time(), 'devices': devices, 'meminfo': read('/proc/meminfo'),
+            'kfd_pids': sorted(p.name for p in Path('/sys/class/kfd/kfd/proc').glob('*')
+                               if p.name.isdigit())}
 
 
 def paired_summary(samples):

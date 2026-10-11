@@ -507,10 +507,28 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
     } else {
         "CLEF_BENCH_GEMM_SOURCE"
     };
-    let Some(path) = std::env::var_os(source_key) else {
+    let source_path = std::env::var_os(source_key);
+    let candidate_kind = (!integer)
+        .then(|| std::env::var("CLEF_BENCH_GEMM_CANDIDATE").ok())
+        .flatten();
+    if source_path.is_none() && candidate_kind.is_none() {
         return;
+    }
+    assert!(
+        source_path.is_none() || candidate_kind.is_none(),
+        "choose a GEMM source or a native candidate, not both"
+    );
+    let source = source_path
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .unwrap_or_default();
+    let bf16_candidate = match candidate_kind.as_deref() {
+        None => GemmKernel::Source(source.clone()),
+        Some("auto") => GemmKernel::Auto,
+        Some("wide") => GemmKernel::Wide,
+        Some("reference") => GemmKernel::Reference,
+        Some("pipelined") => GemmKernel::Pipelined,
+        _ => panic!("CLEF_BENCH_GEMM_CANDIDATE must be auto, wide, reference or pipelined"),
     };
-    let source = std::fs::read_to_string(path).unwrap();
     let reference_source = std::env::var_os("CLEF_BENCH_INTEGER_REFERENCE_SOURCE")
         .map(|path| std::fs::read_to_string(path).unwrap())
         .unwrap_or_else(|| include_str!("../kernels/gemm_integer.loom").to_owned());
@@ -518,6 +536,8 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
         .map(|s| s.parse::<usize>().unwrap())
         .unwrap_or(8);
     assert!([4, 8].contains(&bits));
+    let residual = integer && std::env::var("CLEF_BENCH_INTEGER_RESIDUAL").as_deref() == Ok("1");
+    assert!(!residual || bits == 4, "residual experiment requires INT4");
     let padded = std::env::var("CLEF_BENCH_INTEGER_PADDED").as_deref() == Ok("1");
     let group_name = if integer {
         "paired_integer_gemm"
@@ -546,8 +566,18 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
             ("attention_q_gate", 5120, 12288),
             ("kv_and_head", 5120, 1024),
             ("joint_head", 1024, 1024),
+            ("delta_gate", 5120, 48),
         ] {
-            if !integer && m < 128 {
+            if n == 48
+                && (integer
+                    || !matches!(
+                        candidate_kind.as_deref(),
+                        Some("auto" | "wide" | "reference")
+                    ))
+            {
+                continue;
+            }
+            if !integer && m < 128 && n != 48 {
                 continue;
             }
             for (cache, minimum_bytes) in [("replay", 0), ("rotating", 64 << 20)] {
@@ -561,7 +591,9 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                 group.bench_function(BenchmarkId::new(&label, &shape), |b| {
                     let graphs = graphs.get_or_insert_with(|| {
                         assert!(std::env::var("CLEF_BENCH_INTEGER_PREPARE").as_deref() != Ok("1"), "paired integer GEMM uses prepacked operands; measure preparation in workload_gemm");
-                        let mut reference = if integer { GemmBenchmark::packed_integer(
+                        let mut reference = if residual {
+                            GemmBenchmark::packed_integer_residual(m, k, n, &reference_source, padded, minimum_bytes, false)
+                        } else if integer { GemmBenchmark::packed_integer(
                             m,
                             k,
                             n,
@@ -572,7 +604,9 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                         ) } else {
                             GemmBenchmark::with_working_set(m, k, n, bf16_reference.clone(), minimum_bytes)
                         }.unwrap();
-                        let mut candidate = if integer { GemmBenchmark::packed_integer(
+                        let mut candidate = if residual {
+                            GemmBenchmark::packed_integer_residual(m, k, n, &source, padded, minimum_bytes, true)
+                        } else if integer { GemmBenchmark::packed_integer(
                             m,
                             k,
                             n,
@@ -581,7 +615,7 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                             padded,
                             minimum_bytes,
                         ) } else {
-                            GemmBenchmark::with_working_set(m, k, n, GemmKernel::Source(source.clone()), minimum_bytes)
+                            GemmBenchmark::with_working_set(m, k, n, bf16_candidate.clone(), minimum_bytes)
                         }.unwrap();
                         assert!(
                             reference.allocated_bytes() + candidate.allocated_bytes() <= 1 << 30,
@@ -647,7 +681,8 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                     };
                     std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
                         "rows": m, "k": k, "columns": n, "bits": if integer { bits } else { 16 },
-                        "padded": integer && padded, "minimum_weight_bytes_per_variant": minimum_bytes,
+                        "padded": integer && padded, "includes_residual": residual,
+                        "bf16_candidate": candidate_kind, "minimum_weight_bytes_per_variant": minimum_bytes,
                         "varying_row_scales": integer && std::env::var("CLEF_BENCH_INTEGER_ROW_SCALES").as_deref() == Ok("1"),
                         "bitwise_identical": true, "sample_size": 20,
                         "samples": samples, "measurement_samples": measured,
