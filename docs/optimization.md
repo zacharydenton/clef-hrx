@@ -718,6 +718,15 @@ the target only because its 4-bit WMMA path delivers roughly twice the
 arithmetic rate (84 TOPS measured). BF16 arithmetic therefore cannot reach
 1,000 tok/s on gfx1151; the tiled layout removes the memory-side waste instead.
 
+A mixed-precision probe tested whether integer arithmetic could reach the
+target without falling below the 202/231 BF16 floor: MLP plus all 48 DeltaNet
+layers' projections in INT4 with the 16 full-attention layers kept in BF16
+(`tests/results/jevbench-20261011-int4-delta-tiled`, same binary source as the
+tiled runs). It scored 198/231 at 995.33 tok/s, losing six decisions and
+gaining two against the BF16 repeat, with a maximum probability change of
+0.668. It fails both gates and was not kept; MLP-only INT4 (204/231, 846.83
+tok/s) remains the fastest qualified mode above the BF16 floor.
+
 ## Causal convolution row reuse
 
 `paired_convolution` compares the original four-tap causal convolution plus
