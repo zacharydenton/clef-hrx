@@ -59,7 +59,7 @@ def paired_summary(samples):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('name', help='Unique Criterion baseline name and artifact directory')
-    p.add_argument('--suite', choices=['workload', 'workload_inference', 'kernels', 'normalization', 'preprocessing'], default='workload')
+    p.add_argument('--suite', choices=['flash', 'workload', 'workload_inference', 'kernels', 'normalization', 'preprocessing'], default='workload')
     p.add_argument('--profile', choices=['quick', 'full'], default='full')
     p.add_argument('--filter', default='')
     p.add_argument('--compare', help='Existing Criterion baseline name')

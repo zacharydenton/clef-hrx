@@ -13,6 +13,8 @@ import os
 import subprocess
 import sys
 import time
+import threading
+from bench_workload import hardware
 from pathlib import Path
 
 
@@ -52,7 +54,8 @@ def main():
     parser.add_argument("--binary", type=Path, default=Path("target/release/clef"))
     parser.add_argument("--output", type=Path, default=Path("tests/results/jevbench"))
     parser.add_argument("--precision", choices=("bf16", "int4-mlp", "int4"), default="bf16")
-    parser.add_argument("--memory-gib", type=int, default=60)
+    parser.add_argument("--memory-gib", type=int, default=80)
+    parser.add_argument("--model", choices=("clef", "clef-flash"), default="clef")
     parser.add_argument("--model-dir", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--prepared", type=Path, help="Reuse a preflight from the same binary, data, and model source")
@@ -68,10 +71,12 @@ def main():
               for name in ("easy", "original", "hard")}
     tasks = [task for group in splits.values() for task in group]
     assert len({t.id for t in tasks}) == len(tasks)
-    adapter = TypeSafeAdapter(model="clef", key_env=None)
+    adapter = TypeSafeAdapter(model=args.model, key_env=None)
     requests = [adapter.build_request(task) for task in tasks]
     binary = str(args.binary.resolve())
-    source = ["--model-dir", str(args.model_dir.resolve())] if args.model_dir else ["--offline"]
+    source = (["--model-dir", str(args.model_dir.resolve())] if args.model_dir else ["--offline"])
+    source += ["--model", args.model, "--strict-context"]
+    inspection = json.loads(subprocess.check_output([str(args.binary.resolve()), *source, "inspect"], text=True))
     lengths = []
     # Preflight every request at the largest supported context so no input is
     # silently truncated by a smaller runtime allocation.
@@ -85,11 +90,11 @@ def main():
         lengths = [length_map[t.id] for t in tasks]
     else:
         for request in requests:
-            result = subprocess.run([binary, *source, "--max-length", "16384", "encode"],
+            result = subprocess.run([binary, *source, "--max-length", "65536", "encode"],
                                     input=json.dumps(request), text=True, capture_output=True, check=True)
             encoded = json.loads(result.stdout)
             lengths.append(len(encoded["input_ids"]))
-    assert max(lengths) < 16384, "Input reaches context limit; inspect for truncation"
+    assert max(lengths) <= 65536, "Input exceeds supported context"
     max_length = max(lengths)
     command = [binary, *source, "--memory-gib", str(args.memory_gib),
                "--max-length", str(max_length), "decide", "-", "--jsonl", "--raw"]
@@ -103,7 +108,8 @@ def main():
         "binary_sha256": binary_hash,
         "dataset_sha256": dataset_hash(tasks), "command": command,
         "count": len(tasks), "max_input_tokens": max_length,
-        "checkpoint_revision": "2f3de3dd85f379784083b0814d997ab627200f0c",
+        "checkpoint_revision": inspection["revision"],
+        "model": args.model,
         "scoring": "Upstream score_task and summarize; raw native probabilities; score uses argmax",
         "latency_note": "Sequential local CLI; first call includes model loading. No warmup. Compilation included.",
         "cache_before": kernel_cache_snapshot(),
@@ -118,6 +124,15 @@ def main():
         return
     print(f"Preflight: {len(tasks)} requests; {min(lengths)}–{max_length} tokens. Loading model.", flush=True)
     records = []
+    telemetry_stop = threading.Event()
+    def telemetry():
+        with (args.output / "hardware.jsonl").open("w") as log:
+            while not telemetry_stop.is_set():
+                log.write(json.dumps(hardware()) + "\n")
+                log.flush()
+                telemetry_stop.wait(1)
+    telemetry_thread = threading.Thread(target=telemetry, daemon=True)
+    telemetry_thread.start()
     started = time.perf_counter()
     with (args.output / "stderr.log").open("w") as err, \
          (args.output / "predictions.jsonl").open("w") as raw_file, \
@@ -143,7 +158,7 @@ def main():
                 if task.question["type"] == "noul":
                     assert set(probs) == {"true", "false"}
                     probs = {"yes": probs["true"], "no": probs["false"]}
-                record = {"task_id": task.id, "ok": True, "model": "clef-hrx",
+                record = {"task_id": task.id, "ok": True, "model": args.model + "-hrx",
                           "probs_source": "native", "latency_s": elapsed,
                           "input_tokens": length, "timings": prediction["timings"],
                           **score_task(probs, task)}
@@ -156,6 +171,8 @@ def main():
             if process.wait() != 0:
                 raise RuntimeError(f"CLEF exit status {process.returncode}")
         finally:
+            telemetry_stop.set()
+            telemetry_thread.join()
             if process.poll() is None:
                 process.terminate()
                 process.wait()

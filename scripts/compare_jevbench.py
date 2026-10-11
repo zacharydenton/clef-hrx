@@ -28,6 +28,10 @@ def main():
     cm, cs, cr = load(a.candidate)
     for key in ['dataset_sha256', 'benchmark_commit', 'checkpoint_revision']:
         assert bm[key] == cm[key], f'{key} differs'
+    def precision(metadata):
+        command = metadata['command']
+        return command[command.index('--precision') + 1] if '--precision' in command else 'bf16'
+    assert precision(bm) == precision(cm), 'accuracy gates require the same precision mode'
     assert br.keys() == cr.keys()
     assert all(br[k]['input_tokens'] == cr[k]['input_tokens'] for k in br), 'token counts differ'
     assert all(set(br[k]['probs']) == set(cr[k]['probs']) for k in br), 'answer choices differ'

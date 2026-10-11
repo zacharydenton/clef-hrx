@@ -61,7 +61,7 @@ def response_from_raw(request, raw):
             raise ValueError(f'Unsupported question kind: {kind}')
         answers[qid] = answer
     return SystemOneResponse.model_validate({
-        'model': 'clef-hrx', 'usage': {'input_tokens': raw['input_tokens'], 'output_tokens': 0},
+        'model': request.get('model', 'clef') + '-hrx', 'usage': {'input_tokens': raw['input_tokens'], 'output_tokens': 0},
         'answers': answers,
     })
 
@@ -83,7 +83,7 @@ class NativeCLI:
 
     def system_one(self, *, model, state, questions):
         from core.question_types import question_record
-        request = {'model': 'clef', 'state': state,
+        request = {'model': model, 'state': state,
                    'questions': {key: question_record(q) for key, q in questions.items()}}
         with self.lock:
             # Upstream Session recursively halves sets rejected with this exact
@@ -95,14 +95,14 @@ class NativeCLI:
             encoded = subprocess.run(self.encode_command, input=wire, text=True, capture_output=True)
             preflight_seconds = time.perf_counter() - preflight_started
             token_count = len(json.loads(encoded.stdout)['input_ids']) if encoded.returncode == 0 else None
-            capacity = token_count == self.max_length or 'schema and media require' in encoded.stderr
+            capacity = 'context capacity exceeded:' in encoded.stderr or 'schema and media require' in encoded.stderr
             self.preflight_log.write(json.dumps({'workflow': self.workflow, 'question_count': len(questions),
                                                  'input_tokens': token_count, 'capacity_rejected': capacity,
                                                  'wall_seconds': preflight_seconds, 'error': encoded.stderr,
                                                  'request_sha256': hashlib.sha256(wire.encode()).hexdigest()}) + '\n')
             self.preflight_log.flush()
             if capacity:
-                raise ValueError(f'{GRAMMAR_LIMIT}: native input would reach/exceed {self.max_length} tokens')
+                raise ValueError(f'{GRAMMAR_LIMIT}: native input exceeds {self.max_length} tokens')
             if encoded.returncode:
                 raise ValueError(f'Native encoding failed: {encoded.stderr.strip()}')
             if self.failed or self.process.poll() is not None:
@@ -178,13 +178,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--benchmark', type=Path, default=Path('artifacts/WorkflowEvals'))
     parser.add_argument('--binary', type=Path, default=Path('target/release/clef'))
+    parser.add_argument('--model', choices=('clef', 'clef-flash'), default='clef')
     parser.add_argument('--model-dir', type=Path, default=Path('artifacts/model'))
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--workflows', nargs='+', choices=DATASETS, default=list(DATASETS))
     parser.add_argument('--limit', type=int, help='Smoke run only; omit for the complete suite')
     parser.add_argument('--max-length', type=int, default=65536)
     parser.add_argument('--precision', choices=('bf16', 'int4-mlp', 'int4'), default='bf16')
-    parser.add_argument('--memory-gib', type=int, default=60)
+    parser.add_argument('--memory-gib', type=int, default=80)
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--new-cases-per-workflow', type=int,
                         help='Run at most this many additional cases per workflow; retain the full suite plan for resume')
@@ -225,13 +226,15 @@ def main():
             return ModelIdentity(name='native:' + self.model, lab='other')
 
     environment = {k: v for k, v in os.environ.items() if k.startswith('CLEF_EXPERIMENT_')}
-    config = NativeConfig(model='clef-hrx', thinking='off', question_mode='all',
+    inspection = json.loads(subprocess.check_output([str(args.binary.resolve()), '--model', args.model,
+        '--model-dir', str(args.model_dir.resolve()), 'inspect'], text=True))
+    config = NativeConfig(model=args.model + '-hrx', thinking='off', question_mode='all',
                           binary_sha256=file_hash(args.binary), runner_sha256=file_hash(__file__),
-                          checkpoint_revision='2f3de3dd85f379784083b0814d997ab627200f0c',
+                          checkpoint_revision=inspection['revision'],
                           max_length=args.max_length, precision=args.precision, experiment_environment=environment)
     workflows = {name: load(name, DATASETS[name]) for name in args.workflows}
     jobs = {name: plan(w, config, limit=args.limit) for name, w in workflows.items()}
-    command = [str(args.binary.resolve()), '--model-dir', str(args.model_dir.resolve()),
+    command = [str(args.binary.resolve()), '--model', args.model, '--strict-context', '--model-dir', str(args.model_dir.resolve()),
                '--memory-gib', str(args.memory_gib), '--max-length', str(args.max_length),
                'decide', '-', '--jsonl', '--raw']
     if args.precision != 'bf16':
@@ -275,7 +278,7 @@ def main():
             batch = jobs[name].model_copy(update={'case_ids': selected})
             results = execute(workflow, batch, output, prices={}, workers=1, question_workers=1,
                               run_id='clef-hrx', client_factory=lambda _: native,
-                              model_factory=lambda _: 'clef', progress=progress)
+                              model_factory=lambda _: args.model, progress=progress)
             scores = build_score_data(results, policy_ids=jobs[name].policy_ids)
             write_record(output / 'scores.json', scores)
             cases = results.runs[0].cases
@@ -293,7 +296,7 @@ def main():
                   'complete': len(summary) == len(workflows) and all(s['cases'] == s['planned_cases'] for s in summary.values()),
                   'limited_smoke_run': args.limit is not None,
                   'new_cases_per_workflow_this_invocation': args.new_cases_per_workflow,
-                  'timing_note': 'Native request wall time includes encoding, compilation, preparation, GPU and readback; excludes the first request of each CLI process and the separate CPU preflight. Workflow case timing includes preflight, capacity-driven splitting and Python workflow execution. Requests at the context limit are split before inference; no accepted request is truncated.'}
+                  'timing_note': 'Native request wall time includes encoding, compilation, preparation, GPU and readback; excludes the first request of each CLI process and the separate CPU preflight. Workflow case timing includes preflight, capacity-driven splitting and Python workflow execution. Requests exceeding the context limit are split before inference; no accepted request is truncated.'}
         preflight = [json.loads(line) for line in (args.output / 'preflight.jsonl').read_text().splitlines()]
         report['preflight'] = {'attempts': len(preflight), 'capacity_splits': sum(r['capacity_rejected'] for r in preflight),
                                'wall_seconds': sum(r['wall_seconds'] for r in preflight)}

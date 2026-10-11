@@ -30,7 +30,7 @@ jointly evaluated using the entire state and schema, including the first invoice
 node's 55 questions (28,719 schema/prompt tokens before state).
 
 Each request passes through the native CPU encoder before inference. A request
-at the configured capacity triggers the upstream session's recursive question
+that exceeds the configured capacity triggers the upstream session's recursive question
 splitting fallback so the evaluator never accepts silently truncated state.
 Unsplittable requests fail and remain in scoring. Accepted native token counts
 must match preflight. The manifest and request log record all batching decisions.
@@ -69,7 +69,7 @@ run. Omit it for the full suite. `--workflows` can select individual workflows.
 upstream case checkpoints avoid repeating completed cases. A restart loads the
 model again, and each process's first request is marked separately.
 
-The default 60 GiB model allocation budget includes weights and workspace. Run
+The default 80 GiB model allocation budget includes weights and workspace. Run
 GPU jobs sequentially. The four workflows share one model process, one case runs
 at a time, and all questions in a fitting node are evaluated jointly.
 

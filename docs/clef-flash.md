@@ -12,7 +12,7 @@ The native limit remains 65,536 total encoded tokens, including schema and media
 ## Status
 
 BF16 passes the eight-case independent text/image/video corpus with identical
-winners, probability error below 0.003, and exact changed-input replay. Reference
+winners, maximum probability error 0.002057 (limit 0.003), and exact changed-input replay. Reference
 fixtures and their environment manifest are in `tests/fixtures/flash/`.
 Full JevBench, WorkflowEvals, throughput and 64k execution qualification are pending.
 
@@ -103,3 +103,38 @@ threshold. Explicit lengths above 4,032 exercise attention and DeltaNet only, up
 to 65,536. Operator timings exclude allocation, compilation and upload; full-model
 evaluations include request preparation and compilation. GEMM operation rates are
 not model token throughput.
+
+## Full context and workflow matrix
+
+The matrix runner freezes the executable and schedules the six combinations on
+one GPU. It runs the actual context ladder before the full WorkflowEvals matrix.
+Each context run includes facts at the beginning, middle and end, all three
+question types, and long→short→long replay. Retrieval answers, token counts,
+latency, memory and hardware telemetry are retained separately.
+
+```sh
+python3 scripts/qualify_matrix.py --binary target/release/clef \
+  --output tests/results/flash-support-matrix
+# Resume with the frozen executable if target/release/clef was rebuilt:
+python3 scripts/qualify_matrix.py --binary tests/results/flash-support-matrix/clef \
+  --output tests/results/flash-support-matrix --resume
+```
+
+`status.json` distinguishes running, failed and completed jobs. Workflow runs
+resume through case checkpoints. Failed context runs use fresh attempt
+directories. A changed binary, runner or configuration requires a new matrix.
+Completing this matrix can take many hours: the existing original CLEF invoice
+example alone took about 314 seconds of GPU execution for 36,916 tokens and 55
+joint questions. Partial matrices are not reported as full qualification.
+
+For later kernel candidates, compare all consensus metrics per workflow; a gain
+in one workflow must not conceal a regression in another:
+
+```sh
+python3 scripts/compare_workflowevals.py BASELINE_DIRECTORY CANDIDATE_DIRECTORY
+```
+
+Comparisons require the same model, precision, revisions, cases and scoring
+denominators. They also report the other label sets and native timing boundaries.
+Use frozen request corpora for performance comparisons when workflow branches
+differ.
