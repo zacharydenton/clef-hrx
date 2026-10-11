@@ -28,6 +28,15 @@ impl DType {
         if self == Self::Bf16 { 2 } else { 4 }
     }
 }
+/// Element order of a two-dimensional tensor in device memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Layout {
+    /// Row-major `[rows][cols]`.
+    RowMajor,
+    /// Projection weights in the on-disk tiled layout; see
+    /// [`crate::checkpoint::tile_rows`]. Logical `rows`/`cols` are unchanged.
+    Tiled,
+}
 #[derive(Clone)]
 pub(crate) struct Tensor {
     pub slot: usize,
@@ -35,6 +44,7 @@ pub(crate) struct Tensor {
     pub rows: usize,
     pub cols: usize,
     pub dtype: DType,
+    pub layout: Layout,
     _lease: Rc<()>,
 }
 impl Tensor {
@@ -45,12 +55,18 @@ impl Tensor {
             && self.rows == other.rows
             && self.cols == other.cols
             && self.dtype == other.dtype
+            && self.layout == other.layout
     }
     pub fn len(&self) -> usize {
         self.rows * self.cols
     }
     pub fn reshape(&self, rows: usize, cols: usize) -> Self {
         assert_eq!(rows * cols, self.len());
+        assert_eq!(
+            self.layout,
+            Layout::RowMajor,
+            "tiled weights cannot be reshaped"
+        );
         Self {
             rows,
             cols,
@@ -59,6 +75,11 @@ impl Tensor {
     }
     pub fn slice_rows(&self, start: usize, rows: usize) -> Self {
         assert!(start + rows <= self.rows);
+        assert_eq!(
+            self.layout,
+            Layout::RowMajor,
+            "tiled weights cannot be sliced"
+        );
         Self {
             offset: self.offset + start * self.cols * self.dtype.bytes(),
             rows,
@@ -250,6 +271,7 @@ impl Engine {
             rows,
             cols,
             dtype,
+            layout: Layout::RowMajor,
             _lease: lease,
         })
     }
@@ -311,13 +333,21 @@ impl Engine {
             rows,
             cols,
             dtype,
+            layout: Layout::RowMajor,
             _lease: lease,
         };
         self.upload(&t, bytes)?;
         self.retained.push(t.clone());
         Ok(t)
     }
+    /// Stores checkpoint bytes as they are on disk. Backbone projection weights
+    /// arrive in the tiled layout and keep it; see [`crate::checkpoint::tiled_projection`].
     pub fn weight(&mut self, name: String, rows: usize, cols: usize, bytes: &[u8]) -> Result<()> {
+        let layout = if crate::checkpoint::tiled_projection(&name, rows, cols) {
+            Layout::Tiled
+        } else {
+            Layout::RowMajor
+        };
         let elements = rows.checked_mul(cols).context("weight size overflow")?;
         ensure!(
             elements > 0
@@ -336,6 +366,7 @@ impl Engine {
             rows,
             cols,
             dtype: DType::Bf16,
+            layout,
             _lease: lease.clone(),
         };
         self.allocations.push(Allocation {

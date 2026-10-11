@@ -47,7 +47,11 @@ requests, keep the model loaded and pass newline-delimited JSON:
 ./target/release/clef --max-length 1536 decide requests.jsonl --jsonl
 ```
 
-First use downloads roughly 51.2 GiB of weights. Use `--model-dir PATH` for a
+First use downloads roughly 51.2 GiB of weights, then rewrites the text-backbone
+projection shards in place into a tiled GEMM layout (a one-time disk pass over
+about 45 GiB; tensor names and shapes are unchanged and each converted shard
+carries a `clef_weight_layout` marker). Binaries older than this layout cannot
+read a converted snapshot. Use `--model-dir PATH` for a
 local snapshot or `--offline` for cached files. Inputs support up to 65,536 tokens,
 subject to available memory. `--max-length` sets the token limit (default 65,536);
 `--memory-gib` sets the allocation budget (default 80 GiB).
@@ -69,11 +73,11 @@ Full JevBench results on AMD Strix Halo, with the model already loaded:
 
 | Mode | Full JevBench accuracy | Resident input tok/s |
 | --- | ---: | ---: |
-| BF16 | 202/231 (87.4%) | 519 |
-| INT4 MLP only | 204/231 (88.3%) | 747 |
-| INT4 backbone | 194/231 (84.0%) | 1,003–1,035 |
+| BF16 | 202/231 (87.4%) | 616 |
+| INT4 MLP only | 204/231 (88.3%) | 847 |
+| INT4 backbone | 194/231 (84.0%) | 1,032 |
 
-[Results and reproduction](docs/evaluation.md#parallel-reduction-and-input-normalization).
+[Results and reproduction](docs/evaluation.md#tiled-weight-layout).
 [WorkflowEvals](docs/workflowevals.md) is still in progress.
 
 ## Library

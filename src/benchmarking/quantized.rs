@@ -226,7 +226,8 @@ impl GemmBenchmark {
         let mut graphs = Vec::with_capacity(copies);
         let mut first_output = None;
         for _ in 0..copies {
-            let (w, ws) = prepare(&mut engine, &dense_w, bits, stride)?;
+            let (packed, ws) = prepare(&mut engine, &dense_w, bits, stride)?;
+            let w = crate::quantized::retile_codes(&mut engine, &packed, n, k, bits)?;
             // Each rotating graph needs its own immutable packed weight buffer.
             // Ordinary model weights are leased by QuantizedProjections instead.
             engine.retained.push(w.clone());

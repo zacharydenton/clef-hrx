@@ -1131,6 +1131,77 @@ runs' binary identities, pinned dataset metadata, request bytes, CLI arguments,
 strict validity, exact outputs, raw token/wall totals and sole GPU clients.
 It records the candidate as unselected and the throughput goal as incomplete.
 
+## Tiled weight layout
+
+The text-backbone projection weights are now stored on disk in a tiled GEMM
+layout (`[rows / 256][cols / 64][256][64]`), converted in place on first load,
+and read by `kernels/gemm_bf16_tiled.loom`, whose accumulation order matches
+the previous pipelined kernel exactly. Attention-output and MLP-down
+projections add their residual in the same kernel's epilogue after BF16
+rounding. INT4 modes permute packed weight codes into 128-row by 32-word blocks
+on the GPU at load time. [Kernel evidence](optimization.md#tiled-weight-layout)
+records 1.02–2.13× projection speedups with identical outputs and the BF16
+arithmetic ceiling analysis.
+
+All four full pinned runs completed with 231/231 strictly valid outputs, no
+truncation and identical input token counts. Each resident measurement covers
+166,394 input tokens in 230 sequential requests; the first BF16 run compiled
+every new kernel specialization inside its timed requests (hard-tier mean
+preparation 0.279 s against 0.042 s in the repeat), so the repeat is the
+representative BF16 figure.
+
+| Mode / run | Correct / strictly valid | Resident wall seconds | Input tok/s | Maximum probability change vs prior baseline |
+| --- | ---: | ---: | ---: | ---: |
+| BF16 initial (cold kernel cache) | 202 / 231 | 294.4 | 565.23 | 0.0 |
+| BF16 repeat | 202 / 231 | 270.2 | 615.78 | 0.0 |
+| MLP-only INT4 | 204 / 231 | 196.5 | 846.83 | 0.0 |
+| Broader INT4 | 194 / 231 | 161.2 | 1,032.14 | 0.0 |
+
+Every probability in all four runs is bitwise identical to the corresponding
+`norm-parallel` baseline (`jevbench-20261011-int4-norm-parallel-repeat` for
+broader INT4), so Brier and ECE are unchanged: 0.166949 / 0.028195 (BF16),
+0.158953 / 0.039079 (MLP-only INT4) and 0.208800 / 0.032711 (broader INT4).
+Resident BF16 inference means fell from 0.580 s to 0.362 s on the easy tier and
+from 2.191 s to 1.970 s on the hard tier. Broader INT4 inference means are
+unchanged (1.157 s to 1.152 s on the hard tier); its gain is within run-to-run
+variation and the block layout is retained for the exact-output guarantee and
+the dropped stride padding.
+
+Raw runs are `tests/results/jevbench-20261011-<mode>-tiled`, with `-repeat` for
+the second BF16 run. The archived binary for the repeat and both INT4 runs is
+`artifacts/throughput-1000/clef-tiled-weights`, SHA-256
+`05207c8f415ccd7bd11320094b0346f84f1096428217480e623be88c9c0637d9`;
+the cold-cache BF16 run used an earlier build of the same source
+(`5c32e52445a328b74bbb71f544357c9259d773156f88a25b7bbea3be44e083b3`) that
+differed only in the not-yet-tiled INT4 path. Converted checkpoints cannot be
+read by earlier binaries, including the archived ones above this section.
+
+Reproduce on an idle GPU with fresh result names (the first load converts a
+pristine snapshot once):
+
+```sh
+cargo test --locked --release --lib gemm_parity -- --ignored --test-threads=1
+cargo test --locked --release --lib retiled_codes_match_block_formula -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision bf16 --output tests/results/jevbench-bf16-tiled-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-bf16-tiled-repeat \
+  tests/results/jevbench-bf16-tiled-repro
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4-tiled-repro \
+  --prepared tests/results/jevbench-bf16-tiled-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-tiled \
+  tests/results/jevbench-int4-tiled-repro --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4-mlp --output tests/results/jevbench-int4-mlp-tiled-repro \
+  --prepared tests/results/jevbench-bf16-tiled-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-mlp-tiled \
+  tests/results/jevbench-int4-mlp-tiled-repro
+```
+
 ## RMSNorm and packing fusion
 
 The first candidate preserved the original RMS summation order in two waves

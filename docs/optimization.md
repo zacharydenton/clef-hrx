@@ -15,11 +15,13 @@ reference tests; do not loosen their tolerances to qualify a candidate. The
 speed/accuracy modes, gate kernel optimizations against the qualified baseline
 of the same precision mode and report the difference from BF16 separately.
 
-The latest qualified full runs measure **980.58 tok/s INT4** initially and
-**992.76 tok/s** in an unchanged-binary repeat, plus **519.94 tok/s BF16**, with
-every output unchanged. See [qualification and reproduction](evaluation.md#attention-gate-packing-and-bounded-tile-changes).
-The repeat reduced preparation cost while GPU time stayed roughly flat; both
-results are retained. The **1,000 tok/s target remains unmet**.
+The latest qualified full runs measure **1,032.14 tok/s INT4**, **846.83 tok/s
+MLP-only INT4** and **615.78 tok/s BF16** (unchanged-binary repeat; the first
+BF16 run with a cold kernel cache measured 565.23), with every output unchanged.
+See [qualification and reproduction](evaluation.md#tiled-weight-layout).
+The **1,000 tok/s target remains unmet for BF16**, and the
+[arithmetic ceiling](#tiled-weight-layout) shows BF16 WMMA cannot reach it on
+this GPU.
 
 ## Criterion coverage
 
@@ -653,7 +655,7 @@ not establish a paired model-level confidence interval and remains below
 See [all full-run records and reproduction](evaluation.md#projection-residual-fusion).
 
 For native BF16 tile comparisons, `CLEF_BENCH_GEMM_CANDIDATE` accepts `auto`,
-`reference`, `wide` or `pipelined` instead of `CLEF_BENCH_GEMM_SOURCE`.
+`reference`, `wide`, `pipelined` or `tiled` instead of `CLEF_BENCH_GEMM_SOURCE`.
 The paired harness also covers `delta_gate` (5,120 inputs, 48 outputs), including
 short lengths, with `auto`, `reference` or `wide` candidates. The pipelined
 kernel does not support this narrow shape. For example:
@@ -671,6 +673,50 @@ fixture also passed sliced 5,120-to-48 projections from 1 through 4,033 rows
 with replay. This tile is not selected for narrow gates: boundary performance
 and complete-model qualification remain pending. No model-throughput gain is
 claimed from this probe.
+
+## Tiled weight layout
+
+Per-kernel profiles of the BF16 model (`profile_inference`, 235 and 2,729
+tokens) showed that short requests are 95% projection time while streaming
+weights at only 45–92 GB/s, and that the two N=5,120 projections (MLP down,
+attention output) ran at 28 TFLOPS against 41 for the other families. The
+pipelined kernel reads each weight K-step as 256 separate 128-byte row segments
+at the row stride, so every workgroup touches 256 DRAM pages per step. Storing
+the weight as `[N / 256][K / 64][256][64]` makes each K-step one contiguous
+32 KiB stream. `probe_gemm` compared `kernels/gemm_bf16_tiled.loom` against the
+row-major pipelined kernel (alternating order, median of 15 rounds, same
+accumulation order so outputs are identical):
+
+| Shape (M×K×N) | Pipelined | Tiled | Speedup | Tiled TFLOPS |
+| --- | ---: | ---: | ---: | ---: |
+| 235×5,120×17,408 | 1.937 ms | 1.142 ms | 1.70× | 36.7 |
+| 235×17,408×5,120 | 2.396 ms | 1.127 ms | 2.13× | 37.2 |
+| 620×5,120×17,408 | 2.993 ms | 2.730 ms | 1.10× | 40.5 |
+| 2,729×5,120×17,408 | 12.064 ms | 11.784 ms | 1.02× | 41.3 |
+| 2,729×17,408×5,120 | 14.800 ms | 11.244 ms | 1.32× | 43.3 |
+| 2,729×6,144×5,120 | 5.421 ms | 3.981 ms | 1.36× | 43.1 |
+
+The layout is the standard storage for the 64 layers' projection weights: the
+checkpoint shards are rewritten in place on first load and the loader keeps the
+bytes as they are on disk. The residual-add epilogue (`gemm_bf16_tiled_residual.loom`)
+rounds the projection to BF16 before adding the residual, so attention-output
+and MLP-down projections match the former separate `addf` bit for bit.
+INT4 modes restore logical rows on the CPU before packing, then permute the
+packed codes on the GPU into 128-row by 32-word blocks (`kernels/retile_codes.loom`);
+all three integer GEMM kernels read that block order, which replaces the earlier
+stride-padding workaround for weights (activations keep their padded stride). Two rejected probes are recorded for contrast: a K-step-32 variant of
+the pipelined kernel (30 KiB LDS, three workgroups per WGP) ran 2.1–2.6× slower
+at every shape and 1.36× slower even when padded back to 55 KiB LDS, so higher
+occupancy does not help this kernel family.
+
+Arithmetic ceiling: the 166,394 resident input tokens perform about
+8.1×10¹⁵ BF16 multiply-adds in the projections alone. Reaching 1,000 tok/s
+would need 48.7 TFLOPS sustained across the whole run, including the
+bandwidth-bound short requests, against a 59.4 TFLOPS theoretical peak at the
+2.9 GHz boost clock and 43.5 TFLOPS measured for the best kernel. INT4 reaches
+the target only because its 4-bit WMMA path delivers roughly twice the
+arithmetic rate (84 TOPS measured). BF16 arithmetic therefore cannot reach
+1,000 tok/s on gfx1151; the tiled layout removes the memory-side waste instead.
 
 ## Causal convolution row reuse
 

@@ -55,10 +55,17 @@ register pressure and spills before changing tile sizes; use uninstrumented,
 completed requests to qualify a speedup. Reports and GPU profiling are opt-in.
 
 The GEMM benchmark compares the original kernel with automatic selection and
-checks identical outputs. Large compatible matrices use the pipelined 128×256
-kernel; other shapes use the K64 or original K32 kernel.
-The `gemm_pipelined` group also compares against K64 directly. To compare
-normalization and GEMM changes within one loaded model:
+checks identical outputs. Backbone projection weights are stored tiled on disk
+(`[rows / 256][cols / 64][256][64]`, see `checkpoint::tiled_projection`) and
+always use `kernels/gemm_bf16_tiled.loom`, which streams each 256×64 K-step
+block contiguously and keeps the pipelined kernel's accumulation order. Other
+large compatible matrices use the row-major pipelined 128×256 kernel; remaining
+shapes use the K64 or original K32 kernel. The `gemm_pipelined` group also
+compares against K64 directly, and `CLEF_BENCH_GEMM_CANDIDATE=tiled` measures
+the production layout in `paired_bf16_gemm`. Loading converts a pristine
+snapshot once; to convert without loading a model, run
+`CLEF_MODEL_DIR=artifacts/model cargo test --release --locked --lib retile_local_checkpoint -- --ignored`.
+To compare normalization and GEMM changes within one loaded model:
 
 ```sh
 cargo run --release --locked --features bench-internals --example compare_inference

@@ -1,0 +1,58 @@
+// retile_codes. Shapes and storage types are compiler specializations.
+// Permutes packed integer weight codes from row-major [rows][in_words] into
+// 128-row by 32-word blocks: word (n, q) of the logical [rows][out_words]
+// matrix lands at ((n / 128) * blocks_k + q / 32) * 4096 + (n % 128) * 32 + q % 32.
+// Row padding beyond out_words is dropped.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.in_words : %value: index where [range(%value, 1, 4294967295)]
+config.decl @clef.blocks_k : %value: index where [range(%value, 1, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %out_buffer: buffer) {
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %c32 = index.constant 32 : index
+ %c128 = index.constant 128 : index
+ %c4096 = index.constant 4096 : index
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %x_len = config.get @clef.x_len : index
+ %in_words = config.get @clef.in_words : index
+ %blocks_k = config.get @clef.blocks_k : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+  %block = index.div %id, %c4096 : index
+  %within = index.rem %id, %c4096 : index
+  %r = index.div %within, %c32 : index
+  %c = index.rem %within, %c32 : index
+  %bn = index.div %block, %blocks_k : index
+  %bk = index.rem %block, %blocks_k : index
+  %n0 = index.mul %bn, %c128 : index
+  %n = index.add %n0, %r : index
+  %q0 = index.mul %bk, %c32 : index
+  %q = index.add %q0, %c : index
+  %src0 = index.mul %n, %in_words : index
+  %src1 = index.add %src0, %q : index
+  %src = index.assume %src1 [range(%src1, 0, 4294967294), lt(%src1, %x_len)] : index
+  %dst = index.assume %id [range(%id, 0, 4294967294), lt(%id, %out_len)] : index
+  %xv = buffer.view %x_buffer[%offset] : buffer -> view<[%x_len]xi32>
+  %ov = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xi32>
+  %word = view.load %xv[%src] : view<[%x_len]xi32> -> i32
+  view.store %word, %ov[%dst] : i32, view<[%out_len]xi32>
+ }
+ kernel.return
+}

@@ -647,7 +647,8 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
         Some("wide") => GemmKernel::Wide,
         Some("reference") => GemmKernel::Reference,
         Some("pipelined") => GemmKernel::Pipelined,
-        _ => panic!("CLEF_BENCH_GEMM_CANDIDATE must be auto, wide, reference or pipelined"),
+        Some("tiled") => GemmKernel::Tiled,
+        _ => panic!("CLEF_BENCH_GEMM_CANDIDATE must be auto, wide, reference, pipelined or tiled"),
     };
     let reference_source = std::env::var_os("CLEF_BENCH_INTEGER_REFERENCE_SOURCE")
         .map(|path| std::fs::read_to_string(path).unwrap())
@@ -691,7 +692,8 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
         "wide" => GemmKernel::Wide,
         "reference" => GemmKernel::Reference,
         "pipelined" => GemmKernel::Pipelined,
-        _ => panic!("CLEF_BENCH_GEMM_REFERENCE must be auto, wide, reference or pipelined"),
+        "tiled" => GemmKernel::Tiled,
+        _ => panic!("CLEF_BENCH_GEMM_REFERENCE must be auto, wide, reference, pipelined or tiled"),
     };
     let mut group = c.benchmark_group(group_name);
     configure(&mut group);

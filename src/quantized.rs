@@ -1,7 +1,7 @@
 //! Optional rotated INT4 projections; BF16 remains the default.
 use crate::{
     Result,
-    gpu::{DType, Engine, Tensor},
+    gpu::{DType, Engine, Layout, Tensor},
     model::Precision,
 };
 use anyhow::ensure;
@@ -136,6 +136,14 @@ impl Engine {
             rows.is_multiple_of(256) && cols.is_multiple_of(256),
             "unsupported quantized weight shape"
         );
+        // Packing reads logical rows; restore them from the tiled checkpoint order.
+        let untiled;
+        let bytes = if crate::checkpoint::tiled_projection(name, rows, cols) {
+            untiled = crate::checkpoint::untile_rows(bytes, rows, cols);
+            untiled.as_slice()
+        } else {
+            bytes
+        };
         let stride = cols
             + if cols.is_multiple_of(1024) {
                 512 / bits
@@ -143,7 +151,12 @@ impl Engine {
                 0
             };
         let dense = self.input(rows, cols, DType::Bf16, bytes)?;
-        let (codes, scales) = prepare(self, &dense, bits, stride)?;
+        let (packed, packed_scales) = prepare(self, &dense, bits, stride)?;
+        // Keep only the tiled codes and a compact scale row resident; the packing
+        // staging (row-major codes with stride padding) is released afterwards.
+        let codes = retile_codes(self, &packed, rows, cols, bits)?;
+        let scales = self.alloc(1, rows, DType::F32)?;
+        self.copy_into(&packed_scales, &scales)?;
         let mut graph = self.finish()?;
         self.run(&mut graph)?;
         self.quantized.weights.insert(
@@ -213,6 +226,10 @@ impl Engine {
         {
             self.project_quantized_with_residual(x, &weight, Some(residual))
         } else {
+            let w = self.w(&format!("{name}.weight"))?;
+            if w.layout == Layout::Tiled && residual.rows == x.rows && residual.cols == w.rows {
+                return self.linear_tiled_residual(x, &w, residual);
+            }
             let output = self.project(x, name, false)?;
             self.binary(residual, &output, "addf")
         }
@@ -436,6 +453,10 @@ impl Engine {
         } else {
             include_str!("../kernels/gemm_integer.loom")
         };
+        ensure!(
+            w.codes.layout == Layout::Tiled,
+            "integer projections require tiled weight codes"
+        );
         let mut inputs = vec![a, &w.codes, &w.scales, scales];
         if fuse_residual {
             inputs.push(residual.unwrap());
@@ -447,6 +468,40 @@ impl Engine {
             Ok(out)
         }
     }
+}
+
+/// Permutes packed weight codes into the 128-row by 32-word block layout read
+/// by the integer GEMM kernels, dropping stride padding. See `kernels/retile_codes.loom`.
+pub(crate) fn retile_codes(
+    e: &mut Engine,
+    codes: &Tensor,
+    rows: usize,
+    cols: usize,
+    bits: usize,
+) -> Result<Tensor> {
+    let words = cols / (32 / bits);
+    ensure!(
+        codes.dtype == DType::U32
+            && codes.layout == Layout::RowMajor
+            && codes.rows == rows
+            && codes.cols >= words
+            && rows.is_multiple_of(128)
+            && words.is_multiple_of(32),
+        "unsupported packed weight shape for tiling"
+    );
+    let mut out = e.alloc(rows, words, DType::U32)?;
+    e.dispatch(
+        include_str!("../kernels/retile_codes.loom"),
+        rows * words,
+        &[("x", codes)],
+        &out,
+        &[
+            ("in_words", codes.cols.to_string()),
+            ("blocks_k", (words / 32).to_string()),
+        ],
+    )?;
+    out.layout = Layout::Tiled;
+    Ok(out)
 }
 
 pub(crate) fn prepare(
@@ -1150,6 +1205,46 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[ignore = "requires gfx1151; checks the packed-code block permutation against a CPU oracle"]
+    fn retiled_codes_match_block_formula() -> Result<()> {
+        let context = ModelContext::new(Default::default())?;
+        for (bits, rows, cols, padded) in [
+            (4, 256, 1024, true),
+            (4, 384, 512, false),
+            (8, 128, 256, false),
+        ] {
+            let mut e = Engine::new(&context)?;
+            let stride = cols + if padded { 512 / bits } else { 0 };
+            let in_words = stride / (32 / bits);
+            let words = cols / (32 / bits);
+            let values: Vec<u32> = (0..rows * in_words)
+                .map(|i| (i as u32).wrapping_mul(2654435761))
+                .collect();
+            let packed = e.input(rows, in_words, DType::U32, bytemuck::cast_slice(&values))?;
+            let tiled = retile_codes(&mut e, &packed, rows, cols, bits)?;
+            let mut graph = e.finish()?;
+            e.run(&mut graph)?;
+            let actual: Vec<u32> = e.read_f32(&tiled)?.into_iter().map(f32::to_bits).collect();
+            assert_eq!(actual.len(), rows * words);
+            let blocks_k = words / 32;
+            for n in 0..rows {
+                for q in 0..words {
+                    let at = ((n / 128) * blocks_k + q / 32) * 4096 + (n % 128) * 32 + q % 32;
+                    assert_eq!(
+                        actual[at],
+                        values[n * in_words + q],
+                        "bits={bits} n={n} q={q}"
+                    );
+                }
+            }
+            e.run(&mut graph)?;
+            let replay: Vec<u32> = e.read_f32(&tiled)?.into_iter().map(f32::to_bits).collect();
+            assert_eq!(replay, actual);
+        }
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "requires gfx1151; checks residual rounding, slices, tile boundaries and replay"]
     fn residual_projection_matches_separate_addition() -> Result<()> {
         let context = ModelContext::new(Default::default())?;
@@ -1178,6 +1273,7 @@ mod tests {
                     bytemuck::cast_slice(&packed(n + 1)),
                 )?
                 .slice_rows(1, n);
+            let codes = retile_codes(&mut e, &codes, n, k, 4)?;
             let scales: Vec<_> = (0..n + 3)
                 .map(|i| {
                     if i % 23 == 0 {

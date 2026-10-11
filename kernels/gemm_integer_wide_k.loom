@@ -113,7 +113,13 @@ template.def<@h3.packed_256> @h3_packed_256(%m_size: index, %a: buffer, %w: buff
     %scale_global = buffer.assume.memory_space<global> %scale : buffer
     %c_global = buffer.assume.memory_space<global> %c : buffer
     %a_view = buffer.view %a_global[%c0_offset] : buffer -> view<[%m_bounded]x[%k_quads]xi32>
-    %w_view = buffer.view %w_global[%c0_offset] : buffer -> view<[%n_size]x[%k_quads]xi32>
+    // Weight codes are tiled into 128-row by 32-word blocks (kernels/retile_codes.loom);
+    // each K-step then streams one contiguous 16 KiB block instead of 128 row segments.
+    %w_words = index.div %k_size, %packed_per_word : index
+    %w_blocks_k = index.div %w_words, %c32 : index
+    %w_tiled_rows = index.mul %n_size, %w_blocks_k : index
+    %w_tiled = buffer.view %w_global[%c0_offset] : buffer -> view<[%w_tiled_rows]x32xi32>
+    %w_block_n = index.mul %tile_n_id, %w_blocks_k : index
     %scale_view = buffer.view %scale_global[%c0_offset] : buffer -> view<[%n_size]xf32>
     %a_scale_global = buffer.assume.memory_space<global> %a_scale : buffer
     %a_scale_view = buffer.view %a_scale_global[%c0_offset] : buffer -> view<[%m_bounded]xf32>
@@ -153,11 +159,7 @@ template.def<@h3.packed_256> @h3_packed_256(%m_size: index, %a: buffer, %w: buff
     %a_safe3 = scf.select %a_ok3, %a_m3, %c0 : index
     %a_row3 = index.assume %a_safe3 [lt(%a_safe3, %m_bounded)] : index
     %st_wrow0 = index.add %st_row_base, %c0 : index
-    %w_n0 = index.add %base_n, %st_wrow0 : index
-    %w_row0 = index.assume %w_n0 [lt(%w_n0, %n_size)] : index
     %st_wrow1 = index.add %st_row_base, %c64 : index
-    %w_n1 = index.add %base_n, %st_wrow1 : index
-    %w_row1 = index.assume %w_n1 [lt(%w_n1, %n_size)] : index
 
     // Operand rows this lane reads: A rows wave_row + 16i + lane16, W rows wave_col + 16j + lane16.
     %fa0 = index.add %wave_row, %lane16 : index
@@ -177,8 +179,17 @@ template.def<@h3.packed_256> @h3_packed_256(%m_size: index, %a: buffer, %w: buff
     %ga1 = vector.load %a_view[%a_row1, %kq_first] : view<[%m_bounded]x[%k_quads]xi32> -> vector<8xi32>
     %ga2 = vector.load %a_view[%a_row2, %kq_first] : view<[%m_bounded]x[%k_quads]xi32> -> vector<8xi32>
     %ga3 = vector.load %a_view[%a_row3, %kq_first] : view<[%m_bounded]x[%k_quads]xi32> -> vector<8xi32>
-    %gw0 = vector.load %w_view[%w_row0, %kq_first] : view<[%n_size]x[%k_quads]xi32> -> vector<8xi32>
-    %gw1 = vector.load %w_view[%w_row1, %kq_first] : view<[%n_size]x[%k_quads]xi32> -> vector<8xi32>
+    %gwb = index.div %kq_first, %c32 : index
+    %gwblk = index.add %w_block_n, %gwb : index
+    %gwrow = index.mul %gwblk, %c128 : index
+    %gwcol0 = index.rem %kq_first, %c32 : index
+    %gwcol = index.assume %gwcol0 [lt(%gwcol0, %c32), mul(%gwcol0, 8)] : index
+    %gwr00 = index.add %gwrow, %st_wrow0 : index
+    %gwr0 = index.assume %gwr00 [lt(%gwr00, %w_tiled_rows)] : index
+    %gw0 = vector.load %w_tiled[%gwr0, %gwcol] : view<[%w_tiled_rows]x32xi32> -> vector<8xi32>
+    %gwr10 = index.add %gwrow, %st_wrow1 : index
+    %gwr1 = index.assume %gwr10 [lt(%gwr10, %w_tiled_rows)] : index
+    %gw1 = vector.load %w_tiled[%gwr1, %gwcol] : view<[%w_tiled_rows]x32xi32> -> vector<8xi32>
 
     %acc00, %acc01, %acc02, %acc03, %acc10, %acc11, %acc12, %acc13, %acc20, %acc21, %acc22, %acc23, %acc30, %acc31, %acc32, %acc33, %a_last0, %a_last1, %a_last2, %a_last3, %w_last0, %w_last1 = scf.for %k_base = [%c0 to %k_size step %k_step](%r00 = %acc_init : vector<8xi32>, %r01 = %acc_init : vector<8xi32>, %r02 = %acc_init : vector<8xi32>, %r03 = %acc_init : vector<8xi32>, %r10 = %acc_init : vector<8xi32>, %r11 = %acc_init : vector<8xi32>, %r12 = %acc_init : vector<8xi32>, %r13 = %acc_init : vector<8xi32>, %r20 = %acc_init : vector<8xi32>, %r21 = %acc_init : vector<8xi32>, %r22 = %acc_init : vector<8xi32>, %r23 = %acc_init : vector<8xi32>, %r30 = %acc_init : vector<8xi32>, %r31 = %acc_init : vector<8xi32>, %r32 = %acc_init : vector<8xi32>, %r33 = %acc_init : vector<8xi32>, %ca0 = %ga0 : vector<8xi32>, %ca1 = %ga1 : vector<8xi32>, %ca2 = %ga2 : vector<8xi32>, %ca3 = %ga3 : vector<8xi32>, %cw0 = %gw0 : vector<8xi32>, %cw1 = %gw1 : vector<8xi32>) -> (vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>) {
       // Stage what we were handed.
@@ -201,8 +212,17 @@ template.def<@h3.packed_256> @h3_packed_256(%m_size: index, %a: buffer, %w: buff
       %na1 = vector.load %a_view[%a_row1, %kq_next] : view<[%m_bounded]x[%k_quads]xi32> -> vector<8xi32>
       %na2 = vector.load %a_view[%a_row2, %kq_next] : view<[%m_bounded]x[%k_quads]xi32> -> vector<8xi32>
       %na3 = vector.load %a_view[%a_row3, %kq_next] : view<[%m_bounded]x[%k_quads]xi32> -> vector<8xi32>
-      %nw0 = vector.load %w_view[%w_row0, %kq_next] : view<[%n_size]x[%k_quads]xi32> -> vector<8xi32>
-      %nw1 = vector.load %w_view[%w_row1, %kq_next] : view<[%n_size]x[%k_quads]xi32> -> vector<8xi32>
+      %nwb = index.div %kq_next, %c32 : index
+      %nwblk = index.add %w_block_n, %nwb : index
+      %nwrow = index.mul %nwblk, %c128 : index
+      %nwcol0 = index.rem %kq_next, %c32 : index
+      %nwcol = index.assume %nwcol0 [lt(%nwcol0, %c32), mul(%nwcol0, 8)] : index
+      %nwr00 = index.add %nwrow, %st_wrow0 : index
+      %nwr0 = index.assume %nwr00 [lt(%nwr00, %w_tiled_rows)] : index
+      %nw0 = vector.load %w_tiled[%nwr0, %nwcol] : view<[%w_tiled_rows]x32xi32> -> vector<8xi32>
+      %nwr10 = index.add %nwrow, %st_wrow1 : index
+      %nwr1 = index.assume %nwr10 [lt(%nwr10, %w_tiled_rows)] : index
+      %nw1 = vector.load %w_tiled[%nwr1, %nwcol] : view<[%w_tiled_rows]x32xi32> -> vector<8xi32>
 
       // Full unrolling preserves the source order of each staged substep.
       %substeps = index.div %c32, %registers : index

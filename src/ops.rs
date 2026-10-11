@@ -1,6 +1,6 @@
 use crate::{
     Result,
-    gpu::{DType, Engine, Tensor},
+    gpu::{DType, Engine, Layout, Tensor},
 };
 use anyhow::ensure;
 use hrx::{Constants, loom::Specialization};
@@ -93,6 +93,11 @@ impl Engine {
         Ok(out)
     }
     pub fn linear(&mut self, x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
+        // Tiled checkpoint weights stream one contiguous 32 KiB block per K-step;
+        // only the tiled kernel understands that order.
+        if w.layout == Layout::Tiled {
+            return self.linear_tiled(x, w, bias);
+        }
         #[cfg(feature = "bench-internals")]
         if self.reference_kernels.gemm {
             return self.linear_impl::<false>(x, w, bias);
@@ -123,7 +128,11 @@ impl Engine {
         bias: Option<&Tensor>,
     ) -> Result<Tensor> {
         ensure!(
-            x.cols == w.cols && x.dtype == DType::Bf16 && w.dtype == DType::Bf16,
+            x.cols == w.cols
+                && x.dtype == DType::Bf16
+                && w.dtype == DType::Bf16
+                && x.layout == Layout::RowMajor
+                && w.layout == Layout::RowMajor,
             "linear shape/dtype mismatch"
         );
         let (m, k, n) = (x.rows, x.cols, w.rows);
@@ -195,10 +204,89 @@ impl Engine {
         k: usize,
         source: &str,
     ) -> Result<Tensor> {
+        ensure!(
+            w.layout == Layout::RowMajor,
+            "pipelined GEMM expects row-major weights"
+        );
+        self.linear_128x256(x, w, bias, k, source, "krea2_gemm_bf16_fast")
+    }
+    /// Projection with a weight stored in the tiled checkpoint layout.
+    /// The kernel reads each 256x64 weight block as one contiguous stream and
+    /// reproduces the pipelined kernel's accumulation order exactly.
+    pub(crate) fn linear_tiled(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        bias: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        ensure!(
+            w.layout == Layout::Tiled,
+            "tiled GEMM expects tiled weights"
+        );
+        self.linear_128x256(
+            x,
+            w,
+            bias,
+            x.cols,
+            include_str!("../kernels/gemm_bf16_tiled.loom"),
+            "krea2_gemm_bf16_tiled",
+        )
+    }
+    /// Tiled projection whose epilogue adds `residual` after BF16 rounding,
+    /// reproducing `linear` followed by `addf` exactly.
+    pub(crate) fn linear_tiled_residual(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        residual: &Tensor,
+    ) -> Result<Tensor> {
+        ensure!(
+            w.layout == Layout::Tiled
+                && residual.rows == x.rows
+                && residual.cols == w.rows
+                && residual.dtype == DType::Bf16
+                && residual.layout == Layout::RowMajor,
+            "tiled residual GEMM shape mismatch"
+        );
+        self.linear_128x256_residual(
+            x,
+            w,
+            Some(residual),
+            x.cols,
+            include_str!("../kernels/gemm_bf16_tiled_residual.loom"),
+            "krea2_gemm_bf16_tiled_residual",
+        )
+    }
+    fn linear_128x256(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        bias: Option<&Tensor>,
+        k: usize,
+        source: &str,
+        symbol: &str,
+    ) -> Result<Tensor> {
+        let out = self.linear_128x256_residual(x, w, None, k, source, symbol)?;
+        if let Some(b) = bias {
+            self.binary(&out, &b.reshape(1, w.rows), "addf")
+        } else {
+            Ok(out)
+        }
+    }
+    fn linear_128x256_residual(
+        &mut self,
+        x: &Tensor,
+        w: &Tensor,
+        residual: Option<&Tensor>,
+        k: usize,
+        source: &str,
+        symbol: &str,
+    ) -> Result<Tensor> {
         let (m, n) = (x.rows, w.rows);
         ensure!(
             x.dtype == DType::Bf16
                 && w.dtype == DType::Bf16
+                && x.layout == Layout::RowMajor
                 && w.cols == x.cols
                 && k <= x.cols
                 && x.cols <= 65536
@@ -211,7 +299,8 @@ impl Engine {
             "pipelined GEMM shape/dtype mismatch"
         );
         let out = self.alloc(m, n, DType::Bf16)?;
-        let mut spec = Specialization::new("krea2_gemm_bf16_fast");
+        let mut spec = Specialization::new(symbol);
+        let prefix = symbol.replacen('_', ".", 1);
         for (key, value) in [
             ("k_size", k),
             ("n_size", n),
@@ -220,16 +309,14 @@ impl Engine {
             ("grid_x", n / 256),
             ("grid_y", m.div_ceil(128)),
         ] {
-            spec.set_config(format!("krea2.gemm_bf16_fast.{key}"), value.to_string());
+            spec.set_config(format!("{prefix}.{key}"), value.to_string());
         }
         let mut constants = Constants::new();
         constants.push(m as u32)?;
-        self.emit_special(source, spec, constants, &[m as u64], &[x, w], &out)?;
-        if let Some(b) = bias {
-            self.binary(&out, &b.reshape(1, n), "addf")
-        } else {
-            Ok(out)
-        }
+        let mut inputs = vec![x, w];
+        inputs.extend(residual);
+        self.emit_special(source, spec, constants, &[m as u64], &inputs, &out)?;
+        Ok(out)
     }
     pub fn project(&mut self, x: &Tensor, name: &str, bias: bool) -> Result<Tensor> {
         if let Some(weight) = self
@@ -455,6 +542,82 @@ mod tests {
             assert_eq!(actual, engine.read_f32(&old)?, "{m}x{k}x{n}");
             engine.run(&mut graph)?;
             assert_eq!(actual, engine.read_f32(&new)?, "replay {m}x{k}x{n}");
+            engine.reset_plan()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151; tiled weights must reproduce the pipelined kernel bit for bit"]
+    fn tiled_gemm_parity() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
+        for (m, k, n) in [
+            (1, 64, 256),
+            (5, 128, 512),
+            (127, 128, 512),
+            (128, 192, 256),
+            (129, 256, 768),
+            (257, 320, 512),
+            (235, 5120, 1024),
+            (158, 6144, 5120),
+            (620, 5120, 6144),
+            (1024, 1024, 1024),
+        ] {
+            let values = |len, factor| {
+                (0..len)
+                    .map(|i| half::bf16::from_f32(((i * factor % 251) as f32 - 125.) / 128.))
+                    .collect::<Vec<_>>()
+            };
+            let x = engine
+                .input(
+                    m + 1,
+                    k,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values((m + 1) * k, 17)),
+                )?
+                .slice_rows(1, m);
+            let dense = values(n * k, 31);
+            let w = engine.input(n, k, DType::Bf16, bytemuck::cast_slice(&dense))?;
+            let mut tiled = engine.input(
+                n,
+                k,
+                DType::Bf16,
+                &crate::checkpoint::tile_rows(bytemuck::cast_slice(&dense), n, k),
+            )?;
+            tiled.layout = Layout::Tiled;
+            let bias = engine.input(1, n, DType::Bf16, bytemuck::cast_slice(&values(n, 7)))?;
+            let expected = engine.linear_pipelined(&x, &w, Some(&bias))?;
+            let actual = engine.linear(&x, &tiled, Some(&bias))?;
+            let residual = engine
+                .input(
+                    m + 1,
+                    n,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values((m + 1) * n, 13)),
+                )?
+                .slice_rows(1, m);
+            let plain = engine.linear_pipelined(&x, &w, None)?;
+            let expected_residual = engine.binary(&residual, &plain, "addf")?;
+            let fused = engine.linear_tiled_residual(&x, &tiled, &residual)?;
+            let mut graph = engine.finish()?;
+            engine.run(&mut graph)?;
+            let got = engine.read_f32(&actual)?;
+            assert!(got.iter().all(|v| v.is_finite()), "{m}x{k}x{n}");
+            assert_eq!(got, engine.read_f32(&expected)?, "{m}x{k}x{n}");
+            let got_fused = engine.read_f32(&fused)?;
+            assert_eq!(
+                got_fused,
+                engine.read_f32(&expected_residual)?,
+                "residual {m}x{k}x{n}"
+            );
+            engine.run(&mut graph)?;
+            assert_eq!(got, engine.read_f32(&actual)?, "replay {m}x{k}x{n}");
+            assert_eq!(
+                got_fused,
+                engine.read_f32(&fused)?,
+                "residual replay {m}x{k}x{n}"
+            );
             engine.reset_plan()?;
         }
         Ok(())
