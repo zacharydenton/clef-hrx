@@ -62,13 +62,14 @@ the trained decision head retain their existing arithmetic. Packed weights are
 prepared from the same pinned checkpoint, with no additional model download.
 
 Full JevBench measurements were 625 tok/s and 199/231 for MLP-only INT4,
-and 978 tok/s and 194/231 for broader INT4 with scratch reuse, vectorized DeltaNet,
-SwiGLU fused with register-based packing, and adaptive MLP GEMM tiles,
-versus 518 tok/s and 202/231 in BF16. Both modes now use pipelined K/V projections
+and 981–993 tok/s and 194/231 for broader INT4 with scratch reuse, vectorized DeltaNet,
+SwiGLU and attention gating fused with register-based packing, and adaptive GEMM tiles,
+versus 520 tok/s and 202/231 in BF16. Both modes now use pipelined K/V projections
 in the qualified row range.
-The [latest qualification](evaluation.md#pipelined-narrow-bf16-projections)
-preserves all outputs of the prior INT4 run and uses 14.28 GiB peak engine
-allocation. The MLP-only figure is from an earlier build.
+The [latest qualification](evaluation.md#attention-gate-packing-and-bounded-tile-changes)
+preserves all outputs of the prior INT4 run and uses 14.08 GiB peak engine
+allocation. The INT4 range includes the first full run and an unchanged-binary
+repeat. The MLP-only figure is from an earlier build.
 The modes are explicit accuracy/speed choices, not replacements for the default.
 The ordinary CLI exposes the same tested packing and matrix kernels; retain the
 exact binary, flags and results when comparing subsequent builds.

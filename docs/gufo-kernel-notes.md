@@ -174,6 +174,43 @@ kernel preserved exact outputs in six cases and reduced registers from 256 to
 1.0 (`int4-wide-k-rolled-paired`). It was rejected; the selected kernel retains
 full inner-loop unrolling.
 
+Moving the original M256/N128/K128 next-stage loads after its WMMAs, with a
+scheduling fence, reduced registers from 200 to 176. All 48 varied-scale smoke
+cases matched bits, but all six paired up/gate cases at 235, 1,024 and 4,032 rows
+slowed down: 0.876–0.953× (`int4-prefetch-tail-up-paired`). A second schedule
+prefetched one A and one W packet before a fence, as the BF16 pipeline does.
+It also passed 48 exact cases, used 202 registers, and measured only
+0.995–1.005× (`int4-prefetch-fence-up-paired`), including short-input regressions.
+Both used 30 KiB LDS without spills; neither was selected.
+
+An M128/N256 tile kept 256 threads, 16 accumulator fragments per wave and 30 KiB
+LDS, doubling row grouping to preserve the original physical row span. It passed
+48 varied-scale cases and used 198–216 registers without spills. Six paired
+up/gate cases measured about 1.00–1.01× at 235/4,032 rows and 1.17× at 620 rows
+(`int4-m128-n256-group2-up-paired`). The existing selected M128/N128 tile already
+provides that 620-row gain. The new tile remains unselected.
+
+The original M128/N128 tile was also tested on attention output, Q/gate,
+DeltaNet QKV and Z projections. The quick sweep had mixed results outside the
+padding bands (`int4-m128-other-projections-paired`). All 48 boundary pairs at
+257, 384, 513, 640, 769 and 896 rows matched bits and improved 1.04–1.37×, with
+every 99% lower bound above 1.0 (`int4-m128-other-boundaries-paired`). This supports
+extending the same 12.5% padding-reduction rule to those shapes in these bands,
+which the native INT4 dispatch now does.
+
+Expanding vectorized DeltaNet from eight to sixteen value channels per wave
+preserved exact outputs at eight lengths. It used 115 registers versus 69,
+without LDS or spills. Paired speedups were 1.058/1.057/1.082/1.085/1.025/1.051×
+at 128/158/235/260/620/1,024 tokens, with every 99% lower bound above 1.0. At
+2,048/4,032 tokens it regressed to 0.934/0.897× (`delta-vector16-paired`), so it
+is selected only within 128–1,024. The GPU fixture additionally preserves
+bits with distinct gates, sliced inputs, varying decay/bias, replay, and the
+1,023/1,024/1,025 selection boundaries.
+
+Combined with fused attention-gate packing, these changes preserved every full
+JevBench output array in both modes: INT4 scored 194/231 at 980.58 tok/s and
+BF16 scored 202/231 at 519.94 tok/s. See [qualification and reproduction](evaluation.md#attention-gate-packing-and-bounded-tile-changes).
+
 ## Hosted comparison
 
 [Cloudflare's October 9 post](https://blog.cloudflare.com/clef-faster-cheaper-multimodal/)

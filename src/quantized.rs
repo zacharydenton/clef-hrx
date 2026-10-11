@@ -220,6 +220,34 @@ impl Engine {
         }
     }
 
+    pub(crate) fn project_attention_gate(
+        &mut self,
+        attention: &Tensor,
+        q_gate: &Tensor,
+        name: &str,
+    ) -> Result<Tensor> {
+        let weight = self
+            .quantized
+            .weights
+            .get(&format!("{name}.weight"))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing quantized attention output weight"))?;
+        ensure!(
+            attention.cols == weight.cols,
+            "attention projection width mismatch"
+        );
+        let (codes, scales) = prepare_attention_gate_with_source(
+            self,
+            attention,
+            q_gate,
+            weight.bits,
+            weight.stride,
+            include_str!("../kernels/prepare_integer_register.loom"),
+        )?;
+        self.quantized.clear_activation();
+        self.project_prepared(attention.rows, &weight, &codes, &scales)
+    }
+
     fn project_prepared(
         &mut self,
         rows: usize,
@@ -240,7 +268,12 @@ impl Engine {
         let mut constants = Constants::new();
         constants.push(rows as u32)?;
         let mlp = matches!((w.cols, w.rows), (5120, 17408) | (17408, 5120));
-        let source = if w.bits == 4 && mlp {
+        let other_m128 = (257..=896).contains(&rows)
+            && matches!(
+                (w.cols, w.rows),
+                (6144, 5120) | (5120, 10240) | (5120, 6144) | (5120, 12288)
+            );
+        let source = if w.bits == 4 && (mlp || other_m128) {
             let padded128 = rows.div_ceil(128) * 128;
             let padded256 = rows.div_ceil(256) * 256;
             // The smaller tile wins when it removes at least 12.5% of padded
@@ -305,7 +338,33 @@ pub(crate) fn prepare_with_inputs(
     stride: usize,
     source: &str,
 ) -> Result<(Tensor, Tensor)> {
+    prepare_inputs(e, inputs, bits, stride, source, false)
+}
+
+pub(crate) fn prepare_attention_gate_with_source(
+    e: &mut Engine,
+    attention: &Tensor,
+    q_gate: &Tensor,
+    bits: usize,
+    stride: usize,
+    source: &str,
+) -> Result<(Tensor, Tensor)> {
+    prepare_inputs(e, &[attention, q_gate], bits, stride, source, true)
+}
+
+fn prepare_inputs(
+    e: &mut Engine,
+    inputs: &[&Tensor],
+    bits: usize,
+    stride: usize,
+    source: &str,
+    attention_gate: bool,
+) -> Result<(Tensor, Tensor)> {
     ensure!((1..=2).contains(&inputs.len()), "packing input count");
+    ensure!(
+        !attention_gate || inputs.len() == 2,
+        "attention packing input count"
+    );
     let x = inputs[0];
     ensure!(
         [4, 8].contains(&bits)
@@ -318,9 +377,9 @@ pub(crate) fn prepare_with_inputs(
         "unsupported rotated integer operand"
     );
     ensure!(
-        inputs
-            .iter()
-            .all(|t| t.rows == x.rows && t.cols == x.cols && t.dtype == x.dtype),
+        inputs.iter().enumerate().all(|(i, t)| t.rows == x.rows
+            && t.cols == x.cols * if attention_gate && i == 1 { 2 } else { 1 }
+            && t.dtype == x.dtype),
         "packing input shape/dtype mismatch"
     );
     let words = stride / (32 / bits);
@@ -332,7 +391,9 @@ pub(crate) fn prepare_with_inputs(
     scales.offset += x.rows * words * 4;
     scales.cols = x.rows;
     scales.dtype = DType::F32;
-    let symbol = if inputs.len() == 2 {
+    let symbol = if attention_gate {
+        "h3_prepare_attention_gate"
+    } else if inputs.len() == 2 {
         "h3_prepare_swiglu"
     } else {
         "h3_prepare_plain_tiled"
@@ -740,6 +801,108 @@ mod tests {
                     assert!(
                         actual == &results[0],
                         "bits={bits}, rows={rows}: fused packing or replay differs"
+                    );
+                }
+                e.reset_plan()?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151; checks fused attention packing, slices, exceptional values and replay"]
+    fn fused_attention_gate_packing_matches_reference() -> Result<()> {
+        let context = ModelContext::new(Default::default())?;
+        let mut e = Engine::new(&context)?;
+        let width = 6144;
+        for bits in [4, 8] {
+            for rows in [1, 128, 158, 620] {
+                let attention: Vec<_> = (0..(rows + 2) * width)
+                    .map(|i| {
+                        half::bf16::from_f32(match (i / width) % 7 {
+                            0 => 0.0,
+                            3 => half::bf16::MAX.to_f32(),
+                            _ => ((i * 29 % 997) as f32 - 498.0) / 32.0,
+                        })
+                    })
+                    .collect();
+                let q_gate: Vec<_> = (0..(rows + 3) * width * 2)
+                    .map(|i| {
+                        let col = i % (width * 2);
+                        // Poison every Q half: only the second half of each head is a gate.
+                        half::bf16::from_f32(if col % 512 < 256 {
+                            f32::NAN
+                        } else {
+                            match (i / (width * 2)) % 7 {
+                                0 => 0.0,
+                                1 if col == 771 => f32::NAN,
+                                2 if col == 1283 => f32::INFINITY,
+                                3 => half::bf16::MAX.to_f32(),
+                                4 => f32::from_bits(0x0001_0000),
+                                5 => {
+                                    if col % 2 == 0 {
+                                        -80.0
+                                    } else {
+                                        80.0
+                                    }
+                                }
+                                _ => ((i * 17 % 1031) as f32 - 515.0) / 16.0,
+                            }
+                        })
+                    })
+                    .collect();
+                let attention = e
+                    .input(
+                        rows + 2,
+                        width,
+                        DType::Bf16,
+                        bytemuck::cast_slice(&attention),
+                    )?
+                    .slice_rows(1, rows);
+                let q_gate = e
+                    .input(
+                        rows + 3,
+                        width * 2,
+                        DType::Bf16,
+                        bytemuck::cast_slice(&q_gate),
+                    )?
+                    .slice_rows(2, rows);
+                let stride = width + 512 / bits;
+                let mut results = Vec::new();
+                for fused in [false, true] {
+                    let (codes, scales) = if fused {
+                        prepare_attention_gate_with_source(
+                            &mut e,
+                            &attention,
+                            &q_gate,
+                            bits,
+                            stride,
+                            include_str!("../kernels/prepare_integer_register.loom"),
+                        )?
+                    } else {
+                        let gate = e.columns(&q_gate.reshape(rows * 24, 512), 256, 256)?;
+                        let sigmoid = e.unary(&gate.reshape(rows, width), "sigmoid")?;
+                        let activated = e.binary(&attention, &sigmoid, "mulf")?;
+                        prepare(&mut e, &activated, bits, stride)?
+                    };
+                    let mut graph = e.finish()?;
+                    for _ in 0..2 {
+                        e.run(&mut graph)?;
+                        let raw: Vec<_> =
+                            e.read_f32(&codes)?.into_iter().map(f32::to_bits).collect();
+                        let logical: Vec<_> = raw
+                            .chunks_exact(codes.cols)
+                            .flat_map(|row| row[..width / (32 / bits)].iter().copied())
+                            .collect();
+                        let scales: Vec<_> =
+                            e.read_f32(&scales)?.into_iter().map(f32::to_bits).collect();
+                        results.push((logical, scales));
+                    }
+                }
+                for actual in &results[1..] {
+                    assert!(
+                        actual == &results[0],
+                        "bits={bits}, rows={rows}: attention packing or replay differs"
                     );
                 }
                 e.reset_plan()?;

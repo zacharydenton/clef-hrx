@@ -8,6 +8,8 @@ use hrx::{Constants, loom::Specialization};
 pub struct PackingBenchmark {
     graphs: [GraphExec; 2],
     outputs: [(Tensor, Tensor); 2],
+    // A replay of either graph must not overwrite the other graph's outputs.
+    _reference_intermediates: Vec<Tensor>,
     engine: Engine,
     logical_words: usize,
     _context: ModelContext,
@@ -39,30 +41,43 @@ impl PackingBenchmark {
             .map(std::fs::read_to_string)
             .transpose()?;
         let fused = std::env::var("CLEF_BENCH_PACKING_SWIGLU").as_deref() == Ok("1");
+        let attention_gate =
+            std::env::var("CLEF_BENCH_PACKING_ATTENTION_GATE").as_deref() == Ok("1");
+        ensure!(!(fused && attention_gate), "choose one packing activation");
+        ensure!(!attention_gate || width == 6144, "attention packing width");
         ensure!(
-            !fused || candidate_source.is_some(),
+            !(fused || attention_gate) || candidate_source.is_some(),
             "fused packing requires a candidate source"
         );
-        let up = if fused {
-            let values: Vec<_> = (0..rows * width)
+        let up = if fused || attention_gate {
+            let up_width = width * if attention_gate { 2 } else { 1 };
+            let values: Vec<_> = (0..rows * up_width)
                 .map(|i| half::bf16::from_f32(((i * 29 % 997) as f32 - 498.) / 32.))
                 .collect();
-            Some(engine.input(rows, width, DType::Bf16, bytemuck::cast_slice(&values))?)
+            Some(engine.input(rows, up_width, DType::Bf16, bytemuck::cast_slice(&values))?)
         } else {
             None
         };
-        let activated = if let Some(up) = &up {
+        let mut reference_intermediates = Vec::new();
+        let activated = if attention_gate {
+            let gate = engine.columns(&up.as_ref().unwrap().reshape(rows * 24, 512), 256, 256)?;
+            reference_intermediates.push(gate.clone());
+            let sigmoid = engine.unary(&gate.reshape(rows, width), "sigmoid")?;
+            reference_intermediates.push(sigmoid.clone());
+            engine.binary(&input, &sigmoid, "mulf")?
+        } else if let Some(up) = &up {
             engine.swiglu(&input, up)?
         } else {
             input.clone()
         };
+        reference_intermediates.push(activated.clone());
         // Keep the pre-register production baseline reproducible after selection.
         let reference = crate::quantized::prepare_with_source(
             &mut engine,
             &activated,
             bits,
             stride,
-            if fused {
+            if fused || attention_gate {
                 include_str!("../../kernels/prepare_integer_register.loom")
             } else if candidate_source.is_some() && width <= 6144 {
                 include_str!("../../kernels/prepare_integer_single.loom")
@@ -76,19 +91,31 @@ impl PackingBenchmark {
         } else {
             vec![&input]
         };
-        let candidate = crate::quantized::prepare_with_inputs(
-            &mut engine,
-            &inputs,
-            bits,
-            stride,
-            candidate_source
-                .as_deref()
-                .unwrap_or(include_str!("../../kernels/prepare_integer_single.loom")),
-        )?;
+        let candidate = if attention_gate {
+            crate::quantized::prepare_attention_gate_with_source(
+                &mut engine,
+                &input,
+                up.as_ref().unwrap(),
+                bits,
+                stride,
+                candidate_source.as_deref().unwrap(),
+            )?
+        } else {
+            crate::quantized::prepare_with_inputs(
+                &mut engine,
+                &inputs,
+                bits,
+                stride,
+                candidate_source
+                    .as_deref()
+                    .unwrap_or(include_str!("../../kernels/prepare_integer_single.loom")),
+            )?
+        };
         let candidate_graph = engine.finish()?;
         let mut benchmark = Self {
             graphs: [reference_graph, candidate_graph],
             outputs: [reference, candidate],
+            _reference_intermediates: reference_intermediates,
             engine,
             logical_words: width / (32 / bits),
             _context: context,

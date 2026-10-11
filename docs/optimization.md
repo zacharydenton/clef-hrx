@@ -15,12 +15,11 @@ reference tests; do not loosen their tolerances to qualify a candidate. The
 speed/accuracy modes, gate kernel optimizations against the qualified baseline
 of the same precision mode and report the difference from BF16 separately.
 
-The latest qualified full runs measure **977.68 tok/s INT4** and **518.25 tok/s
-BF16**, with every output unchanged. See [pipelined K/V projections and reproduction
-instructions](evaluation.md#pipelined-narrow-bf16-projections). These separate runs
-do not establish an overall speedup: the prior measurements were 976.45 and
-524.73 tok/s respectively. The 1,000 tok/s
-target remains unmet.
+The latest qualified full runs measure **980.58 tok/s INT4** initially and
+**992.76 tok/s** in an unchanged-binary repeat, plus **519.94 tok/s BF16**, with
+every output unchanged. See [qualification and reproduction](evaluation.md#attention-gate-packing-and-bounded-tile-changes).
+The repeat reduced preparation cost while GPU time stayed roughly flat; both
+results are retained. The **1,000 tok/s target remains unmet**.
 
 ## Criterion coverage
 
@@ -31,6 +30,7 @@ target remains unmet.
 | `kernels` / `paired_delta_prefill/persistent` | Alternating-order chunked/register comparisons at 235, 620 and 1,024 tokens; raw paired timing totals | Completed graph replay, with both variants resident |
 | `kernels` / `paired_delta_prefill/prepared` and `/candidate` | Prepared or external DeltaNet kernels at 158, 235, 620, 1,024 and 2,048 tokens; external candidates additionally cover 128 and 260, plus 4,032 without preparation; alternating order, maximum error and bitwise equality | Completed graph replay, including preparation when selected |
 | `workload` / `workload_attention` | Causal 24-query/4-KV-head attention, 256 dimensions; 16 through 4,032 tokens | Completed graph, including GPU value transpose/padding and the selected attention kernel |
+| `workload` / `paired_attention` | Current native attention versus `CLEF_BENCH_ATTENTION_SOURCE`, causal 24-query/4-KV-head attention at selected lengths ≥1,024 | Alternating completed graphs including value packing; paired 99% intervals, numerical differences and exact per-variant replay checks |
 | `workload` / `paired_swiglu` | MLP width 17,408 at all eleven workload lengths; separate SiLU/multiply versus fused activation, alternating execution order | Completed graph; raw paired batches and 99% bootstrap speedup intervals |
 | `workload` / `paired_packing` | INT4 packing at widths 5,120, 6,144 and 8,192; an external candidate also adds 17,408; exact logical codes and scales | Completed graph with alternating order and paired confidence intervals; default compares two-pass/one-pass LDS, external candidates use the pre-register production baseline |
 | `workload` / `paired_integer_gemm` | Original packed GEMM versus `CLEF_BENCH_INTEGER_SOURCE`, eight projection families including K/V and joint head, repeated and rotating weights, all workload lengths | Alternating-order completed graphs; prepacked identical operands; exact output bits checked before and after timing |
@@ -244,6 +244,20 @@ CLEF_BENCH_PACKING_SWIGLU=1 \
   python3 scripts/bench_workload.py swiglu-packing-repro \
   --filter 'paired_packing/pair/.*x17408'
 ```
+
+`CLEF_BENCH_PACKING_ATTENTION_GATE=1` instead compares gate-column extraction,
+sigmoid, multiplication and register packing with their fused implementation.
+It is mutually exclusive with `CLEF_BENCH_PACKING_SWIGLU`; filter packing cases
+to width 6,144. Q/gate input has twice that width, interleaved as adjacent
+256-element Q and gate halves per head. Both BF16 rounding steps are preserved.
+The harness retains reference intermediates across both resident graphs so
+either replay order leaves the outputs intact.
+
+`attention-gate-packing-paired-v2` preserved packed codes and scale bits at all
+eleven lengths. Speedups from 128 through 4,032 were 1.97–3.68×, with every 99%
+lower bound above 1.0. One row regressed to 0.968×; the candidate uses fusion
+from 128 rows. GPU checks cover INT4/INT8, slices, exceptional values, replay,
+and NaNs in every unused Q half to catch incorrect gate indexing.
 
 `CLEF_BENCH_PAD_GEMM=1` tests the h3-hrx approach of adding 64 elements to operand
 row strides when K is a multiple of 1,024. This preserves logical matrix values
@@ -523,3 +537,70 @@ padded replay at 235 tokens reduced up/gate latency by 32.4% and down by 55.4%,
 but at 620 tokens increased them by 13.2% and 8.9%. At 4,032 tokens both changes
 were inconclusive. These synthetic dispatch results do not qualify model
 quantization; neither integer precision is enabled in inference.
+
+## Compiled-kernel eviction experiment
+
+Replacing the 512-entry compiled-kernel cache's full flush with least-recently
+used eviction did not improve complete INT4 JevBench: **982.11 tok/s**, versus
+**992.76 tok/s** for the preceding unchanged-binary warm control. All 231 output
+arrays and token counts matched exactly (194 correct; all strictly valid).
+Mean preparation was 29.57 versus 29.25 ms; GPU time was 704.34 versus 696.73 ms.
+This sequential comparison does not isolate the GPU-time difference, but it
+provides no evidence of the intended preparation gain. The change was rejected.
+
+The candidate binary is `artifacts/throughput-1000/clef-kernel-lru`, SHA-256
+`5c7ae7c854ddb0297f0d10bfc2dbeea0f094f9c808760dfb6b248d7dc43ac6c7`, with a hashed
+106-file source snapshot and the rejected patch alongside it. Full INT4 records
+are in `tests/results/jevbench-20261011-int4-kernel-lru`. The subsequent BF16 run
+was deliberately stopped after rejecting the candidate; its `interrupted.json`
+records the stop, and its partial output is not a qualification result.
+
+## Allocation lookup experiment
+
+A capacity/slot index replaced full-buffer scans while preserving the existing
+best-fit rule, tie ordering, host-input isolation and immutable weight lifetime.
+Full INT4 JevBench retained every output and every per-request engine allocation
+byte count (194/231 correct, all strictly valid), but measured **991.36 tok/s**,
+versus 992.76 for the warm control. Preparation fell from 29.25 to 27.98 ms;
+GPU time rose from 696.73 to 699.19 ms. The full run did not establish an
+end-to-end gain, so the index was not selected. CPU policy checks, GPU scratch
+reuse and weight lifetime tests, and Clippy passed.
+
+Records: `tests/results/jevbench-20261011-int4-allocation-index`; normal binary
+`artifacts/throughput-1000/clef-allocation-index`, SHA-256
+`b9077f06f0dddb05722450fca81fd1116faa6535059db09a0ea023a1d8f89f62`, with its
+107-file source snapshot. The run processed 166,394 resident tokens in 167.845
+seconds, with 0.271/2.558-second median/p95 latency and 14.078 GiB peak engine
+allocation. The 1,000 tok/s gate failed.
+
+## Single-component attention probability experiment
+
+A single BF16 probability component removes the second probability/value WMMA
+from tiled attention. The new `paired_attention` harness compares it with the
+current native graph using alternating order, including value packing in both
+variants. Each graph must replay its own output exactly; maximum numerical
+change is recorded separately from timing and is not an accuracy qualification.
+Use `CLEF_BENCH_LENGTHS` to include ragged lengths, since aligned cases alone
+missed large regressions here.
+
+`attention-single-probability-paired` measured speedups of 0.992/1.044/1.097/
+1.004/1.115/1.023× at 1,024/2,048/2,560/3,072/3,584/4,032 tokens. The boundary
+sweep (`attention-single-probability-boundaries`) exposed 0.916× at 2,049,
+0.768× at 3,073 and 0.977× at 3,583, all with 99% upper bounds below 1.0.
+Maximum output change was 0.0078125. GPU tests passed the unchanged 0.008 bound,
+FP64 spot checks, tails and replay, but inconsistent performance rejected the
+candidate before full JevBench evaluation. Native attention precision is unchanged.
+
+The rejected native trial, including its GPU test, is archived as
+`artifacts/throughput-1000/clef-attention-single-probability-rejected`, SHA-256
+`b3cea3cc245022d819e6e2185819994b6c1ad502712bbea9fbe546ff4e137e87`, with a
+108-file source snapshot. The standalone benchmark candidate remains
+`artifacts/throughput-1000/attention-probability-bf16.loom`. Reproduce its
+boundary timing separately from any full-model run:
+
+```sh
+CLEF_BENCH_ATTENTION_SOURCE=artifacts/throughput-1000/attention-probability-bf16.loom \
+  CLEF_BENCH_LENGTHS=2047,2048,2049,2559,2561,3071,3073,3583,3585,4031 \
+  python3 scripts/bench_workload.py attention-probability-boundary-repro \
+  --filter paired_attention
+```

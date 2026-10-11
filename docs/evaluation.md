@@ -711,3 +711,87 @@ python3 scripts/compare_jevbench.py \
 ```
 
 The INT4 comparison returns nonzero below 1,000 tok/s even when accuracy passes.
+
+## Attention-gate packing and bounded tile changes
+
+Three operator changes qualified together: sixteen DeltaNet value channels per
+wave at 128–1,024 tokens; M128 INT4 tiles for attention output, Q/gate, DeltaNet
+QKV and Z in the existing 257–384, 513–640 and 769–896 padding bands; and fused
+attention gate extraction, sigmoid, multiplication and integer packing from
+128 rows. Both BF16 rounding boundaries in gating remain explicit. BF16 uses
+only the DeltaNet change; integer projections remain opt-in.
+
+Full sequential JevBench results, excluding only the first request including
+model loading:
+
+| Mode | Correct / strictly valid | Resident tokens / seconds | Input tok/s | Median / p95 seconds | Peak engine GiB |
+| --- | --- | --- | ---: | --- | ---: |
+| INT4 | 194/231 / 231 | 166,394 / 169.689 | 980.58 | 0.289 / 2.528 | 14.078 |
+| BF16 | 202/231 / 231 | 166,394 / 320.028 | 519.94 | 0.660 / 4.495 | 47.773 |
+
+Every question output array and input token count matches the corresponding
+pipelined K/V baseline exactly. INT4 mean GPU time fell from 706.10 to 695.16 ms,
+while preparation rose from 31.24 to 39.99 ms. BF16 mean GPU time was 1,358.08 ms
+and preparation 30.62 ms. Compilation remains inside the timing boundary.
+These separate full runs do not establish a paired model-level speedup, and
+INT4 still fails the 1,000 tok/s gate.
+
+Records: `tests/results/jevbench-20261011-{int4,bf16}-attention-gate-packing`,
+including `comparison.json` and `output-equality.json`. Telemetry:
+`artifacts/throughput-1000/attention-gate-packing-{int4,bf16}-eval-telemetry.jsonl`;
+the 253/334 samples report only each native evaluation process in KFD when a
+client is present. Normal binary `artifacts/throughput-1000/clef-attention-gate-packing`
+has SHA-256 `e467185c788e341786c767ca00d7441f7304bcda65d90696e56ae798d9978ebb`.
+Its `-source.json` hashes all 106 files in `attention-gate-packing-source`.
+
+An unchanged-binary repeat, `tests/results/jevbench-20261011-int4-attention-gate-packing-warm`,
+measured **992.76 tok/s** (166,394 tokens / 167.607 seconds), again preserving all
+231 output arrays exactly. Mean preparation fell to 29.25 ms while GPU time
+was 696.73 ms. Median/p95 latency was 0.274/2.528 seconds. This retained repeat
+shows why the first run alone cannot isolate preparation costs from cache
+warmup; it still misses 1,000 tok/s. Its telemetry has 181 samples and only the
+native evaluation KFD client. Both measurements use the same binary SHA above.
+
+Paired operator evidence is in `delta-vector16-paired`,
+`int4-m128-other-boundaries-paired` and `attention-gate-packing-paired-v2` under
+`benches/results`. All selected measured cases match bits and have 99% speedup
+lower bounds above 1.0. Longer DeltaNet shapes and short attention gating retain
+their earlier implementations where comparisons regressed. GPU tests cover
+selection boundaries, sliced operands, distinct recurrence gates, INT4/INT8
+packing, exceptional values and deterministic replay. Unused Q halves are
+poisoned with NaNs in the gate-packing fixture. CPU tests and Clippy passed.
+
+Reproduce sequentially with fresh names (use the archived source for the exact
+implementation measured above):
+
+```sh
+CLEF_BENCH_DELTA_REFERENCE_SOURCE=kernels/delta_persistent_vector.loom \
+  CLEF_BENCH_DELTA_SOURCE=kernels/delta_persistent_vector16.loom \
+  CLEF_BENCH_DELTA_VALUES=16 CLEF_BENCH_PAIRED_SECONDS=3 \
+  python3 scripts/bench_workload.py delta-vector16-repro --suite kernels \
+  --filter paired_delta_prefill/candidate
+CLEF_BENCH_PACKING_ATTENTION_GATE=1 \
+  CLEF_BENCH_PACKING_SOURCE=kernels/prepare_integer_register.loom \
+  python3 scripts/bench_workload.py attention-gate-repro \
+  --filter 'paired_packing/pair/.*x6144'
+CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  CLEF_BENCH_INTEGER_ROW_SCALES=1 CLEF_BENCH_LENGTHS=257,384,513,640,769,896 \
+  CLEF_BENCH_INTEGER_SOURCE=kernels/gemm_integer_m128.loom \
+  python3 scripts/bench_workload.py attention-m128-repro \
+  --filter 'paired_integer_gemm/(attention_output|delta_qkv|delta_z|attention_q_gate)'
+cargo test --locked --release --lib packing_ -- --ignored
+cargo test --locked --release --lib delta_variants_preserve_state_arithmetic -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-int4-attention-gate-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-kv-pipelined \
+  tests/results/jevbench-int4-attention-gate-repro --min-tps 1000
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision bf16 --output tests/results/jevbench-bf16-attention-gate-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-bf16-kv-pipelined \
+  tests/results/jevbench-bf16-attention-gate-repro
+```
+
+The INT4 comparison returns nonzero below 1,000 tok/s even when accuracy passes.

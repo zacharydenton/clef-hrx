@@ -302,20 +302,34 @@ impl Engine {
         let out = self.alloc(n, 6144, DType::Bf16)?;
         // Qualified vector scheduling range; preserve the scalar implementation
         // for shorter inputs and long-context workloads outside this range.
-        let source = if (128..=4032).contains(&n) {
-            concat!(
-                include_str!("../kernels/common.loom"),
-                include_str!("../kernels/delta_persistent_vector.loom")
+        let (source, values_per_wave) = if (128..=1024).contains(&n) {
+            (
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/delta_persistent_vector16.loom")
+                ),
+                16,
+            )
+        } else if (1025..=4032).contains(&n) {
+            (
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/delta_persistent_vector.loom")
+                ),
+                8,
             )
         } else {
-            concat!(
-                include_str!("../kernels/common.loom"),
-                include_str!("../kernels/delta_persistent.loom")
+            (
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/delta_persistent.loom")
+                ),
+                8,
             )
         };
         self.dispatch(
             source,
-            48 * 16 * 32,
+            48 * 128 / values_per_wave * 32,
             &[("qkv", qkv), ("a", a), ("b", b), ("al", alog), ("dt", dt)],
             &out,
             &[("n", n.to_string()), ("output_len", out.len().to_string())],
@@ -457,7 +471,16 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
                 .project(&norm, &format!("{p}.q_proj"), false)?
                 .reshape(n * 24, 512);
             let q = e.columns(&qg, 0, 256)?;
-            let gate = e.columns(&qg, 256, 256)?.reshape(n, 6144);
+            let output_projection = format!("{p}.o_proj");
+            let fuse_gate = n >= 128
+                && e.quantized
+                    .weights
+                    .contains_key(&format!("{output_projection}.weight"));
+            let gate = if fuse_gate {
+                None
+            } else {
+                Some(e.columns(&qg, 256, 256)?.reshape(n, 6144))
+            };
             let q = e
                 .named_norm(&q, &format!("{p}.q_norm"), false, 1e-6)?
                 .reshape(n, 6144);
@@ -471,9 +494,13 @@ pub(crate) fn forward(e: &mut Engine, mut x: Tensor, positions: &[[u32; 3]]) -> 
             let k = e.rope(&k, 4, 64, &cs)?;
             let v = e.project(&norm, &format!("{p}.v_proj"), false)?;
             let a = e.attention(&q, &k, &v, 24, 4, true)?;
-            let gate = e.unary(&gate, "sigmoid")?;
-            let a = e.binary(&a, &gate, "mulf")?;
-            e.project(&a, &format!("{p}.o_proj"), false)?
+            if let Some(gate) = gate {
+                let gate = e.unary(&gate, "sigmoid")?;
+                let a = e.binary(&a, &gate, "mulf")?;
+                e.project(&a, &output_projection, false)?
+            } else {
+                e.project_attention_gate(&a, &qg.reshape(n, 12288), &output_projection)?
+            }
         } else {
             let p = format!("{p}.linear_attn");
             let qkv = e.project(&norm, &format!("{p}.in_proj_qkv"), false)?;
@@ -546,7 +573,7 @@ mod tests {
     #[ignore = "requires gfx1151; checks prepared recurrence boundaries, slices and replay"]
     fn delta_variants_preserve_state_arithmetic() -> Result<()> {
         let context = hrx::inference::ModelContext::new(Default::default())?;
-        for n in [127, 128, 129, 620, 2048, 4032, 4033] {
+        for n in [127, 128, 129, 620, 1023, 1024, 1025, 2048, 4032, 4033] {
             let mut e = Engine::new(&context)?;
             let values = |len, factor, divisor| {
                 (0..len)

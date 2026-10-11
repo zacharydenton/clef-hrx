@@ -6,8 +6,8 @@
 // Keep the pair sums/differences and final add/subtract ordering. Do not replace
 // this transform with an algebraically equivalent butterfly with other rounding.
 // Entirely padded waves participate with zeros, including the row-max reduction.
-template.decl @clef.register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1)
-template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1) {
+template.decl @clef.register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1, %attention_gate: i1)
+template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up: buffer, %q: buffer, %stride: index, %bits: index, %width: index, %fused: i1, %attention_gate: i1) {
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
@@ -45,7 +45,9 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
   %hg = buffer.assume.memory_space<global> %h : buffer
   %qg = buffer.assume.memory_space<global> %q : buffer
   %ug = buffer.assume.memory_space<global> %up : buffer
-  %uv = buffer.view %ug[%off0] : buffer -> view<[%tokens_b]x[%width]xbf16>
+  %double_width = index.mul %width, %c2 : index
+  %up_width = scf.select %attention_gate, %double_width, %width : index
+  %uv = buffer.view %ug[%off0] : buffer -> view<[%tokens_b]x[%up_width]xbf16>
   %fone = scalar.constant 1.0 : f32
   %one8 = vector.splat %fone : vector<8xf32>
   %hv = buffer.view %hg[%off0] : buffer -> view<[%tokens_b]x[%width]xbf16>
@@ -78,8 +80,33 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
       %tile_col = index.assume %tile_col0 [le(%tile_col0, %last_col), mul(%tile_col0, 8)] : index
       %tile_h = vector.load %hv[%row, %tile_col] : view<[%tokens_b]x[%width]xbf16> -> vector<8xbf16>
       %tile_f = vector.extf %tile_h : vector<8xbf16> to vector<8xf32>
-      %activated = scf.if %fused -> (vector<8xf32>) {
-        %up_h = vector.load %uv[%row, %tile_col] : view<[%tokens_b]x[%width]xbf16> -> vector<8xbf16>
+      %activated = scf.if %attention_gate -> (vector<8xf32>) {
+        // Q and gate occupy adjacent 256-element halves of each head.
+        %c256_gate = index.constant 256 : index
+        %c512_gate = index.constant 512 : index
+        %head_gate = index.div %tile_col, %c256_gate : index
+        %within_gate = index.rem %tile_col, %c256_gate : index
+        %head_base_gate = index.mul %head_gate, %c512_gate : index
+        %gate_base = index.add %head_base_gate, %c256_gate : index
+        %gate_col0 = index.add %gate_base, %within_gate : index
+        %gate_last = index.sub %up_width, %c8 : index
+        %gate_col = index.assume %gate_col0 [le(%gate_col0, %gate_last), mul(%gate_col0, 8)] : index
+        %gate_h = vector.load %uv[%row, %gate_col] : view<[%tokens_b]x[%up_width]xbf16> -> vector<8xbf16>
+        %gate_f = vector.extf %gate_h : vector<8xbf16> to vector<8xf32>
+        %attn_neg = vector.negf %gate_f : vector<8xf32>
+        %attn_exp = vector.expf<afn> %attn_neg : vector<8xf32>
+        %attn_den = vector.addf %one8, %attn_exp : vector<8xf32>
+        %attn_sigmoid = vector.divf %one8, %attn_den : vector<8xf32>
+        // Match the original sigmoid and multiply BF16 materializations.
+        %attn_round = vector.fptrunc %attn_sigmoid : vector<8xf32> to vector<8xbf16>
+        %attn_restore = vector.extf %attn_round : vector<8xbf16> to vector<8xf32>
+        %attn_product = vector.mulf %tile_f, %attn_restore : vector<8xf32>
+        %attn_product_round = vector.fptrunc %attn_product : vector<8xf32> to vector<8xbf16>
+        %attn_product_restore = vector.extf %attn_product_round : vector<8xbf16> to vector<8xf32>
+        scf.yield %attn_product_restore : vector<8xf32>
+      } else {
+      %swiglu = scf.if %fused -> (vector<8xf32>) {
+        %up_h = vector.load %uv[%row, %tile_col] : view<[%tokens_b]x[%up_width]xbf16> -> vector<8xbf16>
         %up_f = vector.extf %up_h : vector<8xbf16> to vector<8xf32>
         %gate_neg = vector.negf %tile_f : vector<8xf32>
         %gate_exp = vector.expf<afn> %gate_neg : vector<8xf32>
@@ -94,6 +121,8 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
         scf.yield %product_restore : vector<8xf32>
       } else {
         scf.yield %tile_f : vector<8xf32>
+      }
+        scf.yield %swiglu : vector<8xf32>
       }
       scf.yield %activated : vector<8xf32>
     } else {
@@ -268,7 +297,8 @@ kernel.def target(@pack_target4) export("h3_prepare_plain_tiled_i4") @h3_prepare
   %bits = index.constant 4 : index
   %width = config.get @h3.prepare_plain_tiled_i4.width : index
   %fused = scalar.constant false : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused) : (index, buffer, buffer, buffer, index, index, index, i1)
+  %attention_gate = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
   kernel.return
 }
 amdgpu.target<gfx11-generic> @pack_target8 {subgroup_size = 32}
@@ -284,7 +314,8 @@ kernel.def target(@pack_target8) export("h3_prepare_plain_tiled_i8") @h3_prepare
   %bits = index.constant 8 : index
   %width = config.get @h3.prepare_plain_tiled_i8.width : index
   %fused = scalar.constant false : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused) : (index, buffer, buffer, buffer, index, index, index, i1)
+  %attention_gate = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %h, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
   kernel.return
 }
 
@@ -298,7 +329,8 @@ kernel.def target(@pack_target4) export("h3_prepare_swiglu_i4") @h3_prepare_swig
   %bits = index.constant 4 : index
   %width = config.get @h3.prepare_plain_tiled_i4.width : index
   %fused = scalar.constant true : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused) : (index, buffer, buffer, buffer, index, index, index, i1)
+  %attention_gate = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
   kernel.return
 }
 
@@ -312,6 +344,37 @@ kernel.def target(@pack_target8) export("h3_prepare_swiglu_i8") @h3_prepare_swig
   %bits = index.constant 8 : index
   %width = config.get @h3.prepare_plain_tiled_i8.width : index
   %fused = scalar.constant true : i1
-  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused) : (index, buffer, buffer, buffer, index, index, index, i1)
+  %attention_gate = scalar.constant false : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
+  kernel.return
+}
+
+// Fuse extraction, sigmoid, multiplication and packing for attention output.
+kernel.def target(@pack_target4) export("h3_prepare_attention_gate_i4") @h3_prepare_attention_gate_i4(%tokens: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%tokens, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%tokens: index, %h: buffer, %up: buffer, %q: buffer) {
+  %stride = config.get @h3.prepare_plain_tiled_i4.out_stride : index
+  %bits = index.constant 4 : index
+  %width = config.get @h3.prepare_plain_tiled_i4.width : index
+  %fused = scalar.constant false : i1
+  %attention_gate = scalar.constant true : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
+  kernel.return
+}
+
+// Fuse extraction, sigmoid, multiplication and packing for attention output.
+kernel.def target(@pack_target8) export("h3_prepare_attention_gate_i8") @h3_prepare_attention_gate_i8(%tokens: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%tokens, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%tokens: index, %h: buffer, %up: buffer, %q: buffer) {
+  %stride = config.get @h3.prepare_plain_tiled_i8.out_stride : index
+  %bits = index.constant 8 : index
+  %width = config.get @h3.prepare_plain_tiled_i8.width : index
+  %fused = scalar.constant false : i1
+  %attention_gate = scalar.constant true : i1
+  template.apply<@clef.register_pack>(%tokens, %h, %up, %q, %stride, %bits, %width, %fused, %attention_gate) : (index, buffer, buffer, buffer, index, index, index, i1, i1)
   kernel.return
 }

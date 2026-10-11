@@ -297,6 +297,91 @@ fn attention(c: &mut Criterion) {
     }
     group.finish();
 }
+fn paired_attention(c: &mut Criterion) {
+    let Some(path) = std::env::var_os("CLEF_BENCH_ATTENTION_SOURCE") else {
+        return;
+    };
+    let source = std::fs::read_to_string(path).unwrap();
+    let mut group = c.benchmark_group("paired_attention");
+    configure(&mut group);
+    for tokens in lengths().into_iter().filter(|&n| n >= 1024) {
+        let mut graphs = None;
+        let mut expected = [Vec::new(), Vec::new()];
+        let mut samples = Vec::new();
+        let mut sequence = 0u64;
+        group.throughput(Throughput::Elements(tokens as u64));
+        group.bench_function(BenchmarkId::new("causal_24q_4kv_d256", tokens), |b| {
+            let graphs = graphs.get_or_insert_with(|| {
+                let mut graphs = [
+                    AttentionBenchmark::integrated(tokens).unwrap(),
+                    AttentionBenchmark::new(tokens, Some(&source)).unwrap(),
+                ];
+                for (i, graph) in graphs.iter_mut().enumerate() {
+                    expected[i] = graph.output().unwrap();
+                    assert!(expected[i].iter().all(|x| x.is_finite()));
+                }
+                assert_eq!(expected[0].len(), expected[1].len());
+                graphs
+            });
+            b.iter_custom(|iterations| {
+                let mut times = [Duration::ZERO; 2];
+                for _ in 0..iterations {
+                    for candidate in [sequence.is_multiple_of(2), !sequence.is_multiple_of(2)] {
+                        let started = Instant::now();
+                        graphs[usize::from(candidate)].run().unwrap();
+                        times[usize::from(candidate)] += started.elapsed();
+                    }
+                    sequence += 1;
+                }
+                samples.push(serde_json::json!({
+                    "iterations": iterations,
+                    "reference_ns": times[0].as_nanos() as u64,
+                    "optimized_ns": times[1].as_nanos() as u64,
+                }));
+                times[1]
+            });
+        });
+        if let Some(mut graphs) = graphs {
+            for (i, graph) in graphs.iter_mut().enumerate() {
+                assert_eq!(
+                    graph
+                        .output()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.to_bits())
+                        .collect::<Vec<_>>(),
+                    expected[i].iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                    "attention replay changed output"
+                );
+            }
+            let maximum_error = expected[0]
+                .iter()
+                .zip(&expected[1])
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            let bitwise_identical = expected[0]
+                .iter()
+                .zip(&expected[1])
+                .all(|(a, b)| a.to_bits() == b.to_bits());
+            let root =
+                std::path::PathBuf::from("target/criterion/paired_attention/causal_24q_4kv_d256")
+                    .join(tokens.to_string());
+            std::fs::create_dir_all(&root).unwrap();
+            let measured = if samples.len() >= 20 {
+                &samples[samples.len() - 20..]
+            } else {
+                &[]
+            };
+            std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
+                "tokens": tokens, "maximum_error": maximum_error,
+                "bitwise_identical": bitwise_identical, "sample_size": 20,
+                "samples": samples, "measurement_samples": measured,
+                "note": "Two resident causal attention graphs with identical inputs; includes value packing. Numerical changes are reported, not qualified by timing; full evaluation is required.",
+            })).unwrap()).unwrap();
+        }
+    }
+    group.finish();
+}
 fn swiglu(c: &mut Criterion) {
     let mut group = c.benchmark_group("paired_swiglu");
     configure(&mut group);
@@ -398,6 +483,7 @@ fn packing(c: &mut Criterion) {
                     serde_json::to_vec_pretty(&serde_json::json!({
                         "rows": rows, "width": width, "bits": 4, "bitwise_identical": true,
                         "includes_swiglu": std::env::var("CLEF_BENCH_PACKING_SWIGLU").as_deref() == Ok("1"),
+                        "includes_attention_gate": std::env::var("CLEF_BENCH_PACKING_ATTENTION_GATE").as_deref() == Ok("1"),
                         "sample_size": 20, "samples": samples, "measurement_samples": measured,
                     }))
                     .unwrap(),
@@ -578,6 +664,7 @@ criterion_group!(
     gemm,
     delta,
     attention,
+    paired_attention,
     swiglu,
     packing,
     paired_integer_gemm,
