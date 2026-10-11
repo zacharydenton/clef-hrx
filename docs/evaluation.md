@@ -574,3 +574,70 @@ python3 scripts/compare_jevbench.py \
 ```
 
 The final command returns nonzero below the target even when accuracy passes.
+
+## Adaptive INT4 MLP tiles
+
+INT4 MLP projections now select M128/N128/K256 when its padded row count is at
+least 12.5% smaller than M256's: rows 1–128, 257–384, 513–640 and 769–896.
+Other MLP down projections use M256/N128/K256; up/gate outside those bands
+retains M256/N128/K128. Host row grouping and the packed weight format are
+unchanged. BF16, INT8 and other projection families retain their existing paths.
+
+The full JevBench run scored **194/231**, with all 231 requests strictly valid,
+identical input token counts and every logit/probability array exactly matching
+the fused-packing baseline. It processed 166,394 resident input tokens in
+**170.407 seconds**, or **976.45 input tok/s**, versus 967.12 previously.
+Median/p95 resident latency was 0.274/2.565 seconds. Peak engine allocation
+remained **14.278 GiB**. The **1,000 tok/s target remains unmet**.
+
+Timing includes encoding, graph preparation, compilation, GPU execution and
+readback, excluding only the first request including model loading. The compiler
+cache was populated. Mean GPU time was 708.72 ms and preparation 29.48 ms.
+The 0.96% increase compares separate sequential full runs; it does not establish
+a paired full-model speedup. All 254 telemetry samples reported no KFD client
+other than the native evaluation process when a client was present.
+
+Records are in `tests/results/jevbench-20261011-int4-adaptive-gemm`, including
+`comparison.json` with the failed throughput gate and `output-equality.json`.
+Telemetry is `artifacts/throughput-1000/adaptive-gemm-eval-telemetry.jsonl`.
+Archived normal binary: `artifacts/throughput-1000/clef-adaptive-gemm`, SHA-256
+`3c6abeb09e45a48938270715b8f4a9274022906323a71af78e944db7d2d381d9`.
+Its `-source.json` hashes all 105 files in
+`benches/results/adaptive-wide-k-selected-smoke/source`.
+
+The selected sources passed 44 M128 and 22 wider-K exact-output smoke cases
+with independent, nonuniform row scales and zero-scale rows. Full and boundary
+paired sweeps support the conditional choices; the direct M128/wider-K boundary
+comparison also had every 99% speedup lower bound above 1.0. CPU tests and
+all-target/all-feature Clippy passed. BF16's 202/231 and 524.73 tok/s measurement
+is from the earlier source-fingerprint build; BF16 was not rerun for this change.
+
+Reproduce sequentially, with fresh result names:
+
+```sh
+CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  CLEF_BENCH_INTEGER_ROW_SCALES=1 \
+  CLEF_BENCH_INTEGER_SOURCE=kernels/gemm_integer_m128.loom \
+  python3 scripts/bench_workload.py adaptive-m128-repro \
+  --filter 'paired_integer_gemm/mlp_'
+CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  CLEF_BENCH_INTEGER_ROW_SCALES=1 \
+  CLEF_BENCH_INTEGER_SOURCE=kernels/gemm_integer_wide_k.loom \
+  python3 scripts/bench_workload.py adaptive-wide-k-repro \
+  --filter 'paired_integer_gemm/mlp_down'
+CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  CLEF_BENCH_INTEGER_ROW_SCALES=1 CLEF_BENCH_LENGTHS=257,384,513,640,769,896 \
+  CLEF_BENCH_INTEGER_REFERENCE_SOURCE=kernels/gemm_integer_wide_k.loom \
+  CLEF_BENCH_INTEGER_SOURCE=kernels/gemm_integer_m128.loom \
+  python3 scripts/bench_workload.py adaptive-boundary-repro \
+  --filter 'paired_integer_gemm/mlp_down'
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-adaptive-gemm-repro
+python3 scripts/compare_jevbench.py \
+  tests/results/jevbench-20261011-int4-swiglu-packing \
+  tests/results/jevbench-adaptive-gemm-repro --min-tps 1000
+```
+
+The final command returns nonzero below the target even when accuracy passes.
+Use the archived binary/source snapshot for the exact recorded implementation.

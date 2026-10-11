@@ -15,9 +15,9 @@ reference tests; do not loosen their tolerances to qualify a candidate. The
 speed/accuracy modes, gate kernel optimizations against the qualified baseline
 of the same precision mode and report the difference from BF16 separately.
 
-The latest qualified full runs measure **967.12 tok/s INT4** and **524.73 tok/s
-BF16**, with every output unchanged. See [fused packing and reproduction
-instructions](evaluation.md#fused-swiglu-and-packing). The 1,000 tok/s
+The latest qualified full runs measure **976.45 tok/s INT4** and **524.73 tok/s
+BF16**, with every output unchanged. See [adaptive MLP tiles and reproduction
+instructions](evaluation.md#adaptive-int4-mlp-tiles). The 1,000 tok/s
 target remains unmet.
 
 ## Criterion coverage
@@ -271,7 +271,12 @@ This group times prepacked operands only. Set
 `CLEF_BENCH_INTEGER_ROW_SCALES=1` for an additional correctness sweep with distinct,
 nonuniform FP32 input/weight row scales and zero-scale rows. Use that flag with
 `paired_integer_gemm`; the regular raw-integer/BF16 oracle assumes uniform scales.
-The paired JSON records which scale fixture was used. For example:
+The paired JSON records which scale fixture was used.
+`CLEF_BENCH_INTEGER_REFERENCE_SOURCE` replaces the original integer GEMM reference
+with another source file; the runner archives and hashes both sources.
+`CLEF_BENCH_LENGTHS=257,384,513,640,769,896` overrides the quick/full row sweep
+in the workload suite with up to 64 comma-separated lengths in 1–4,032.
+Values are sorted and deduplicated. For example:
 
 ```sh
 CLEF_BENCH_INTEGER_SOURCE=artifacts/throughput-1000/gemm-integer-epilogue-unroll.loom \

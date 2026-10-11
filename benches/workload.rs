@@ -7,6 +7,25 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use std::time::{Duration, Instant};
 
 fn lengths() -> Vec<usize> {
+    if let Ok(value) = std::env::var("CLEF_BENCH_LENGTHS") {
+        let mut values: Vec<usize> = value
+            .split(',')
+            .map(|s| {
+                s.trim()
+                    .parse()
+                    .expect("CLEF_BENCH_LENGTHS must contain integers")
+            })
+            .collect();
+        assert!(
+            !values.is_empty()
+                && values.len() <= 64
+                && values.iter().all(|n| (1..=4032).contains(n)),
+            "CLEF_BENCH_LENGTHS supports 1–64 lengths in 1..=4032"
+        );
+        values.sort_unstable();
+        values.dedup();
+        return values;
+    }
     match std::env::var("CLEF_BENCH_PROFILE")
         .as_deref()
         .unwrap_or("full")
@@ -395,6 +414,9 @@ fn paired_integer_gemm(c: &mut Criterion) {
         return;
     };
     let source = std::fs::read_to_string(path).unwrap();
+    let reference_source = std::env::var_os("CLEF_BENCH_INTEGER_REFERENCE_SOURCE")
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .unwrap_or_else(|| include_str!("../kernels/gemm_integer.loom").to_owned());
     let bits = std::env::var("CLEF_BENCH_INTEGER_BITS")
         .map(|s| s.parse::<usize>().unwrap())
         .unwrap_or(8);
@@ -426,7 +448,7 @@ fn paired_integer_gemm(c: &mut Criterion) {
                             m,
                             k,
                             n,
-                            include_str!("../kernels/gemm_integer.loom"),
+                            &reference_source,
                             bits,
                             padded,
                             minimum_bytes,

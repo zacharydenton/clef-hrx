@@ -147,15 +147,25 @@ A full paired sweep revisited the older M128/N128/K256 tile with varied row
 scales (`int4-m128-paired-full`): all 44 correctness cases passed. At 260 rows,
 up/gate measured 1.33–1.34× and down 1.13–1.14×; at 620 rows, up/gate measured
 1.16–1.17× and down about 1.05×. Short cases with the same padded row count
-(158 and 235) regressed. The broad tile remains unselected; the results support
-testing a conditional choice when it removes substantial padded work.
+(158 and 235) regressed. A subsequent boundary sweep at 257, 384, 513, 640, 769
+and 896 rows preserved all outputs and measured 1.12–1.34× for up/gate and
+1.03–1.18× for down (`int4-m128-boundary-paired`). The tile is now selected only
+when it eliminates at least 12.5% of padded row work. Doubling its row-group
+factor did not improve the original choice (`int4-m128-group2-paired`), so the
+host grouping remains `ceil(rows / 256).min(4)` for every selected tile.
 
 Doubling the M256/N128 K stage to 256 INT4 elements passed all 36 varied-scale
 correctness cases (`int4-m256-k256-smoke`). It used 256 VGPRs and 54 KiB LDS.
 The twelve paired MLP cases were mixed (`int4-m256-k256-paired`): down projections
 improved 1.01–1.07×, while short up/gate cases regressed to 0.89–0.96×. This
-candidate is not selected; longer down-projection coverage is still needed
-before considering a conditional dispatch.
+candidate then passed the complete down-projection sweep: 22 pairs at eleven
+lengths, 1.01–1.14× speedups, every 99% lower bound above 1.0
+(`int4-m256-k256-down-full`). It is selected for INT4 MLP down projections
+outside the M128 padding bands. Direct boundary comparisons favor M128 over
+this wider K stage by 1.03–1.09×, with every 99% lower bound above 1.0
+(`int4-m128-versus-wide-k-boundary`). Up/gate outside those bands keeps the
+original tile. Full INT4 qualification preserved every output and measured
+976.45 tok/s; see [the result and reproduction](evaluation.md#adaptive-int4-mlp-tiles).
 
 ## Hosted comparison
 

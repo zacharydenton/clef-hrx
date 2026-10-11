@@ -239,8 +239,24 @@ impl Engine {
         }
         let mut constants = Constants::new();
         constants.push(rows as u32)?;
+        let mlp = matches!((w.cols, w.rows), (5120, 17408) | (17408, 5120));
+        let source = if w.bits == 4 && mlp {
+            let padded128 = rows.div_ceil(128) * 128;
+            let padded256 = rows.div_ceil(256) * 256;
+            // The smaller tile wins when it removes at least 12.5% of padded
+            // row work. At equal row coverage, retain the larger tile.
+            if padded128 * 8 <= padded256 * 7 {
+                include_str!("../kernels/gemm_integer_m128.loom")
+            } else if w.cols == 17408 {
+                include_str!("../kernels/gemm_integer_wide_k.loom")
+            } else {
+                include_str!("../kernels/gemm_integer.loom")
+            }
+        } else {
+            include_str!("../kernels/gemm_integer.loom")
+        };
         self.emit_special(
-            include_str!("../kernels/gemm_integer.loom"),
+            source,
             spec,
             constants,
             &[rows as u64],

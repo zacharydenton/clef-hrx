@@ -62,9 +62,10 @@ the trained decision head retain their existing arithmetic. Packed weights are
 prepared from the same pinned checkpoint, with no additional model download.
 
 Full JevBench measurements were 625 tok/s and 199/231 for MLP-only INT4,
-and 967 tok/s and 194/231 for broader INT4 with scratch reuse, vectorized DeltaNet,
-and SwiGLU fused with register-based packing, versus 525 tok/s and 202/231 in BF16.
-The [latest qualification](evaluation.md#fused-swiglu-and-packing)
+and 976 tok/s and 194/231 for broader INT4 with scratch reuse, vectorized DeltaNet,
+SwiGLU fused with register-based packing, and adaptive MLP GEMM tiles,
+versus 525 tok/s and 202/231 in BF16.
+The [latest qualification](evaluation.md#adaptive-int4-mlp-tiles)
 preserves all outputs of the prior INT4 run and uses 14.28 GiB peak engine
 allocation. BF16 and MLP-only figures are from earlier builds.
 The modes are explicit accuracy/speed choices, not replacements for the default.
