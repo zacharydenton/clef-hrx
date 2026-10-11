@@ -79,7 +79,12 @@ fn paired(c: &mut Criterion) {
         ("gated_norm", 1024),
     ];
     if candidate_source.is_some() {
-        cases.extend([158, 235, 620, 1024, 2048].map(|tokens| ("candidate", tokens)));
+        cases.extend([128, 158, 235, 260, 620, 1024, 2048].map(|tokens| ("candidate", tokens)));
+        // Two unprepared graphs fit the 256 MiB budget at the longest JevBench
+        // input. Prepared graphs need extra token storage and do not fit.
+        if prepare_source.is_none() {
+            cases.push(("candidate", 4032));
+        }
     }
     for (name, tokens) in cases {
         let norm = name == "gated_norm";

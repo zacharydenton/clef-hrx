@@ -101,6 +101,46 @@ No full WorkflowEvals result has been qualified yet. The initial joint smoke run
 failed on schema capacity and is retained in
 `tests/results/workflowevals-bf16-smoke/`; it is not an accuracy result.
 
+### First resumable 64k batch
+
+`tests/results/workflowevals-swiglu-64k` has completed one case per workflow:
+**4/705 cases**, covering nine policy decisions and eight native calls. All four
+cases completed without execution failures; every accepted request retained its
+full state and schema, and no capacity split was needed. These are partial
+results, with `complete: false`; they do not estimate full-suite accuracy.
+
+| Workflow | Completed / planned cases | Consensus agreement in this batch |
+| --- | ---: | --- |
+| Invoice processing | 1 / 150 | 0/3 exact action sets; 0/3 primary actions |
+| Customer service | 1 / 204 | 3/3 exact action sets |
+| Agent trace observability | 1 / 111 | 0/2 primary actions |
+| Security incidents | 1 / 240 | 0/1 exact action sets |
+
+The first invoice request contained **36,916 tokens and 55 questions**. It
+completed in 352.900 seconds including model load; reported GPU inference was
+313.691 seconds and engine allocation was 53.676 GiB. This establishes successful
+execution of that long request, not a full 64k accuracy qualification.
+
+The seven subsequent resident calls processed 13,235 tokens in 27.886 seconds:
+**474.62 input tok/s**, including native encoding, preparation, compilation,
+inference and readback. This excludes the first invoice call and separate CPU
+preflight, so it must not be used as the speed of the long invoice workload or
+compared directly with the mixed JevBench rate.
+
+The batch uses the BF16 `clef-swiglu` binary and source archive recorded in
+[JevBench qualification](evaluation.md#fused-swiglu). Resume the exact run with:
+
+```sh
+HF_HUB_CACHE="$PWD/artifacts/throughput-1000/hf-cache" \
+  artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals.py \
+  --binary artifacts/throughput-1000/clef-swiglu \
+  --output tests/results/workflowevals-swiglu-64k \
+  --new-cases-per-workflow 1 --resume
+```
+
+Omit `--new-cases-per-workflow` to schedule all remaining cases. Keep the same
+binary, runner, precision, context limit and dataset pins when resuming.
+
 ## Context validation
 
 The 64k build passes GPU attention indexing checks with 65,536 query rows and

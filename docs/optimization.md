@@ -22,10 +22,11 @@ of the same precision mode and report the difference from BF16 separately.
 | `workload` / `workload_gemm` | Nine projection families; 1, 65, 127, 128, 158, 235, 260, 620, 1,024, 2,048, 4,032 rows; repeated weights and a rotating working set of at least 64 MiB | Completed dispatch, excluding allocation, compilation, upload and readback |
 | `workload` / `workload_delta` | Chunked and register-resident recurrence at every listed length; deterministic reset and allocation checks | Completed graph replay |
 | `kernels` / `paired_delta_prefill/persistent` | Alternating-order chunked/register comparisons at 235, 620 and 1,024 tokens; raw paired timing totals | Completed graph replay, with both variants resident |
-| `kernels` / `paired_delta_prefill/prepared` and `/candidate` | Prepared or external DeltaNet kernels at 158, 235, 620, 1,024 and 2,048 tokens; alternating order, maximum error and bitwise equality | Completed graph replay, including preparation when selected |
+| `kernels` / `paired_delta_prefill/prepared` and `/candidate` | Prepared or external DeltaNet kernels at 158, 235, 620, 1,024 and 2,048 tokens; external candidates additionally cover 128 and 260, plus 4,032 without preparation; alternating order, maximum error and bitwise equality | Completed graph replay, including preparation when selected |
 | `workload` / `workload_attention` | Causal 24-query/4-KV-head attention, 256 dimensions; 16 through 4,032 tokens | Completed graph, including GPU value transpose/padding and the selected attention kernel |
 | `workload` / `paired_swiglu` | MLP width 17,408 at all eleven workload lengths; separate SiLU/multiply versus fused activation, alternating execution order | Completed graph; raw paired batches and 99% bootstrap speedup intervals |
 | `workload` / `paired_packing` | INT4 packing at widths 5,120, 6,144 and 8,192; two-pass reference versus one-pass FP32 transform; exact logical codes and scales | Completed graph with alternating order and paired confidence intervals |
+| `workload` / `paired_integer_gemm` | Current packed GEMM versus `CLEF_BENCH_INTEGER_SOURCE`, six projection families, repeated and rotating weights, all workload lengths | Alternating-order completed graphs; prepacked identical operands; exact output bits checked before and after timing |
 | `normalization`, `preprocessing` | Normalization shapes and CPU request processing | Existing suite-specific boundaries |
 | `workload_inference` | Seven representative requests selected by nearest token length from an actual request corpus; exact-input replay and graph rebuilding | Complete `infer` calls, including preparation in rebuild cases |
 
@@ -73,6 +74,28 @@ CLEF_BENCH_FULL_MODEL=1 CLEF_MODEL_DIR=artifacts/model \
   CLEF_BENCH_REQUESTS=tests/results/jevbench-20261010-full/requests.jsonl \
   python3 scripts/bench_workload.py baseline-model --suite workload_inference
 ```
+
+To compare qualified INT4 binaries while background load changes, run the full
+231-case suite with alternating per-case order:
+
+```sh
+python3 scripts/bench_jevbench_pair.py \
+  tests/results/jevbench-baseline tests/results/jevbench-candidate \
+  --output tests/results/jevbench-paired
+```
+
+Both input directories must be complete, strictly valid `eval_jevbench.py` runs
+with identical inputs, pins and CLI settings. The harness verifies binary hashes
+and checks every output against its qualified run. Two INT4 models remain
+resident, but requests execute serially; both processes must also pass the loader's
+conservative available-memory preflight. The first attempt on the shared host rejected the
+second process (48.5 GiB required, 44.8 GiB available), so no paired full-model
+timing has yet been qualified. The failed run cleaned up both processes. It records
+raw predictions, per-case order/timing, engine allocations, telemetry and paired
+case-resampling intervals. Each rate excludes only that model's first request.
+The intervals describe variation across this case mix, not repeated full-suite
+runs. This comparison has additional memory pressure and does not replace the
+single-model 1,000 tok/s gate.
 
 Names must be unique. Each run writes `benches/results/<name>/`: exact source and
 candidate files, hashes, compiler version, git diff, command, logs, half-second GPU
@@ -173,6 +196,21 @@ dispatch performance; it does not measure model quantization error or
 activation-packing cost. Candidate sources are archived, and the complete
 evaluation is required before using integer kernels in inference. The older
 `CLEF_BENCH_INT8_SOURCE` and `CLEF_BENCH_INT8_PADDED` names remain aliases.
+
+For alternating-order integer comparisons, select `paired_integer_gemm` and set
+`CLEF_BENCH_INTEGER_SOURCE`, `CLEF_BENCH_INTEGER_BITS` and
+`CLEF_BENCH_INTEGER_PADDED`. It keeps the current and candidate kernels resident
+with separate identical operands, checks exact output bits, and records raw
+paired batches and 99% bootstrap intervals. Rotating cases allocate at least
+64 MiB of weights per variant; combined engine allocation is capped at 1 GiB.
+This group times prepacked operands only. For example:
+
+```sh
+CLEF_BENCH_INTEGER_SOURCE=artifacts/throughput-1000/gemm-integer-epilogue-unroll.loom \
+CLEF_BENCH_INTEGER_BITS=4 CLEF_BENCH_INTEGER_PADDED=1 \
+  python3 scripts/bench_workload.py integer-paired-repro --profile quick \
+  --filter 'paired_integer_gemm/mlp_'
+```
 
 `CLEF_BENCH_INTEGER_PREPARE=1` additionally rotates and packs BF16 activations
 on the GPU inside each replay, using 256-element orthogonal Hadamard groups and
@@ -336,6 +374,14 @@ high/residual BF16 components reduces the precision loss of the PV multiplicatio
 Runtime query/key lengths let different requests reuse compiled code. The pinned
 compiler needs a loop-dependent zero for each QK accumulator; an invariant zero
 produced stale tile offsets during testing. The source records this workaround.
+
+An experimental single-BF16 probability component preserved finite, deterministic
+outputs in the long-shape smoke checks but had mixed timing results. Against a
+fresh current-kernel screen, it was 1.8% slower at 1,024 tokens, 6.5% slower at
+2,048, and 8.3% faster at 4,032 (`attention-probability-bf16-screen`). Maximum
+absolute difference against the original scalar attention fixture was 0.0078125.
+These are separate Criterion runs, not paired timings. It was not selected and
+has no full-model accuracy qualification.
 
 Production selects tiled attention for 256-dimensional BF16 heads at 1,024 or more
 query tokens; shorter requests retain the original kernel. Criterion's

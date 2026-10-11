@@ -281,3 +281,126 @@ kernel files. The run's `comparison.json` and `output-equality.json` record the
 full accuracy gate, exact-output check and peak allocation. GPU oracle tests
 also cover INT4/INT8, zero/constant/random rows, packing fallback widths,
 scratch reuse and packed-weight lifetime.
+
+## Prepared DeltaNet experiment
+
+The eight-value prepared recurrence computes normalized Q/K and gates once per
+token in FP32, then reuses them across recurrent waves. Seven paired operator
+shapes from 128 through 2,048 tokens matched output bits and measured
+1.04–1.19× speedups. Full JevBench qualification selected it only from 128 to
+2,048 tokens, retaining the existing implementation outside that range.
+
+| Mode | Correct / strict valid | Prior resident tok/s | Candidate resident tok/s | Resident seconds | Peak engine GiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BF16 | 202 / 231 | 411.94 | 406.22 | 409.614 | 47.774 |
+| INT4 eligible backbone | 194 / 231 | 831.62 | 832.16 | 199.954 | 14.509 |
+
+Both runs processed 166,394 resident input tokens and preserved all 231 logit
+and probability arrays against their respective baselines. These are separate
+sequential full runs, not paired model timings. INT4 mean GPU time fell from
+0.7968 to 0.7940 seconds per request, while mean preparation rose from 0.0701 to
+0.0727 seconds. There was no useful end-to-end gain, so **this path is not selected
+by default**. It remains a benchmark experiment for future overhead work.
+
+Results are saved in `jevbench-20261011-bf16-delta-prepared-v8` and
+`jevbench-20261011-int4-delta-prepared-v8`, including `comparison.json` and
+`output-equality.json`. Archived normal-build candidate:
+`artifacts/throughput-1000/clef-delta-prepared-v8`, SHA-256
+`4c6d791c462e0a65f2fcdb178ba123f2c4a769e39efe0c4cee139ab917f6d95b`.
+Its `-source.json` records all files in
+`benches/results/delta-prepared-v8-boundary/source`; that snapshot includes the
+temporary default selection used for these measurements.
+
+To reproduce the algorithm using the current benchmark-only switch:
+
+```sh
+cargo build --locked --release --features bench-internals --bin clef
+CLEF_EXPERIMENT_DELTA_PREPARED_V8_MAX=2048 \
+  python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-prepared-v8-int4-repro
+CLEF_EXPERIMENT_DELTA_PREPARED_V8_MAX=2048 \
+  python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --output tests/results/jevbench-prepared-v8-bf16-repro
+```
+
+Benchmark builds also include diagnostic labels; use the archived normal binary
+or build its source snapshot to repeat the exact recorded configuration. The
+older `CLEF_EXPERIMENT_DELTA_PREPARED_MAX` switch retains its four-value kernel.
+
+## Vectorized DeltaNet qualification
+
+The recurrence can express its eight independent value channels as vectors while
+retaining each channel's FP32 operation order. This lets the compiler schedule
+reductions together without adding a preparation dispatch. The selected range
+is 128–4,032 tokens; shorter and longer requests retain the scalar recurrence.
+
+Eight paired operator cases (128, 158, 235, 260, 620, 1,024, 2,048 and 4,032)
+matched output bits and measured 1.16–1.43× speedups, with all 99% lower bounds
+above 1.0. Artifacts are `delta-vector8-paired` and `delta-vector8-long-paired`
+under `benches/results`. A separate GPU fixture checks input slices, distinct
+and varying gates, repeated execution and both selection boundaries.
+
+Both full JevBench runs preserved every logit and probability array:
+
+| Mode | Correct / strict valid | Resident input tok/s | Resident seconds | Peak engine GiB |
+| --- | ---: | ---: | ---: | ---: |
+| BF16 | 202 / 231 | 277.05 | 600.588 | 47.773 |
+| INT4 eligible backbone | 194 / 231 | 612.33 | 271.741 | 14.508 |
+
+Each run processed the same 166,394 resident tokens. These rates include
+preparation and compilation. They were recorded while load, clocks and
+temperature changed, and are slower than the historical 411.94/831.62 tok/s
+runs. The first INT4 run also compiled previously unseen vector specializations.
+These results qualify accuracy but do **not** establish an end-to-end speedup or
+achieve the 1,000 tok/s target. Retain them when comparing later runs.
+
+Full records are `tests/results/jevbench-20261011-{bf16,int4}-delta-vector8`, with
+`comparison.json` and `output-equality.json`. Telemetry from part of the INT4 run
+through the end of BF16 is saved in
+`artifacts/throughput-1000/delta-vector8-eval-telemetry.jsonl`; it is not a complete
+first-run trace. The normal-build binary is
+`artifacts/throughput-1000/clef-delta-vector8`, SHA-256
+`e827fdf92a4e23223f286856180a4de7209936025ada6fded49b11a0408b8d8d`.
+Its `-source.json` lists all 99 files in
+`artifacts/throughput-1000/delta-vector8-source`.
+
+Reproduce operator and full-model checks sequentially:
+
+```sh
+CLEF_BENCH_DELTA_SOURCE=kernels/delta_persistent_vector.loom \
+  python3 scripts/bench_workload.py delta-vector-repro --suite kernels \
+  --filter paired_delta_prefill/candidate
+cargo test --locked --release --lib delta_variants_preserve_state_arithmetic \
+  -- --ignored
+cargo build --locked --release --bin clef
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --precision int4 --output tests/results/jevbench-vector-int4-repro
+python3 scripts/eval_jevbench.py --model-dir artifacts/model \
+  --prepared tests/results/jevbench-vector-int4-repro \
+  --output tests/results/jevbench-vector-bf16-repro
+```
+
+Use `compare_jevbench.py` against the respective qualified precision baseline,
+as in the earlier sections. Keep the single-model runs separate from the
+[alternating two-model comparison](optimization.md#recording-and-comparing-runs),
+which retains additional weights in memory.
+
+After a host restart, a fresh single-model INT4 run completed at **883.33 input
+tok/s**: 166,394 resident tokens in 188.370 seconds, with 194/231 correct, all
+231 strictly valid and all outputs unchanged. Median/p95 resident latency was
+0.326/2.797 seconds; peak engine allocation remained 14.508 GiB. The binary and
+inputs were unchanged. This is a new complete resident measurement, not an
+isolated estimate of the kernel's end-to-end gain over the earlier 831.62 run.
+The 1,000 tok/s gate still fails.
+
+Records are in `tests/results/jevbench-20261011-int4-delta-vector8-postboot`;
+`comparison.json` includes `required_tok_s: 1000` and correctly reports failure
+of that throughput gate despite passing accuracy. The compiler cache was
+populated. Telemetry beginning during the run is in
+`artifacts/throughput-1000/delta-vector8-postboot-telemetry.jsonl`.
+
+An intervening sequential old-binary control was interrupted by the restart at
+178/231 cases and has no valid full-suite summary. Its partial files and
+`interrupted.json` remain in `jevbench-20261011-int4-vector-control`. The earlier
+two-model attempt also produced no timing result: its second loader failed the
+available-memory preflight. Neither incomplete attempt is used as a speed result.

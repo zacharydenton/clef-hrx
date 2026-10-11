@@ -44,6 +44,10 @@ pub enum GemmKernel {
     Padded,
 }
 impl GemmBenchmark {
+    pub fn allocated_bytes(&self) -> usize {
+        self.engine.allocated_bytes()
+    }
+
     /// Experimental packed integer dispatch on exactly representable synthetic data.
     /// Packing is outside timing; full-model qualification must include its cost.
     pub fn packed_integer(

@@ -1,0 +1,257 @@
+// Vectorize independent value channels to schedule their wave reductions together.
+// Each channel retains the scalar recurrence operation order and FP32 state.
+// delta_persistent. Shapes and storage types are compiler specializations.
+// A wave owns eight value channels and distributes 128 keys across its lanes.
+// Thirty-two FP32 state elements per lane stay in registers across all tokens.
+// Every replay starts at zero. Only final token outputs are rounded to BF16.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.qkv_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.qkv_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.a_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.a_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.b_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.b_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.al_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.al_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.dt_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.dt_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.output_len : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%qkv_buffer: buffer, %a_buffer: buffer, %b_buffer: buffer, %al_buffer: buffer, %dt_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %qkv_len = config.get @clef.qkv_len : index
+ %qkv_dtype = config.get @clef.qkv_dtype : index
+ %a_len = config.get @clef.a_len : index
+ %a_dtype = config.get @clef.a_dtype : index
+ %b_len = config.get @clef.b_len : index
+ %b_dtype = config.get @clef.b_dtype : index
+ %al_len = config.get @clef.al_len : index
+ %al_dtype = config.get @clef.al_dtype : index
+ %dt_len = config.get @clef.dt_len : index
+ %dt_dtype = config.get @clef.dt_dtype : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+%dim = index.constant 128 : index
+%wave_width = index.constant 32 : index
+%values = index.constant 8 : index
+%waves_head = index.constant 16 : index
+%wave = index.div %id, %wave_width : index
+%ll = index.rem %id, %wave_width : index
+%leader = index.cmp eq, %ll, %zero : index
+%head = index.div %wave, %waves_head : index
+%part = index.rem %wave, %waves_head : index
+%channel = index.mul %part, %values : index
+%vwidth = index.constant 6144 : index
+%qwidth = index.constant 10240 : index
+%heads = index.constant 48 : index
+%three = index.constant 3 : index
+%keyoff = index.constant 2048 : index
+%valueoff = index.constant 4096 : index
+%seq = config.get @clef.n : index
+%keyhead = index.div %head, %three : index
+%keybase = index.mul %keyhead, %dim : index
+%valuebase = index.mul %head, %dim : index
+%vchannel = index.add %valuebase, %channel : index
+%eps = scalar.constant 1.0e-6 : f32
+%qscale = scalar.constant 0.08838834764831845 : f32
+%al = template.apply<@clef.load>(%al_dtype, %al_buffer, %al_len, %head) : (index, buffer, index, index) -> (f32)
+%dt = template.apply<@clef.load>(%dt_dtype, %dt_buffer, %dt_len, %head) : (index, buffer, index, index) -> (f32)
+%ea = scalar.expf<afn> %al : f32
+%j0 = index.constant 0 : index
+%dim0 = index.add %ll, %j0 : index
+%j1 = index.constant 32 : index
+%dim1 = index.add %ll, %j1 : index
+%j2 = index.constant 64 : index
+%dim2 = index.add %ll, %j2 : index
+%j3 = index.constant 96 : index
+%dim3 = index.add %ll, %j3 : index
+%vc0 = index.constant 0 : index
+%vi0 = index.add %vchannel, %vc0 : index
+%vc1 = index.constant 1 : index
+%vi1 = index.add %vchannel, %vc1 : index
+%vc2 = index.constant 2 : index
+%vi2 = index.add %vchannel, %vc2 : index
+%vc3 = index.constant 3 : index
+%vi3 = index.add %vchannel, %vc3 : index
+%vc4 = index.constant 4 : index
+%vi4 = index.add %vchannel, %vc4 : index
+%vc5 = index.constant 5 : index
+%vi5 = index.add %vchannel, %vc5 : index
+%vc6 = index.constant 6 : index
+%vi6 = index.add %vchannel, %vc6 : index
+%vc7 = index.constant 7 : index
+%vi7 = index.add %vchannel, %vc7 : index
+%zero_values = vector.constant 0.0 : vector<8xf32>
+%last0, %last1, %last2, %last3 = scf.for %t = [%zero to %seq step %one](%s0 = %zero_values : vector<8xf32>, %s1 = %zero_values : vector<8xf32>, %s2 = %zero_values : vector<8xf32>, %s3 = %zero_values : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+%qb0 = index.mul %t, %qwidth : index
+%qb = index.add %qb0, %keybase : index
+%kb = index.add %qb, %keyoff : index
+%vb = index.add %qb0, %valueoff : index
+%ob = index.mul %t, %vwidth : index
+%ab0 = index.mul %t, %heads : index
+%ai = index.add %ab0, %head : index
+%aa = template.apply<@clef.load>(%a_dtype, %a_buffer, %a_len, %ai) : (index, buffer, index, index) -> (f32)
+%bb = template.apply<@clef.load>(%b_dtype, %b_buffer, %b_len, %ai) : (index, buffer, index, index) -> (f32)
+ %adt = scalar.addf %aa, %dt : f32
+ %negabs0 = scalar.absf %adt : f32
+ %negabs = scalar.negf %negabs0 : f32
+ %expneg = scalar.expf<afn> %negabs : f32
+ %loge = scalar.addf %fone, %expneg : f32
+ %log = scalar.logf<afn> %loge : f32
+ %positive = scalar.cmpf ogt, %adt, %fzero : f32
+ %amax = scf.select %positive, %adt, %fzero : f32
+ %sp = scalar.addf %amax, %log : f32
+ %gpos = scalar.mulf %ea, %sp : f32
+ %g = scalar.negf %gpos : f32
+ %decay = scalar.expf<afn> %g : f32
+ %nb = scalar.negf %bb : f32
+ %eb = scalar.expf<afn> %nb : f32
+ %bd = scalar.addf %fone, %eb : f32
+ %beta0 = scalar.divf %fone, %bd : f32
+ %betabf = scalar.fptrunc %beta0 : f32 to bf16
+ %beta = scalar.extf %betabf : bf16 to f32
+
+%qi0 = index.add %qb, %dim0 : index
+%q0 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %qi0) : (index, buffer, index, index) -> (f32)
+%qsq0 = scalar.fmaf %q0, %q0, %fzero : f32
+%ki0 = index.add %kb, %dim0 : index
+%k0 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %ki0) : (index, buffer, index, index) -> (f32)
+%ksq0 = scalar.fmaf %k0, %k0, %fzero : f32
+%qi1 = index.add %qb, %dim1 : index
+%q1 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %qi1) : (index, buffer, index, index) -> (f32)
+%qsq1 = scalar.fmaf %q1, %q1, %qsq0 : f32
+%ki1 = index.add %kb, %dim1 : index
+%k1 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %ki1) : (index, buffer, index, index) -> (f32)
+%ksq1 = scalar.fmaf %k1, %k1, %ksq0 : f32
+%qi2 = index.add %qb, %dim2 : index
+%q2 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %qi2) : (index, buffer, index, index) -> (f32)
+%qsq2 = scalar.fmaf %q2, %q2, %qsq1 : f32
+%ki2 = index.add %kb, %dim2 : index
+%k2 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %ki2) : (index, buffer, index, index) -> (f32)
+%ksq2 = scalar.fmaf %k2, %k2, %ksq1 : f32
+%qi3 = index.add %qb, %dim3 : index
+%q3 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %qi3) : (index, buffer, index, index) -> (f32)
+%qsq3 = scalar.fmaf %q3, %q3, %qsq2 : f32
+%ki3 = index.add %kb, %dim3 : index
+%k3 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %ki3) : (index, buffer, index, index) -> (f32)
+%ksq3 = scalar.fmaf %k3, %k3, %ksq2 : f32
+%qsum = kernel.subgroup.reduce<addf> %qsq3 : f32
+%qeps = scalar.addf %qsum, %eps : f32
+%qinv = scalar.rsqrtf %qeps : f32
+%ksum = kernel.subgroup.reduce<addf> %ksq3 : f32
+%keps = scalar.addf %ksum, %eps : f32
+%kinv = scalar.rsqrtf %keps : f32
+%qnorm0 = scalar.mulf %q0, %qinv : f32
+%qn0 = scalar.mulf %qnorm0, %qscale : f32
+%kn0 = scalar.mulf %k0, %kinv : f32
+%qnorm1 = scalar.mulf %q1, %qinv : f32
+%qn1 = scalar.mulf %qnorm1, %qscale : f32
+%kn1 = scalar.mulf %k1, %kinv : f32
+%qnorm2 = scalar.mulf %q2, %qinv : f32
+%qn2 = scalar.mulf %qnorm2, %qscale : f32
+%kn2 = scalar.mulf %k2, %kinv : f32
+%qnorm3 = scalar.mulf %q3, %qinv : f32
+%qn3 = scalar.mulf %qnorm3, %qscale : f32
+%kn3 = scalar.mulf %k3, %kinv : f32
+%vidx0 = index.add %vb, %vi0 : index
+%value0 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx0) : (index, buffer, index, index) -> (f32)
+%vidx1 = index.add %vb, %vi1 : index
+%value1 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx1) : (index, buffer, index, index) -> (f32)
+%vidx2 = index.add %vb, %vi2 : index
+%value2 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx2) : (index, buffer, index, index) -> (f32)
+%vidx3 = index.add %vb, %vi3 : index
+%value3 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx3) : (index, buffer, index, index) -> (f32)
+%vidx4 = index.add %vb, %vi4 : index
+%value4 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx4) : (index, buffer, index, index) -> (f32)
+%vidx5 = index.add %vb, %vi5 : index
+%value5 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx5) : (index, buffer, index, index) -> (f32)
+%vidx6 = index.add %vb, %vi6 : index
+%value6 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx6) : (index, buffer, index, index) -> (f32)
+%vidx7 = index.add %vb, %vi7 : index
+%value7 = template.apply<@clef.load>(%qkv_dtype, %qkv_buffer, %qkv_len, %vidx7) : (index, buffer, index, index) -> (f32)
+%value = vector.from_elements %value0, %value1, %value2, %value3, %value4, %value5, %value6, %value7 : vector<8xf32>
+%decayv = vector.splat %decay : vector<8xf32>
+%betav = vector.splat %beta : vector<8xf32>
+%qn0v = vector.splat %qn0 : vector<8xf32>
+%kn0v = vector.splat %kn0 : vector<8xf32>
+%qn1v = vector.splat %qn1 : vector<8xf32>
+%kn1v = vector.splat %kn1 : vector<8xf32>
+%qn2v = vector.splat %qn2 : vector<8xf32>
+%kn2v = vector.splat %kn2 : vector<8xf32>
+%qn3v = vector.splat %qn3 : vector<8xf32>
+%kn3v = vector.splat %kn3 : vector<8xf32>
+%sd0 = vector.mulf %s0, %decayv : vector<8xf32>
+%pred0 = vector.fmaf %sd0, %kn0v, %zero_values : vector<8xf32>
+%sd1 = vector.mulf %s1, %decayv : vector<8xf32>
+%pred1 = vector.fmaf %sd1, %kn1v, %pred0 : vector<8xf32>
+%sd2 = vector.mulf %s2, %decayv : vector<8xf32>
+%pred2 = vector.fmaf %sd2, %kn2v, %pred1 : vector<8xf32>
+%sd3 = vector.mulf %s3, %decayv : vector<8xf32>
+%pred3 = vector.fmaf %sd3, %kn3v, %pred2 : vector<8xf32>
+%predsum = kernel.subgroup.reduce<addf> %pred3 : vector<8xf32>
+%err = vector.subf %value, %predsum : vector<8xf32>
+%delta = vector.mulf %err, %betav : vector<8xf32>
+%sn0 = vector.fmaf %delta, %kn0v, %sd0 : vector<8xf32>
+%out0 = vector.fmaf %sn0, %qn0v, %zero_values : vector<8xf32>
+%sn1 = vector.fmaf %delta, %kn1v, %sd1 : vector<8xf32>
+%out1 = vector.fmaf %sn1, %qn1v, %out0 : vector<8xf32>
+%sn2 = vector.fmaf %delta, %kn2v, %sd2 : vector<8xf32>
+%out2 = vector.fmaf %sn2, %qn2v, %out1 : vector<8xf32>
+%sn3 = vector.fmaf %delta, %kn3v, %sd3 : vector<8xf32>
+%out3 = vector.fmaf %sn3, %qn3v, %out2 : vector<8xf32>
+%result = kernel.subgroup.reduce<addf> %out3 : vector<8xf32>
+scf.if %leader {
+%result0 = vector.extract %result[%vc0] : vector<8xf32> -> f32
+%oi0 = index.add %ob, %vi0 : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0, %result0) : (index, buffer, index, index, f32) -> ()
+%result1 = vector.extract %result[%vc1] : vector<8xf32> -> f32
+%oi1 = index.add %ob, %vi1 : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1, %result1) : (index, buffer, index, index, f32) -> ()
+%result2 = vector.extract %result[%vc2] : vector<8xf32> -> f32
+%oi2 = index.add %ob, %vi2 : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2, %result2) : (index, buffer, index, index, f32) -> ()
+%result3 = vector.extract %result[%vc3] : vector<8xf32> -> f32
+%oi3 = index.add %ob, %vi3 : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3, %result3) : (index, buffer, index, index, f32) -> ()
+%result4 = vector.extract %result[%vc4] : vector<8xf32> -> f32
+%oi4 = index.add %ob, %vi4 : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4, %result4) : (index, buffer, index, index, f32) -> ()
+%result5 = vector.extract %result[%vc5] : vector<8xf32> -> f32
+%oi5 = index.add %ob, %vi5 : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5, %result5) : (index, buffer, index, index, f32) -> ()
+%result6 = vector.extract %result[%vc6] : vector<8xf32> -> f32
+%oi6 = index.add %ob, %vi6 : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6, %result6) : (index, buffer, index, index, f32) -> ()
+%result7 = vector.extract %result[%vc7] : vector<8xf32> -> f32
+%oi7 = index.add %ob, %vi7 : index
+template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7, %result7) : (index, buffer, index, index, f32) -> ()
+}
+scf.yield %sn0, %sn1, %sn2, %sn3 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+}
+}
+kernel.return
+}

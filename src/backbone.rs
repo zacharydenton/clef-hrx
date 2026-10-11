@@ -259,47 +259,102 @@ impl Engine {
         );
         #[cfg(feature = "bench-internals")]
         if n >= 128 && n <= self.prepared_delta_max {
-            let prepared = self.alloc(n, 4192, DType::F32)?;
-            self.dispatch(
-                concat!(
-                    include_str!("../kernels/common.loom"),
-                    include_str!("../benches/kernels/delta_prepare.loom")
+            return self.delta_prepared::<4>(
+                qkv,
+                a,
+                b,
+                alog,
+                dt,
+                (
+                    concat!(
+                        include_str!("../kernels/common.loom"),
+                        include_str!("../benches/kernels/delta_prepare.loom")
+                    ),
+                    concat!(
+                        include_str!("../kernels/common.loom"),
+                        include_str!("../benches/kernels/delta_segmented_prepared.loom")
+                    ),
                 ),
-                n * 16 * 32,
-                &[("qkv", qkv), ("a", a), ("b", b), ("al", alog), ("dt", dt)],
-                &prepared,
-                &[
-                    ("n", n.to_string()),
-                    ("output_len", prepared.len().to_string()),
-                ],
-            )?;
-            let out = self.alloc(n, 6144, DType::Bf16)?;
-            self.dispatch(
-                concat!(
-                    include_str!("../kernels/common.loom"),
-                    include_str!("../benches/kernels/delta_segmented_prepared.loom")
+            );
+        }
+        // Operator savings were offset by preparation in complete evaluations.
+        // Retain this ablation without changing production selection.
+        #[cfg(feature = "bench-internals")]
+        if n >= 128 && n <= self.prepared_delta_v8_max {
+            return self.delta_prepared::<8>(
+                qkv,
+                a,
+                b,
+                alog,
+                dt,
+                (
+                    concat!(
+                        include_str!("../kernels/common.loom"),
+                        include_str!("../kernels/delta_prepare.loom")
+                    ),
+                    concat!(
+                        include_str!("../kernels/common.loom"),
+                        include_str!("../kernels/delta_persistent_prepared.loom")
+                    ),
                 ),
-                48 * 32 * 32,
-                &[
-                    ("qkv", qkv),
-                    ("a", &prepared),
-                    ("b", b),
-                    ("al", alog),
-                    ("dt", dt),
-                ],
-                &out,
-                &[("n", n.to_string()), ("output_len", out.len().to_string())],
-            )?;
-            return Ok(out);
+            );
         }
         let out = self.alloc(n, 6144, DType::Bf16)?;
-        self.dispatch(
+        // Qualified vector scheduling range; preserve the scalar implementation
+        // for shorter inputs and long-context workloads outside this range.
+        let source = if (128..=4032).contains(&n) {
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/delta_persistent_vector.loom")
+            )
+        } else {
             concat!(
                 include_str!("../kernels/common.loom"),
                 include_str!("../kernels/delta_persistent.loom")
-            ),
+            )
+        };
+        self.dispatch(
+            source,
             48 * 16 * 32,
             &[("qkv", qkv), ("a", a), ("b", b), ("al", alog), ("dt", dt)],
+            &out,
+            &[("n", n.to_string()), ("output_len", out.len().to_string())],
+        )?;
+        Ok(out)
+    }
+    #[cfg(any(feature = "bench-internals", test))]
+    fn delta_prepared<const VALUES: usize>(
+        &mut self,
+        qkv: &Tensor,
+        a: &Tensor,
+        b: &Tensor,
+        alog: &Tensor,
+        dt: &Tensor,
+        sources: (&str, &str),
+    ) -> Result<Tensor> {
+        let n = qkv.rows;
+        let prepared = self.alloc(n, 4192, DType::F32)?;
+        self.dispatch(
+            sources.0,
+            n * 16 * 32,
+            &[("qkv", qkv), ("a", a), ("b", b), ("al", alog), ("dt", dt)],
+            &prepared,
+            &[
+                ("n", n.to_string()),
+                ("output_len", prepared.len().to_string()),
+            ],
+        )?;
+        let out = self.alloc(n, 6144, DType::Bf16)?;
+        self.dispatch(
+            sources.1,
+            48 * (128 / VALUES) * 32,
+            &[
+                ("qkv", qkv),
+                ("a", &prepared),
+                ("b", b),
+                ("al", alog),
+                ("dt", dt),
+            ],
             &out,
             &[("n", n.to_string()), ("output_len", out.len().to_string())],
         )?;
@@ -487,6 +542,113 @@ fn mlp_chunked(e: &mut Engine, x: &Tensor, prefix: &str, chunk: usize) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151; checks prepared recurrence boundaries, slices and replay"]
+    fn delta_variants_preserve_state_arithmetic() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        for n in [127, 128, 129, 620, 2048, 4032, 4033] {
+            let mut e = Engine::new(&context)?;
+            let values = |len, factor, divisor| {
+                (0..len)
+                    .map(|i| half::bf16::from_f32(((i * factor % 251) as f32 - 125.) / divisor))
+                    .collect::<Vec<_>>()
+            };
+            let qkv = e
+                .input(
+                    n + 1,
+                    10240,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values((n + 1) * 10240, 17, 512.)),
+                )?
+                .slice_rows(1, n);
+            let a = e
+                .input(
+                    n + 1,
+                    48,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values((n + 1) * 48, 13, 64.)),
+                )?
+                .slice_rows(1, n);
+            let b = e
+                .input(
+                    n + 1,
+                    48,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values((n + 1) * 48, 19, 128.)),
+                )?
+                .slice_rows(1, n);
+            let alog = e.input(
+                1,
+                48,
+                DType::Bf16,
+                bytemuck::cast_slice(&values(48, 7, 256.)),
+            )?;
+            let dt = e.input(
+                1,
+                48,
+                DType::Bf16,
+                bytemuck::cast_slice(&values(48, 11, 256.)),
+            )?;
+            let vector = e.delta_persistent(&qkv, &a, &b, &alog, &dt)?;
+            let actual = e.delta_prepared::<8>(
+                &qkv,
+                &a,
+                &b,
+                &alog,
+                &dt,
+                (
+                    concat!(
+                        include_str!("../kernels/common.loom"),
+                        include_str!("../kernels/delta_prepare.loom")
+                    ),
+                    concat!(
+                        include_str!("../kernels/common.loom"),
+                        include_str!("../kernels/delta_persistent_prepared.loom")
+                    ),
+                ),
+            )?;
+            let expected = e.alloc(n, 6144, DType::Bf16)?;
+            e.dispatch(
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/delta_persistent.loom")
+                ),
+                48 * 16 * 32,
+                &[
+                    ("qkv", &qkv),
+                    ("a", &a),
+                    ("b", &b),
+                    ("al", &alog),
+                    ("dt", &dt),
+                ],
+                &expected,
+                &[
+                    ("n", n.to_string()),
+                    ("output_len", expected.len().to_string()),
+                ],
+            )?;
+            let mut graph = e.finish()?;
+            for _ in 0..2 {
+                e.run(&mut graph)?;
+                let expected_bits = e
+                    .read_f32(&expected)?
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect::<Vec<_>>();
+                for (variant, tensor) in [("prepared", &actual), ("vector", &vector)] {
+                    let output = e.read_f32(tensor)?;
+                    assert!(output.iter().all(|x| x.is_finite()));
+                    assert_eq!(
+                        output.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                        expected_bits,
+                        "{variant} n={n}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires gfx1151; checks long attention indexing against uniform-softmax oracle"]

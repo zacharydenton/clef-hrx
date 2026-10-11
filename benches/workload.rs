@@ -383,5 +383,140 @@ fn packing(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(workload, gemm, delta, attention, swiglu, packing);
+/// Both packed-GEMM variants stay resident; timing order alternates each pair.
+fn paired_integer_gemm(c: &mut Criterion) {
+    let Some(path) = std::env::var_os("CLEF_BENCH_INTEGER_SOURCE") else {
+        return;
+    };
+    let source = std::fs::read_to_string(path).unwrap();
+    let bits = std::env::var("CLEF_BENCH_INTEGER_BITS")
+        .map(|s| s.parse::<usize>().unwrap())
+        .unwrap_or(8);
+    assert!([4, 8].contains(&bits));
+    let padded = std::env::var("CLEF_BENCH_INTEGER_PADDED").as_deref() == Ok("1");
+    let mut group = c.benchmark_group("paired_integer_gemm");
+    configure(&mut group);
+    for m in lengths() {
+        for (role, k, n) in [
+            ("mlp_up_gate", 5120, 17408),
+            ("mlp_down", 17408, 5120),
+            ("attention_output", 6144, 5120),
+            ("delta_qkv", 5120, 10240),
+            ("delta_z", 5120, 6144),
+            ("attention_q_gate", 5120, 12288),
+        ] {
+            for (cache, minimum_bytes) in [("replay", 0), ("rotating", 64 << 20)] {
+                let label = format!("{role}_{cache}");
+                let shape = format!("{m}x{k}x{n}");
+                let mut graphs = None;
+                let mut expected = Vec::new();
+                let mut samples = Vec::new();
+                let mut sequence = 0u64;
+                group.throughput(Throughput::Elements(2 * m as u64 * k as u64 * n as u64));
+                group.bench_function(BenchmarkId::new(&label, &shape), |b| {
+                    let graphs = graphs.get_or_insert_with(|| {
+                        assert!(std::env::var("CLEF_BENCH_INTEGER_PREPARE").as_deref() != Ok("1"), "paired integer GEMM uses prepacked operands; measure preparation in workload_gemm");
+                        let mut reference = GemmBenchmark::packed_integer(
+                            m,
+                            k,
+                            n,
+                            include_str!("../kernels/gemm_integer.loom"),
+                            bits,
+                            padded,
+                            minimum_bytes,
+                        )
+                        .unwrap();
+                        let mut candidate = GemmBenchmark::packed_integer(
+                            m,
+                            k,
+                            n,
+                            &source,
+                            bits,
+                            padded,
+                            minimum_bytes,
+                        )
+                        .unwrap();
+                        assert!(
+                            reference.allocated_bytes() + candidate.allocated_bytes() <= 1 << 30,
+                            "paired GEMM exceeds 1 GiB allocation budget"
+                        );
+                        let output = reference.output().unwrap();
+                        assert!(output.iter().all(|x| x.is_finite()));
+                        expected = output.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                        assert_eq!(
+                            candidate
+                                .output()
+                                .unwrap()
+                                .iter()
+                                .map(|x| x.to_bits())
+                                .collect::<Vec<_>>(),
+                            expected,
+                            "packed GEMM changed output"
+                        );
+                        [reference, candidate]
+                    });
+                    b.iter_custom(|iterations| {
+                        let mut times = [Duration::ZERO; 2];
+                        for _ in 0..iterations {
+                            for candidate in
+                                [sequence.is_multiple_of(2), !sequence.is_multiple_of(2)]
+                            {
+                                let started = Instant::now();
+                                graphs[usize::from(candidate)].run().unwrap();
+                                times[usize::from(candidate)] += started.elapsed();
+                            }
+                            sequence += 1;
+                        }
+                        samples.push(serde_json::json!({
+                            "iterations": iterations,
+                            "reference_ns": times[0].as_nanos() as u64,
+                            "optimized_ns": times[1].as_nanos() as u64,
+                        }));
+                        times[1]
+                    });
+                });
+                if let Some(mut graphs) = graphs {
+                    for graph in &mut graphs {
+                        assert_eq!(
+                            graph
+                                .output()
+                                .unwrap()
+                                .iter()
+                                .map(|x| x.to_bits())
+                                .collect::<Vec<_>>(),
+                            expected,
+                            "GEMM replay changed output"
+                        );
+                    }
+                    let root = std::path::PathBuf::from("target/criterion/paired_integer_gemm")
+                        .join(&label)
+                        .join(&shape);
+                    std::fs::create_dir_all(&root).unwrap();
+                    let measured = if samples.len() >= 20 {
+                        &samples[samples.len() - 20..]
+                    } else {
+                        &[]
+                    };
+                    std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
+                        "rows": m, "k": k, "columns": n, "bits": bits,
+                        "padded": padded, "minimum_weight_bytes_per_variant": minimum_bytes,
+                        "bitwise_identical": true, "sample_size": 20,
+                        "samples": samples, "measurement_samples": measured,
+                        "note": "Prepacked operands; two resident variants with separate identical weight allocations; preparation excluded.",
+                    })).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+    group.finish();
+}
+criterion_group!(
+    workload,
+    gemm,
+    delta,
+    attention,
+    swiglu,
+    packing,
+    paired_integer_gemm
+);
 criterion_main!(workload);

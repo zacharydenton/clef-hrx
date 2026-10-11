@@ -65,6 +65,49 @@ projection smoke cases. It used 152 vector registers and 20 KiB LDS, versus
 200 registers and 30 KiB for the production M256 tile. Its four 4,032-row MLP
 cases were still 4.6–7.9% slower (`int4-m128-k128-long`); it was not selected.
 
+The prepared eight-value DeltaNet experiment retains current grouped stores and
+computes normalized Q/K and gates once per token in FP32. The five paired shapes
+in `delta-current-prepared-paired` (158/235/620/1,024/2,048 tokens) matched output
+bits and measured 1.12/1.16/1.19/1.04/1.04× speedups, with every 99% lower bound
+above 1.0. Preparation is included in each timed graph. The additional 128/260
+cases in `delta-prepared-v8-boundary` matched bits and measured 1.12× at both
+lengths, again with 99% lower bounds above 1.0. Full JevBench preserved all outputs
+but measured 832.16 tok/s in INT4 versus 831.62, and 406.22 in BF16 versus 411.94.
+The extra preparation offset the INT4 GPU saving. It remains benchmark-only;
+see [complete results and reproduction](evaluation.md#prepared-deltanet-experiment).
+
+A second candidate applied Gufo's output identity
+`dot(S_decay, Q) + delta * dot(K, Q)` while retaining the same state update.
+`delta-prepared-algebra-paired` measured 1.07/1.08/1.03/0.98/0.97× at the same
+lengths, with small BF16 output differences (maximum absolute change 0.00001526).
+The two long shapes regressed against the current kernel, so this rearrangement
+was rejected.
+
+Unrolling the 16-fragment integer GEMM output loop removes its runtime accumulator
+selection chain. All 36 paired smoke cases preserved output bits, but the twelve
+MLP timing cases in `int4-epilogue-unroll-paired-mlp` ranged from 0.982× to 1.014×.
+The rotating 4,032-row down projection regressed. Matched compiler reports kept
+200 VGPRs and 30 KiB LDS with no spills; code grew from about 5.5 to 19.9 KiB.
+The change was not selected. The new paired harness retains both variants,
+alternates execution order and measures repeated and rotating weight sets.
+
+Halving the production M256/N128 integer K block to 64 INT4 elements reduced
+staging from 30 to 18 KiB and VGPR use from 200 to 184, raising the reported
+register residency tier from seven to eight without spills. All 36 paired smoke
+cases matched bits, but all twelve paired MLP cases slowed down: speedups ranged
+from 0.641× to 0.993× (`int4-m256-k64-paired-mlp`). The extra staging iterations
+did not pay off; the production K block remains unchanged.
+
+Vectorizing the eight independent DeltaNet value channels keeps each channel's
+FP32 recurrence order while allowing the compiler to schedule reductions together.
+`delta-vector8-paired` and `delta-vector8-long-paired` cover eight lengths from
+128 through 4,032 tokens. Outputs matched bits throughout, with 1.16–1.43× paired
+operator speedups and every 99% lower bound above 1.0. The GPU fixture additionally
+checks nonzero input slices, distinct gates, varying decay/bias, selection
+boundaries and replay. Full BF16 and INT4 qualification preserved every output;
+a fresh INT4 run after a host restart measured 883.33 tok/s. The selected range
+is 128–4,032 tokens. See [measurement conditions and reproduction](evaluation.md#vectorized-deltanet-qualification).
+
 ## Hosted comparison
 
 [Cloudflare's October 9 post](https://blog.cloudflare.com/clef-faster-cheaper-multimodal/)

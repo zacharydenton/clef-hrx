@@ -93,6 +93,8 @@ pub(crate) struct Engine {
     pub quantized: crate::quantized::QuantizedProjections,
     #[cfg(feature = "bench-internals")]
     pub prepared_delta_max: usize,
+    #[cfg(feature = "bench-internals")]
+    pub prepared_delta_v8_max: usize,
     stream: Stream,
     compiler: Compiler,
     compile_reports: Option<std::path::PathBuf>,
@@ -180,6 +182,12 @@ impl Engine {
             prepared_delta_max: std::env::var("CLEF_EXPERIMENT_DELTA_PREPARED_MAX")
                 .ok()
                 .map(|s| s.parse())
+                .transpose()?
+                .unwrap_or(0),
+            #[cfg(feature = "bench-internals")]
+            prepared_delta_v8_max: std::env::var("CLEF_EXPERIMENT_DELTA_PREPARED_V8_MAX")
+                .ok()
+                .map(|value| value.parse::<usize>())
                 .transpose()?
                 .unwrap_or(0),
             stream,

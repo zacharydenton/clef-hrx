@@ -69,14 +69,14 @@ BF16 is the default. Normal builds also support explicit INT4 modes:
 | --- | ---: | ---: |
 | BF16 | 202/231 (87.4%) | 412 |
 | INT4 MLP only | 199/231 (86.1%) | 625 |
-| INT4 eligible backbone projections | 194/231 (84.0%) | 832 |
+| INT4 eligible backbone projections | 194/231 (84.0%) | 883 |
 
 INT4 trades accuracy for speed; it is never selected automatically. These are
 archived full-suite measurements of the respective kernel configurations. The
 BF16 and broader INT4 results include fused SwiGLU; broader INT4 also uses
-single-pass packing. The MLP-only result is from an earlier build. Broader INT4
+single-pass packing and vectorized DeltaNet. The MLP-only result is from an earlier build. Broader INT4
 uses 14.51 GiB peak engine allocation and preserves all outputs of its previous
-run. See [qualification and reproduction](docs/evaluation.md#single-pass-int4-packing),
+run. See [qualification and reproduction](docs/evaluation.md#vectorized-deltanet-qualification),
 [precision details](docs/usage.md#precision)
 and [recorded experiments](docs/optimization.md). Vision, normalization and the
 trained decision head retain their original precision.
@@ -84,7 +84,8 @@ trained decision head retain their original precision.
 ## Evaluation
 
 The [WorkflowEvals runner and reproduction notes](docs/workflowevals.md) cover
-all four workflows in the pinned public collection. Full results are pending.
+all four workflows in the pinned public collection. The first resumable batch
+completed 4/705 cases, including a 36,916-token request. Full results are pending.
 
 On all 231 public JevBench cases, CLEF-HRX scored **202/231 (87.4%)**, compared
 with Jev 1.13's published **200/231 (86.6%)** on the same cases. All requests
