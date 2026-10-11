@@ -57,6 +57,49 @@ CLEF_MODEL_DIR=artifacts/model target/release/examples/profile_inference \
   REQUEST_235.json REQUEST_620.json REQUEST_2729.json
 ```
 
+## Flash vectorized DeltaNet candidates
+
+The original CLEF vector kernels can share recurrence work across eight or sixteen
+value channels per wave. Two benchmark-only adaptations use Flash's 32 value
+heads, 16 key heads and 8,192-wide QKV input. Production Flash still selects the
+scalar kernel; these measurements do not establish a full-model speedup.
+
+Both candidates matched the scalar output bit-for-bit at all eleven tested
+lengths. Before/after timing checks found no replay changes. Measurements alternate
+reference/candidate order, use 40 samples and 10,000 paired bootstrap resamples,
+and exclude warmup. Telemetry recorded at most one KFD client in each run.
+
+| Tokens | Eight-channel speedup | 99% interval | Sixteen-channel speedup |
+| ---: | ---: | ---: | ---: |
+| 1 | 1.062× | 1.061–1.063× | 0.884× |
+| 65 | 1.192× | 1.190–1.193× | 1.101× |
+| 127 | 1.208× | 1.206–1.210× | 1.140× |
+| 128 | 1.207× | 1.206–1.208× | 1.129× |
+| 158 | 1.210× | 1.208–1.212× | 1.136× |
+| 235 | 1.169× | 1.168–1.171× | 1.137× |
+| 260 | 1.222× | 1.221–1.223× | 1.142× |
+| 620 | 1.208× | 1.208–1.209× | 1.151× |
+| 1,024 | 1.270× | 1.269–1.271× | 1.192× |
+| 2,048 | 1.246× | 1.246–1.247× | 1.176× |
+| 4,032 | 1.219× | 1.211–1.229× | 1.083× |
+
+Artifacts: `benches/results/flash-delta-{vector,vector16}-{smoke,paired}`.
+Each includes source snapshots, executable/compiler hashes and raw timing pairs.
+Reproduce the eight-channel measurements with:
+
+```sh
+CLEF_BENCH_MODEL=clef-flash CLEF_BENCH_PAIRED_SECONDS=3 \
+  CLEF_BENCH_DELTA_VALUES=8 \
+  CLEF_BENCH_DELTA_SOURCE=benches/kernels/delta_flash_vector.loom \
+  python3 scripts/bench_workload.py flash-vector-repro \
+    --suite kernels --filter paired_flash_delta
+```
+
+For sixteen channels, set `CLEF_BENCH_DELTA_VALUES=16`, use
+`benches/kernels/delta_flash_vector16.loom`, and choose a fresh result name.
+The next gate is full-model accuracy and paired resident request timing. A
+17–27% improvement in this recurrence alone is not a 17–27% model improvement.
+
 ## Criterion coverage
 
 Flash has its own `flash` suite covering its projection, packing, attention and
@@ -736,8 +779,9 @@ accumulation order so outputs are identical):
 | 2,729×6,144×5,120 | 5.421 ms | 3.981 ms | 1.36× | 43.1 |
 
 The layout is the standard storage for the 64 layers' projection weights: the
-checkpoint shards are rewritten in place on first load and the loader keeps the
-bytes as they are on disk. The residual-add epilogue (`gemm_bf16_tiled_residual.loom`)
+pristine checkpoint shards now remain intact and first load writes a derived
+tiled cache keyed by model, revision, layout and source hash. Previously converted
+original CLEF snapshots remain readable. The loader uses tiled bytes directly. The residual-add epilogue (`gemm_bf16_tiled_residual.loom`)
 rounds the projection to BF16 before adding the residual, so attention-output
 and MLP-down projections match the former separate `addf` bit for bit.
 INT4 modes restore logical rows on the CPU before packing, then permute the

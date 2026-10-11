@@ -623,6 +623,22 @@ impl DeltaBenchmark {
         )
     }
     pub fn for_model(tokens: usize, model: crate::ModelVariant) -> Result<Self> {
+        Self::build_model(tokens, model, None)
+    }
+    pub fn for_model_source(
+        tokens: usize,
+        model: crate::ModelVariant,
+        source: &str,
+        values_per_wave: usize,
+    ) -> Result<Self> {
+        anyhow::ensure!([8, 16].contains(&values_per_wave));
+        Self::build_model(tokens, model, Some((source, values_per_wave)))
+    }
+    fn build_model(
+        tokens: usize,
+        model: crate::ModelVariant,
+        candidate: Option<(&str, usize)>,
+    ) -> Result<Self> {
         anyhow::ensure!((1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&tokens));
         let arch = model.architecture();
         let context = ModelContext::new(Default::default())?;
@@ -647,7 +663,29 @@ impl DeltaBenchmark {
             DType::Bf16,
             bytemuck::cast_slice(&vec![half::bf16::ZERO; arch.delta_heads]),
         )?;
-        let output = engine.delta_persistent(&qkv, &a, &a, &al, &al)?;
+        let output = if let Some((source, values_per_wave)) = candidate {
+            let out = engine.alloc(tokens, arch.delta_heads * 128, DType::Bf16)?;
+            let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
+            engine.dispatch(
+                &source,
+                arch.delta_heads * 128 / values_per_wave * 32,
+                &[
+                    ("qkv", &qkv),
+                    ("a", &a),
+                    ("b", &a),
+                    ("al", &al),
+                    ("dt", &al),
+                ],
+                &out,
+                &[
+                    ("n", tokens.to_string()),
+                    ("output_len", out.len().to_string()),
+                ],
+            )?;
+            out
+        } else {
+            engine.delta_persistent(&qkv, &a, &a, &al, &al)?
+        };
         let mut graph = engine.finish()?;
         engine.run(&mut graph)?;
         Ok(Self {

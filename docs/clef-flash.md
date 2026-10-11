@@ -15,8 +15,8 @@ BF16 passes the eight-case independent text/image/video corpus with identical
 winners, maximum probability error 0.002057 (limit 0.003), and exact changed-input replay. Reference
 fixtures and their environment manifest are in `tests/fixtures/flash/`.
 All three Flash JevBench runs and their warm-cache repeats are complete. The
-six-configuration context/workflow matrix is running; full qualification remains
-pending. Flash BF16 has passed the complete 64k ladder and exact long/short replay.
+six-configuration 64k context matrix has passed, including exact long/short
+replay and all retrieval answers. Full WorkflowEvals qualification remains pending.
 
 ## JevBench results
 
@@ -180,10 +180,27 @@ CLEF_BENCH_LENGTHS=235,620 python3 scripts/bench_workload.py flash-tiled-baselin
 
 ## Full context and workflow matrix
 
+Both models passed all six context lengths and exact long→short→long replay in
+all three precisions. Every one of the 48 requests answered all three retrieval
+questions correctly. The full-length results are:
+
+| Model | Precision | First 64k input tok/s | Repeated 64k input tok/s | Peak engine GiB |
+| --- | --- | ---: | ---: | ---: |
+| CLEF | BF16 | 95.21 | 92.15 | 66.09 |
+| CLEF | MLP INT4 | 89.86 | 87.26 | 42.08 |
+| CLEF | INT4 | 100.14 | 99.16 | 30.08 |
+| Flash | BF16 | 211.83 | 225.06 | 28.00 |
+| Flash | MLP INT4 | 253.87 | 249.18 | 21.47 |
+| Flash | INT4 | 238.64 | 245.24 | 19.68 |
+
+These are individual request measurements, including preparation and compilation,
+with model loading excluded because every 64k request follows shorter requests.
+INT4 is not uniformly faster at long context. This synthetic retrieval check
+qualifies execution and state reset; WorkflowEvals measures a broader workload.
+
 Flash BF16 has executed every length through 65,536 tokens, without truncation,
 and answered all three beginning/middle/end retrieval questions correctly at
-each length. Long→short→long replay was exact. The broader six-configuration
-matrix remains in progress.
+each length. Long→short→long replay was exact. Its detailed ladder is:
 
 | Encoded tokens | Request wall seconds | Input tok/s | Peak engine GiB |
 | --- | ---: | ---: | ---: |

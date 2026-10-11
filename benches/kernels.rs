@@ -4,6 +4,9 @@ use std::time::{Duration, Instant};
 mod support;
 
 fn benches(c: &mut Criterion) {
+    if std::env::var("CLEF_BENCH_MODEL").as_deref() == Ok("clef-flash") {
+        return;
+    }
     let mut group = c.benchmark_group("delta_prefill");
     group
         .sample_size(10)
@@ -48,9 +51,18 @@ fn paired(c: &mut Criterion) {
         })
         .unwrap_or(8);
     assert!((1..=300).contains(&measurement_seconds));
-    let mut group = c.benchmark_group("paired_delta_prefill");
+    let flash = std::env::var("CLEF_BENCH_MODEL").as_deref() == Ok("clef-flash");
+    let group_name = if flash {
+        "paired_flash_delta"
+    } else {
+        "paired_delta_prefill"
+    };
+    let mut group = c.benchmark_group(group_name);
     group
         .sample_size(40)
+        .confidence_level(0.99)
+        .significance_level(0.01)
+        .noise_threshold(0.03)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(measurement_seconds));
     let candidate_source = std::env::var_os("CLEF_BENCH_DELTA_SOURCE")
@@ -86,12 +98,33 @@ fn paired(c: &mut Criterion) {
             cases.push(("candidate", 4032));
         }
     }
+    if flash {
+        assert!(candidate_source.is_some() && prepare_source.is_none());
+        cases = std::env::var("CLEF_BENCH_LENGTHS")
+            .unwrap_or_else(|_| "1,65,127,128,158,235,260,620,1024,2048,4032".into())
+            .split(',')
+            .map(|n| ("candidate", n.parse().unwrap()))
+            .collect();
+    }
     for (name, tokens) in cases {
         let norm = name == "gated_norm";
-        let mut reference = if norm {
+        let mut reference = if flash {
+            if let Some(source) = &reference_source {
+                DeltaBenchmark::for_model_source(
+                    tokens,
+                    clef_hrx::ModelVariant::ClefFlash,
+                    source,
+                    8,
+                )
+            } else {
+                DeltaBenchmark::for_model(tokens, clef_hrx::ModelVariant::ClefFlash)
+            }
+        } else if norm {
             DeltaBenchmark::gated_norm(tokens, false)
-        } else if name == "candidate" && reference_source.is_some() {
-            DeltaBenchmark::persistent(tokens, reference_source.as_ref().unwrap(), 8)
+        } else if name == "candidate"
+            && let Some(source) = &reference_source
+        {
+            DeltaBenchmark::persistent(tokens, source, 8)
         } else if matches!(name, "prepared" | "candidate") {
             DeltaBenchmark::resident(tokens)
         } else if name == "persistent" {
@@ -100,7 +133,14 @@ fn paired(c: &mut Criterion) {
             DeltaBenchmark::reference(tokens)
         }
         .unwrap();
-        let mut optimized = if norm {
+        let mut optimized = if flash {
+            DeltaBenchmark::for_model_source(
+                tokens,
+                clef_hrx::ModelVariant::ClefFlash,
+                candidate_source.as_ref().unwrap(),
+                values,
+            )
+        } else if norm {
             DeltaBenchmark::gated_norm(tokens, true)
         } else if name == "candidate" {
             if let Some(prepare_source) = &prepare_source {
@@ -131,7 +171,7 @@ fn paired(c: &mut Criterion) {
             allocated <= allocation_limit(),
             "combined old/new allocation exceeds budget"
         );
-        let (max_abs_error, identical) = {
+        let (max_abs_error, identical, reference_output, candidate_output) = {
             let before = reference.output().unwrap();
             let after = optimized.output().unwrap();
             assert_eq!(before.len(), after.len());
@@ -155,6 +195,8 @@ fn paired(c: &mut Criterion) {
                     .iter()
                     .zip(&after)
                     .all(|(a, b)| a.to_bits() == b.to_bits()),
+                before,
+                after,
             )
         };
         let mut samples = Vec::new();
@@ -193,7 +235,21 @@ fn paired(c: &mut Criterion) {
             reference.allocated_bytes() + optimized.allocated_bytes(),
             allocated
         );
-        let root = std::path::PathBuf::from("target/criterion/paired_delta_prefill")
+        for (actual, expected) in [
+            (reference.output().unwrap(), reference_output),
+            (optimized.output().unwrap(), candidate_output),
+        ] {
+            assert_eq!(actual.len(), expected.len());
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "DeltaNet output changed on replay"
+            );
+        }
+        let root = std::path::PathBuf::from("target/criterion")
+            .join(group_name)
             .join(name)
             .join(tokens.to_string());
         std::fs::create_dir_all(&root).unwrap();
