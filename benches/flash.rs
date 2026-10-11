@@ -37,8 +37,9 @@ fn flash(c: &mut Criterion) {
                 ("delta_qkv", 4096, 8192),
                 ("delta_z", 4096, 4096),
                 ("attention_q_gate", 4096, 8192),
-                ("kv_head", 4096, 1024),
+                ("kv", 4096, 1024),
                 ("delta_gate", 4096, 32),
+                ("head_memory", 4096, 1024),
                 ("joint_head", 1024, 1024),
             ] {
                 for (cache, bytes) in [("replay", 0), ("rotating", 64 << 20)] {
@@ -77,7 +78,11 @@ fn flash(c: &mut Criterion) {
                                 rows,
                                 k,
                                 n,
-                                GemmKernel::Auto,
+                                if matches!(role, "delta_gate" | "head_memory" | "joint_head") {
+                                    GemmKernel::Auto
+                                } else {
+                                    GemmKernel::Tiled
+                                },
                                 bytes,
                             )
                             .unwrap();

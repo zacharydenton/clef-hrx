@@ -139,7 +139,15 @@ def main():
                 complete = result.returncode == 0
                 if complete and suite == "workflowevals":
                     report = json.loads((destination / "summary.json").read_text())
-                    complete = report["complete"] and not report["limited_smoke_run"]
+                    job["failed_cases"] = sum(
+                        workflow["failed_cases"]
+                        for workflow in report["workflows"].values()
+                    )
+                    complete = (
+                        report["complete"]
+                        and not report["limited_smoke_run"]
+                        and job["failed_cases"] == 0
+                    )
                 job.update(
                     state="complete" if complete else "failed",
                     exit_code=result.returncode,

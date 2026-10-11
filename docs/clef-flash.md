@@ -113,7 +113,10 @@ python3 scripts/qualify_corpus.py --model clef-flash --model-dir artifacts/model
 ```
 
 The BF16 reference tolerance stays 0.003. Initial INT4 differences are reported;
-all modes must produce valid probabilities and exact same-mode replay.
+all modes must produce valid probabilities and exact same-mode replay. The full
+corpus passed in every mode: maximum errors were 0.002057 BF16, 0.066974 MLP INT4
+and 0.261284 broader INT4, with unchanged winners and exact replay in all three.
+These eight cases complement the larger JevBench accuracy results above.
 
 ## Evaluations
 
@@ -154,11 +157,12 @@ SwiGLU, attention and persistent DeltaNet. It uses 99% intervals and a 3% noise
 threshold. Explicit lengths above 4,032 exercise attention and DeltaNet only, up
 to 65,536. Operator timings exclude allocation, compilation and upload; full-model
 evaluations include request preparation and compilation. GEMM operation rates are
-not model token throughput.
+not model token throughput. Backbone GEMMs use the production tiled layout;
+small gates and decision-head projections retain row-major weights.
 
-The GPU smoke sweep passed 144 cases at 128, 235, 620 and 4,032 tokens, including
+The GPU smoke sweep passed 152 cases at 128, 235, 620 and 4,032 tokens, including
 packing width 12,288 through the production selector. Artifacts:
-`benches/results/flash-support-smoke-fixed`. Smoke timings are not speed claims.
+`benches/results/flash-support-tiled-smoke`. Smoke timings are not speed claims.
 
 ## Full context and workflow matrix
 

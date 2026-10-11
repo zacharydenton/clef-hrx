@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 from bench_workload import hardware
@@ -110,6 +111,9 @@ def main():
                 "runner_sha256": hashlib.sha256(
                     Path(__file__).read_bytes()
                 ).hexdigest(),
+                "requests_sha256": hashlib.sha256(
+                    (args.output / "requests.jsonl").read_bytes()
+                ).hexdigest(),
                 "inspection": json.loads(
                     subprocess.check_output(common + ["inspect"], text=True)
                 ),
@@ -135,6 +139,17 @@ def main():
             text=True,
         )
         seen = {}
+        stop = threading.Event()
+
+        def monitor():
+            with (args.output / "telemetry.jsonl").open("w") as telemetry:
+                while not stop.is_set():
+                    telemetry.write(json.dumps(hardware()) + "\n")
+                    telemetry.flush()
+                    stop.wait(1)
+
+        telemetry = threading.Thread(target=monitor, daemon=True)
+        telemetry.start()
         try:
             for index, (tokens, request) in enumerate(requests):
                 before = hardware()
@@ -182,6 +197,8 @@ def main():
                 print(tokens, record["correct"], elapsed, flush=True)
                 assert exact, "long/short replay changed predictions"
         finally:
+            stop.set()
+            telemetry.join()
             process.stdin.close()
             try:
                 process.wait(timeout=15)
