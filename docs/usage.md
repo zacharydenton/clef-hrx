@@ -63,14 +63,13 @@ packing operations are fused, with a different FP32 RMS summation order and
 the original BF16 rounding boundary. Packed weights are
 prepared from the same pinned checkpoint, with no additional model download.
 
-Full JevBench measurements were 747 tok/s and 204/231 for MLP-only INT4,
-1,003–1,035 tok/s and 194/231 for broader INT4, and 519 tok/s and 202/231 in BF16.
-The [latest qualification](evaluation.md#parallel-reduction-and-input-normalization)
-uses the same binary for all modes. Both broader INT4 runs exceed 1,000 resident
-input tok/s, and the repeat reproduces every output exactly. Same-mode accuracy
-floors hold; probability drift and changed decisions relative to the prior
-baseline are recorded separately. BF16 outputs remain exact. Peak engine
-allocation is 14.08 GiB for broader INT4 and 23.96 GiB for MLP-only INT4.
+Full JevBench measurements were 847 tok/s and 204/231 for MLP-only INT4,
+1,032 tok/s and 194/231 for broader INT4, and 616 tok/s and 202/231 in BF16.
+The [latest qualification](evaluation.md#tiled-weight-layout) uses the same
+binary for all modes and reproduces every output of the prior runs exactly, so
+same-mode accuracy, probability drift and calibration are unchanged. Peak
+engine allocation is 13.88 GiB for broader INT4, 23.74 GiB for MLP-only INT4
+and 47.77 GiB for BF16.
 Fused RMS normalization and packing apply only to compatible INT4 projections
 at 128–4,032 rows; longer requests retain their prior path and the default
 context remains 65,536 tokens.
