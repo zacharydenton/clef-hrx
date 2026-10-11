@@ -14,35 +14,40 @@ The native limit remains 65,536 total encoded tokens, including schema and media
 BF16 passes the eight-case independent text/image/video corpus with identical
 winners, maximum probability error 0.002057 (limit 0.003), and exact changed-input replay. Reference
 fixtures and their environment manifest are in `tests/fixtures/flash/`.
-All three Flash JevBench runs are complete. WorkflowEvals and 64k execution
-qualification are pending.
+All three Flash JevBench runs and their warm-cache repeats are complete. The
+six-configuration context/workflow matrix is running; full qualification remains
+pending.
 
-## Initial JevBench results
+## JevBench results
 
 The complete 231-case public suite on gfx1151, using the same binary and input
 lengths in every mode:
 
-| Precision | Correct | Resident input tok/s | Peak engine GiB |
-| --- | ---: | ---: | ---: |
-| bf16 | 191/231 | 1,165.68 | 14.91 |
-| int4-mlp | 183/231 | 2,215.67 | 8.23 |
-| int4 | 165/231 | 2,518.98 | 5.50 |
+| Precision | Correct | First run tok/s | Warm repeat tok/s | Peak engine GiB |
+| --- | ---: | ---: | ---: | ---: |
+| bf16 | 191/231 | 1,165.68 | 1,793.70 | 14.91 |
+| int4-mlp | 183/231 | 2,215.67 | 2,260.76 | 8.23 |
+| int4 | 165/231 | 2,518.98 | 2,523.02 | 5.50 |
 
 Relative to Flash BF16, MLP INT4 gains three correct cases and loses eleven;
 broader INT4 gains thirteen and loses thirty-nine. Maximum probability changes
 are 0.7532 and 0.9068, respectively. These are explicit quantization tradeoffs,
 not numerical parity claims.
 
-All responses were strictly valid. Telemetry recorded at most one KFD client.
-These are initial runs; compilation is included, so the BF16 result includes
-first-use compilation for previously unseen Flash shapes. Warm-cache repeats
-will be reported separately. Only the first request containing model loading is
-excluded from resident throughput.
+All responses were strictly valid. Every probability was identical on repeat,
+and telemetry recorded at most one KFD client in each full run. Throughput counts
+resident input tokens, including encoding, preparation, compilation, GPU execution
+and readback. Only the first request containing model loading is excluded. The
+first BF16 run includes first-use compilation for previously unseen Flash shapes;
+the README uses the warm repeats. This is a cache effect with the same executable,
+not a kernel optimization.
 
 Implementation: `787b2bb`; evaluation tooling: `891353c`.
 Frozen executable SHA256:
 `3a430b14b418cb01c9f87aa9472848ee18a8f1ff773d2c8f745f9fa9521dd0d2`.
-Raw results: `tests/results/flash-support-baseline/clef-flash-{bf16,int4-mlp,int4}`.
+Raw results: `tests/results/flash-support-baseline/clef-flash-{bf16,int4-mlp,int4}`
+and `tests/results/flash-support-repeat/clef-flash-{bf16,int4-mlp,int4}`.
+Same-mode comparisons are in `artifacts/flash-qualification/flash-*-repeat-comparison.json`.
 
 
 ## Loading and storage
@@ -160,9 +165,18 @@ evaluations include request preparation and compilation. GEMM operation rates ar
 not model token throughput. Backbone GEMMs use the production tiled layout;
 small gates and decision-head projections retain row-major weights.
 
-The GPU smoke sweep passed 152 cases at 128, 235, 620 and 4,032 tokens, including
-packing width 12,288 through the production selector. Artifacts:
-`benches/results/flash-support-tiled-smoke`. Smoke timings are not speed claims.
+The full GPU smoke sweep passed 418 cases at all eleven default lengths from
+1 through 4,032 tokens, including packing width 12,288 through the production
+selector. Artifacts: `benches/results/flash-support-full-smoke`. Smoke timings are
+not speed claims.
+
+The measured 235/620-token baseline completed all 76 cases with 20 samples,
+99% intervals and a 3% noise threshold. Telemetry recorded one KFD client at most.
+Artifacts: `benches/results/flash-support-tiled-baseline`. Reproduce with:
+
+```sh
+CLEF_BENCH_LENGTHS=235,620 python3 scripts/bench_workload.py flash-tiled-baseline --suite flash
+```
 
 ## Full context and workflow matrix
 
@@ -180,7 +194,8 @@ python3 scripts/qualify_matrix.py --binary tests/results/flash-support-matrix/cl
   --output tests/results/flash-support-matrix --resume
 ```
 
-`status.json` distinguishes running, failed and completed jobs. Workflow runs
+`status.json` distinguishes running, failed and completed jobs. A lock rejects a
+second simultaneous resume of the same matrix. Workflow runs
 resume through case checkpoints. Failed context runs use fresh attempt
 directories. A changed binary, runner or configuration requires a new matrix.
 Completing this matrix can take many hours: the existing original CLEF invoice

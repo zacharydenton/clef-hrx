@@ -70,7 +70,7 @@ See [precision options](docs/usage.md#precision).
 
 ## Evaluation
 
-Full JevBench results on AMD Strix Halo, with the model already loaded:
+Original CLEF on full JevBench, AMD Strix Halo, with the model already loaded:
 
 | Runtime / mode | Full JevBench accuracy | Resident input tok/s |
 | --- | ---: | ---: |
@@ -85,6 +85,16 @@ BF16 is **1.79× faster** than llama.cpp HIP BF16. MLP-only INT4 is
 [llama.cpp comparison and reproduction](docs/llama-jevbench.md).
 
 [Results and reproduction](docs/evaluation.md#tiled-weight-layout).
+
+CLEF Flash on the same suite, with a warm kernel cache:
+
+| Mode | Full JevBench accuracy | Resident input tok/s |
+| --- | ---: | ---: |
+| BF16 | 191/231 (82.7%) | 1,794 |
+| INT4 MLP only | 183/231 (79.2%) | 2,261 |
+| INT4 backbone | 165/231 (71.4%) | 2,523 |
+
+[Flash results and reproduction](docs/clef-flash.md).
 [WorkflowEvals](docs/workflowevals.md) is still in progress.
 
 ## Library

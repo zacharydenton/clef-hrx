@@ -6,6 +6,7 @@ new attempt directories; successful jobs are never repeated on resume.
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
 import shutil
@@ -39,6 +40,12 @@ def main():
     p.add_argument("--resume", action="store_true")
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=args.resume)
+    # A second resume must not overwrite status or share the same GPU process logs.
+    lock = (args.output / "run.lock").open("a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        p.error("this qualification matrix is already running")
     binary = args.output / "clef"
     runners = {
         name: Path(__file__).with_name(f"{name}.py")
