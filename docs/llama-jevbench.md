@@ -3,6 +3,8 @@
 This comparison uses the published [ggml-org/Clef-GGUF](https://huggingface.co/ggml-org/Clef-GGUF)
 models on the same Ryzen AI MAX+ 395 / Radeon 8060S machine as clef-hrx.
 
+The longer-input comparison has a separate [WorkflowEvals runner and reproduction guide](llama-workflowevals.md).
+
 ## Results
 
 Measured on 11 October 2026. Each resident measurement covers the same 166,394
