@@ -301,11 +301,19 @@ impl Engine {
         let out = self.alloc(m, n, DType::Bf16)?;
         let mut spec = Specialization::new(symbol);
         let prefix = symbol.replacen('_', ".", 1);
+        #[cfg(feature = "bench-internals")]
+        let group_limit = if m > 4032 { self.bf16_m_group } else { 8 };
+        #[cfg(not(feature = "bench-internals"))]
+        let group_limit = 8usize;
+        ensure!(
+            (1..=16).contains(&group_limit),
+            "BF16 row group must be 1..=16"
+        );
         for (key, value) in [
             ("k_size", k),
             ("n_size", n),
             ("k_stride", x.cols),
-            ("m_group", 8.min(m.div_ceil(128))),
+            ("m_group", group_limit.min(m.div_ceil(128))),
             ("grid_x", n / 256),
             ("grid_y", m.div_ceil(128)),
         ] {

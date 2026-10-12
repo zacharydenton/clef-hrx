@@ -99,6 +99,8 @@ pub enum GemmKernel {
     Padded,
     /// Production path for backbone projections: weights in the on-disk tiled layout.
     Tiled,
+    /// Change long-context row grouping while preserving tiled operands and arithmetic.
+    TiledGroup(usize),
 }
 impl GemmBenchmark {
     pub fn allocated_bytes(&self) -> usize {
@@ -332,11 +334,15 @@ impl GemmBenchmark {
         bits: usize,
     ) -> Result<Self> {
         anyhow::ensure!(
-            (1..=4096).contains(&m) && (1..=17408).contains(&k) && (1..=17408).contains(&n),
+            (1..=65536).contains(&m) && (1..=17408).contains(&k) && (1..=17408).contains(&n),
             "unsupported GEMM benchmark shape"
         );
         let context = ModelContext::new(Default::default())?;
         let mut engine = Engine::new(&context)?;
+        if let GemmKernel::TiledGroup(group) = &kernel {
+            anyhow::ensure!((1..=16).contains(group));
+            engine.bf16_m_group = *group;
+        }
         let values = |len| {
             (0..len)
                 .map(|i| half::bf16::from_f32(gemm_value(i, bits)))
@@ -368,7 +374,7 @@ impl GemmBenchmark {
         let mut first_output = None;
         for _ in 0..copies {
             let mut w = engine.input(n, stride, DType::Bf16, bytemuck::cast_slice(&operands(n)))?;
-            if matches!(kernel, GemmKernel::Tiled) {
+            if matches!(kernel, GemmKernel::Tiled | GemmKernel::TiledGroup(_)) {
                 anyhow::ensure!(
                     n.is_multiple_of(256) && k.is_multiple_of(64),
                     "tiled layout needs 256-row and 64-column multiples"
@@ -378,7 +384,9 @@ impl GemmBenchmark {
                 w.layout = crate::gpu::Layout::Tiled;
             }
             let output = match kernel.clone() {
-                GemmKernel::Auto | GemmKernel::Tiled => engine.linear(&x, &w, None)?,
+                GemmKernel::Auto | GemmKernel::Tiled | GemmKernel::TiledGroup(_) => {
+                    engine.linear(&x, &w, None)?
+                }
                 GemmKernel::Reference => engine.linear_impl::<false>(&x, &w, None)?,
                 GemmKernel::Wide => engine.linear_impl::<true>(&x, &w, None)?,
                 GemmKernel::Pipelined => engine.linear_pipelined(&x, &w, None)?,

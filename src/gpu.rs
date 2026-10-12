@@ -120,6 +120,12 @@ pub(crate) struct Engine {
     pub prepared_delta_max: usize,
     #[cfg(feature = "bench-internals")]
     pub prepared_delta_v8_max: usize,
+    #[cfg(feature = "bench-internals")]
+    pub experimental_attention: Option<std::sync::Arc<str>>,
+    #[cfg(feature = "bench-internals")]
+    pub long_vector_delta: bool,
+    #[cfg(feature = "bench-internals")]
+    pub bf16_m_group: usize,
     stream: Stream,
     compiler: Compiler,
     compile_reports: Option<std::path::PathBuf>,
@@ -217,6 +223,22 @@ impl Engine {
                 .map(|value| value.parse::<usize>())
                 .transpose()?
                 .unwrap_or(0),
+            #[cfg(feature = "bench-internals")]
+            experimental_attention: std::env::var_os("CLEF_EXPERIMENT_ATTENTION_SOURCE")
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .map(|source| {
+                    format!("{}\n{source}", include_str!("../kernels/common.loom")).into()
+                }),
+            #[cfg(feature = "bench-internals")]
+            long_vector_delta: std::env::var("CLEF_EXPERIMENT_DELTA_VECTOR_LONG").as_deref()
+                == Ok("1"),
+            #[cfg(feature = "bench-internals")]
+            bf16_m_group: std::env::var("CLEF_EXPERIMENT_BF16_M_GROUP")
+                .ok()
+                .map(|value| value.parse())
+                .transpose()?
+                .unwrap_or(8),
             stream,
             compiler,
             compile_reports,

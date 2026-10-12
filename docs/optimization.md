@@ -1,5 +1,8 @@
 # Performance experiments
 
+For the 500 input tokens/s BF16 invoice target, see the
+[long-context experiments and reproduction](long-context-bf16.md).
+
 Optimize completed resident requests on the public JevBench suite. The target is
 1,000 **input tokens/second**, including encoding, graph preparation, compilation,
 GPU execution, and readback. Exclude only the first request, which includes model

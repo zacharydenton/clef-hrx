@@ -109,6 +109,13 @@ impl Engine {
             q.cols == heads * 256 && k.cols == kv_heads * 256,
             "tiled head dimensions"
         );
+        #[cfg(feature = "bench-internals")]
+        if causal
+            && q.rows >= 8192
+            && let Some(source) = self.experimental_attention.clone()
+        {
+            return self.attention_tiled_source(q, k, v, causal, &source);
+        }
         self.attention_tiled_source(
             q,
             k,
@@ -329,6 +336,10 @@ impl Engine {
             );
         }
         let out = self.alloc(n, a.cols * 128, DType::Bf16)?;
+        #[cfg(feature = "bench-internals")]
+        let long_vector = n > 4032 && self.long_vector_delta;
+        #[cfg(not(feature = "bench-internals"))]
+        let long_vector = false;
         // Qualified vector scheduling range; preserve the scalar implementation
         // for shorter inputs and long-context workloads outside this range.
         let (source, values_per_wave) = if a.cols == 32 {
@@ -347,7 +358,7 @@ impl Engine {
                 ),
                 16,
             )
-        } else if (1025..=4032).contains(&n) {
+        } else if (1025..=4032).contains(&n) || long_vector {
             (
                 concat!(
                     include_str!("../kernels/common.loom"),
@@ -902,6 +913,69 @@ mod tests {
                         "{variant} n={n}"
                     );
                 }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151; independent long causal shared-attention oracle and replay"]
+    fn shared_attention_context_oracle() -> Result<()> {
+        let source = if let Some(path) = std::env::var_os("CLEF_BENCH_ATTENTION_ORACLE_SOURCE") {
+            format!(
+                "{}\n{}",
+                include_str!("../kernels/common.loom"),
+                std::fs::read_to_string(path)?
+            )
+        } else {
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../benches/kernels/attention_shared.loom")
+            )
+            .to_owned()
+        };
+        for n in [65, 8191, 8192, 8193, 16385, 65536] {
+            let mut e = Engine::new(&hrx::inference::ModelContext::new(Default::default())?)?;
+            let q = e
+                .input(n + 1, 512, DType::Bf16, &vec![0; (n + 1) * 512 * 2])?
+                .slice_rows(1, n);
+            let k = e.input(n, 256, DType::Bf16, &vec![0; n * 256 * 2])?;
+            let row_value = |row: usize| match row {
+                0..32 => -0.5f64,
+                32..8192 => 0.25,
+                8192..16384 => -0.25,
+                _ => 0.5,
+            };
+            let channel_value = |col: usize| ((col % 256 % 9) as f64 - 4.) / 16.;
+            let values: Vec<_> = (0..(n + 1) * 256)
+                .map(|i| {
+                    half::bf16::from_f64(row_value((i / 256).saturating_sub(1)) + channel_value(i))
+                })
+                .collect();
+            let v = e
+                .input(n + 1, 256, DType::Bf16, bytemuck::cast_slice(&values))?
+                .slice_rows(1, n);
+            let output = e.attention_tiled_source(&q, &k, &v, true, &source)?;
+            let mut graph = e.finish()?;
+            let mut previous = None;
+            for _ in 0..2 {
+                e.run(&mut graph)?;
+                let actual = e.read_f32(&output)?;
+                let mut sum = 0.;
+                for (row, channels) in actual.chunks_exact(512).enumerate() {
+                    sum += row_value(row);
+                    for (col, &value) in channels.iter().enumerate() {
+                        let expected = sum / (row + 1) as f64 + channel_value(col);
+                        assert!(
+                            value.is_finite() && (f64::from(value) - expected).abs() <= 0.002,
+                            "n={n} row={row} col={col}: {value} != {expected}"
+                        );
+                    }
+                }
+                if let Some(previous) = &previous {
+                    assert_eq!(&actual, previous, "shared attention replay n={n}");
+                }
+                previous = Some(actual);
             }
         }
         Ok(())

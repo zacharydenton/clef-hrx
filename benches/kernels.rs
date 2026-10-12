@@ -105,10 +105,30 @@ fn paired(c: &mut Criterion) {
             .split(',')
             .map(|n| ("candidate", n.parse().unwrap()))
             .collect();
+    } else if candidate_source.is_some()
+        && let Ok(lengths) = std::env::var("CLEF_BENCH_LENGTHS")
+    {
+        let mut lengths: Vec<usize> = lengths.split(',').map(|n| n.parse().unwrap()).collect();
+        assert!(!lengths.is_empty() && lengths.len() <= 64);
+        assert!(lengths.iter().all(|n| (1..=65536).contains(n)));
+        assert!(prepare_source.is_none() || lengths.iter().all(|&n| n <= 4096));
+        lengths.sort_unstable();
+        lengths.dedup();
+        cases = lengths.into_iter().map(|n| ("candidate", n)).collect();
     }
     for (name, tokens) in cases {
         let norm = name == "gated_norm";
-        let mut reference = if flash {
+        let long = !flash && tokens > 4096;
+        let mut reference = if long {
+            DeltaBenchmark::for_model_source(
+                tokens,
+                clef_hrx::ModelVariant::Clef,
+                reference_source
+                    .as_deref()
+                    .unwrap_or(include_str!("../kernels/delta_persistent.loom")),
+                8,
+            )
+        } else if flash {
             if let Some(source) = &reference_source {
                 DeltaBenchmark::for_model_source(
                     tokens,
@@ -133,7 +153,14 @@ fn paired(c: &mut Criterion) {
             DeltaBenchmark::reference(tokens)
         }
         .unwrap();
-        let mut optimized = if flash {
+        let mut optimized = if long {
+            DeltaBenchmark::for_model_source(
+                tokens,
+                clef_hrx::ModelVariant::Clef,
+                candidate_source.as_ref().unwrap(),
+                values,
+            )
+        } else if flash {
             DeltaBenchmark::for_model_source(
                 tokens,
                 clef_hrx::ModelVariant::ClefFlash,
@@ -168,7 +195,12 @@ fn paired(c: &mut Criterion) {
         .unwrap();
         let allocated = reference.allocated_bytes() + optimized.allocated_bytes();
         assert!(
-            allocated <= allocation_limit(),
+            allocated
+                <= if long {
+                    8usize << 30
+                } else {
+                    allocation_limit()
+                },
             "combined old/new allocation exceeds budget"
         );
         let (max_abs_error, identical, reference_output, candidate_output) = {

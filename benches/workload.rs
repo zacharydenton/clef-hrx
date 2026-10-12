@@ -19,8 +19,8 @@ fn lengths() -> Vec<usize> {
         assert!(
             !values.is_empty()
                 && values.len() <= 64
-                && values.iter().all(|n| (1..=4032).contains(n)),
-            "CLEF_BENCH_LENGTHS supports 1–64 lengths in 1..=4032"
+                && values.iter().all(|n| (1..=65536).contains(n)),
+            "CLEF_BENCH_LENGTHS supports 1–64 lengths in 1..=65536"
         );
         values.sort_unstable();
         values.dedup();
@@ -34,6 +34,9 @@ fn lengths() -> Vec<usize> {
         "full" => vec![1, 65, 127, 128, 158, 235, 260, 620, 1024, 2048, 4032],
         other => panic!("unknown CLEF_BENCH_PROFILE: {other}"),
     }
+}
+fn short_lengths() -> Vec<usize> {
+    lengths().into_iter().filter(|&n| n <= 4032).collect()
 }
 fn configure(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
     group
@@ -77,7 +80,7 @@ fn gemm(c: &mut Criterion) {
     );
     let mut group = c.benchmark_group("workload_gemm");
     configure(&mut group);
-    for m in lengths() {
+    for m in short_lengths() {
         // All text projection families, plus the trained decision head.
         for (role, k, n) in [
             ("mlp_up_gate", 5120, 17408),
@@ -193,7 +196,7 @@ fn delta(c: &mut Criterion) {
         .unwrap_or(8);
     let mut group = c.benchmark_group("workload_delta");
     configure(&mut group);
-    for tokens in lengths() {
+    for tokens in short_lengths() {
         group.throughput(Throughput::Elements(tokens as u64));
         for name in ["chunked", "persistent"] {
             let mut graph = None;
@@ -302,6 +305,8 @@ fn paired_attention(c: &mut Criterion) {
         return;
     };
     let source = std::fs::read_to_string(path).unwrap();
+    let reference_source = std::env::var_os("CLEF_BENCH_ATTENTION_REFERENCE_SOURCE")
+        .map(|path| std::fs::read_to_string(path).unwrap());
     let mut group = c.benchmark_group("paired_attention");
     configure(&mut group);
     for tokens in lengths().into_iter().filter(|&n| n >= 1024) {
@@ -313,7 +318,11 @@ fn paired_attention(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("causal_24q_4kv_d256", tokens), |b| {
             let graphs = graphs.get_or_insert_with(|| {
                 let mut graphs = [
-                    AttentionBenchmark::integrated(tokens).unwrap(),
+                    if let Some(source) = &reference_source {
+                        AttentionBenchmark::new(tokens, Some(source)).unwrap()
+                    } else {
+                        AttentionBenchmark::integrated(tokens).unwrap()
+                    },
                     AttentionBenchmark::new(tokens, Some(&source)).unwrap(),
                 ];
                 for (i, graph) in graphs.iter_mut().enumerate() {
@@ -321,6 +330,15 @@ fn paired_attention(c: &mut Criterion) {
                     assert!(expected[i].iter().all(|x| x.is_finite()));
                 }
                 assert_eq!(expected[0].len(), expected[1].len());
+                let maximum_error = expected[0]
+                    .iter()
+                    .zip(&expected[1])
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0f32, f32::max);
+                assert!(
+                    maximum_error <= 0.008,
+                    "attention output error {maximum_error}"
+                );
                 graphs
             });
             b.iter_custom(|iterations| {
@@ -374,6 +392,7 @@ fn paired_attention(c: &mut Criterion) {
             };
             std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
                 "tokens": tokens, "maximum_error": maximum_error,
+                "reference_source": reference_source,
                 "bitwise_identical": bitwise_identical, "sample_size": 20,
                 "samples": samples, "measurement_samples": measured,
                 "note": "Two resident causal attention graphs with identical inputs; includes value packing. Numerical changes are reported, not qualified by timing; full evaluation is required.",
@@ -385,7 +404,7 @@ fn paired_attention(c: &mut Criterion) {
 fn swiglu(c: &mut Criterion) {
     let mut group = c.benchmark_group("paired_swiglu");
     configure(&mut group);
-    for rows in lengths() {
+    for rows in short_lengths() {
         let mut graph = None;
         let mut samples = Vec::new();
         let mut sequence = 0u64;
@@ -444,7 +463,7 @@ fn convolution(c: &mut Criterion) {
         .unwrap();
     let mut group = c.benchmark_group("paired_convolution");
     configure(&mut group);
-    for rows in lengths() {
+    for rows in short_lengths() {
         for (cache, rotating) in [("replay", false), ("rotating", true)] {
             if rotating && rows < 128 {
                 continue;
@@ -502,7 +521,7 @@ fn normalization_packing(c: &mut Criterion) {
     let source = std::fs::read_to_string(path).unwrap();
     let mut group = c.benchmark_group("paired_norm_packing");
     configure(&mut group);
-    for rows in lengths() {
+    for rows in short_lengths() {
         for (cache, rotating) in [("replay", false), ("rotating", true)] {
             if rotating && rows < 128 {
                 continue;
@@ -561,7 +580,7 @@ fn packing(c: &mut Criterion) {
         vec![5120, 6144, 8192]
     };
     for width in widths {
-        for rows in lengths() {
+        for rows in short_lengths() {
             let mut graph = None;
             let mut samples = Vec::new();
             let mut sequence = 0u64;
@@ -648,7 +667,13 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
         Some("reference") => GemmKernel::Reference,
         Some("pipelined") => GemmKernel::Pipelined,
         Some("tiled") => GemmKernel::Tiled,
-        _ => panic!("CLEF_BENCH_GEMM_CANDIDATE must be auto, wide, reference, pipelined or tiled"),
+        Some("tiled-group") => GemmKernel::TiledGroup(
+            std::env::var("CLEF_BENCH_GEMM_M_GROUP")
+                .expect("CLEF_BENCH_GEMM_M_GROUP required")
+                .parse()
+                .unwrap(),
+        ),
+        _ => panic!("unknown CLEF_BENCH_GEMM_CANDIDATE"),
     };
     let reference_source = std::env::var_os("CLEF_BENCH_INTEGER_REFERENCE_SOURCE")
         .map(|path| std::fs::read_to_string(path).unwrap())
@@ -697,7 +722,7 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
     };
     let mut group = c.benchmark_group(group_name);
     configure(&mut group);
-    for m in lengths() {
+    for m in lengths().into_iter().filter(|&n| !integer || n <= 4032) {
         for (role, k, n) in [
             ("mlp_up_gate", 5120, 17408),
             ("mlp_down", 17408, 5120),

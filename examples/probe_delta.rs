@@ -9,22 +9,46 @@ struct Args {
     values: usize,
     #[arg(long, default_value_t = 10)]
     rounds: usize,
+    /// Compare against production selection, including the long-context scalar kernel.
+    #[arg(long)]
+    integrated_reference: bool,
+    #[arg(long, default_value_t = 0.002)]
+    max_error: f32,
     source: PathBuf,
 }
 fn main() -> Result<()> {
     let a = Args::parse();
     anyhow::ensure!(a.rounds > 0, "rounds must be positive");
-    let mut baseline = DeltaBenchmark::new(a.tokens, true)?;
+    anyhow::ensure!(a.max_error.is_finite() && a.max_error >= 0.);
+    let mut baseline = if a.integrated_reference {
+        DeltaBenchmark::for_model(a.tokens, clef_hrx::ModelVariant::Clef)?
+    } else {
+        DeltaBenchmark::new(a.tokens, true)?
+    };
     let expected = baseline.output()?;
-    let mut candidate =
-        DeltaBenchmark::persistent(a.tokens, &std::fs::read_to_string(&a.source)?, a.values)?;
+    anyhow::ensure!(
+        expected.iter().all(|v| v.is_finite()),
+        "nonfinite reference"
+    );
+    let source = std::fs::read_to_string(&a.source)?;
+    let mut candidate = if a.integrated_reference {
+        DeltaBenchmark::for_model_source(a.tokens, clef_hrx::ModelVariant::Clef, &source, a.values)?
+    } else {
+        DeltaBenchmark::persistent(a.tokens, &source, a.values)?
+    };
     let actual = candidate.output()?;
+    anyhow::ensure!(actual.len() == expected.len(), "output shape mismatch");
     let max_error = actual
         .iter()
         .zip(&expected)
         .map(|(a, b)| (a - b).abs())
         .fold(0f32, f32::max);
     anyhow::ensure!(actual.iter().all(|v| v.is_finite()), "nonfinite output");
+    anyhow::ensure!(
+        max_error <= a.max_error,
+        "output error {max_error} exceeds {}",
+        a.max_error
+    );
     let mut samples = [Vec::new(), Vec::new()];
     for round in 0..a.rounds {
         for i in [round % 2, 1 - round % 2] {

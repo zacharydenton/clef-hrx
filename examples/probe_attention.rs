@@ -7,22 +7,64 @@ struct Args {
     tokens: usize,
     #[arg(long, default_value_t = 10)]
     rounds: usize,
+    /// Compare with the production attention selector instead of the scalar oracle.
+    #[arg(long)]
+    integrated_reference: bool,
+    /// Specialize and report compiler resources without opening the GPU.
+    #[arg(long)]
+    compile_only: bool,
+    #[arg(long, default_value_t = 0.008)]
+    max_error: f32,
     source: PathBuf,
 }
 fn main() -> Result<()> {
     let a = Args::parse();
     anyhow::ensure!(a.rounds > 0, "rounds must be positive");
-    let mut baseline = AttentionBenchmark::new(a.tokens, None)?;
+    anyhow::ensure!(a.max_error.is_finite() && a.max_error >= 0.);
+    let source = std::fs::read_to_string(&a.source)?;
+    if a.compile_only {
+        let compiler = hrx::loom::Compiler::resolve(None)?;
+        let mut spec = hrx::loom::Specialization::new("clef_op");
+        for (key, value) in [
+            ("heads", "24"),
+            ("ratio", "6"),
+            ("qw", "6144"),
+            ("kw", "1024"),
+            ("scale", "6.25e-2"),
+            ("causal", "1"),
+        ] {
+            spec.set_config(format!("clef.{key}"), value);
+        }
+        spec.set_report(hrx::loom::ReportMode::Details);
+        let source = format!("{}\n{source}", include_str!("../kernels/common.loom"));
+        let artifact = compiler.module(&source).compile(&spec)?;
+        println!("{}", serde_json::to_string_pretty(&artifact.report())?);
+        return Ok(());
+    }
+    let mut baseline = if a.integrated_reference {
+        AttentionBenchmark::integrated(a.tokens)?
+    } else {
+        AttentionBenchmark::new(a.tokens, None)?
+    };
     let expected = baseline.output()?;
-    let mut candidate =
-        AttentionBenchmark::new(a.tokens, Some(&std::fs::read_to_string(&a.source)?))?;
+    anyhow::ensure!(
+        expected.iter().all(|v| v.is_finite()),
+        "nonfinite reference"
+    );
+    let mut candidate = AttentionBenchmark::new(a.tokens, Some(&source))?;
     let actual = candidate.output()?;
+    anyhow::ensure!(actual.len() == expected.len(), "output shape mismatch");
     let max_error = actual
         .iter()
         .zip(&expected)
         .map(|(a, b)| (a - b).abs())
         .fold(0f32, f32::max);
     anyhow::ensure!(actual.iter().all(|v| v.is_finite()), "nonfinite output");
+    anyhow::ensure!(
+        max_error <= a.max_error,
+        "output error {max_error} exceeds {}",
+        a.max_error
+    );
     let mut samples = [Vec::new(), Vec::new()];
     for round in 0..a.rounds {
         for i in [round % 2, 1 - round % 2] {
