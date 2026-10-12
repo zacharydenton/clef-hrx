@@ -13,6 +13,20 @@ pub use convolution::ConvolutionBenchmark;
 pub use normalization_packing::NormPackingBenchmark;
 pub use quantized::PackingBenchmark;
 
+#[cfg(test)]
+mod memory_tests {
+    #[test]
+    fn oversized_packed_fixture_is_rejected_before_opening_a_gpu() {
+        let result =
+            super::GemmBenchmark::packed_integer(65536, 5120, 17408, "", 4, true, 64 << 20);
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("oversized fixture was admitted"),
+        };
+        assert!(error.to_string().contains("allocation budget"));
+    }
+}
+
 /// CPU-only cache-hit work with the same source/configuration in both maps.
 pub struct KernelCacheKeyBenchmark {
     source: String,
@@ -182,7 +196,7 @@ impl GemmBenchmark {
             (1..=16).contains(&group_limit)
                 && [4, 8].contains(&bits)
                 && (bits != 4 || k.is_multiple_of(128))
-                && (1..=4096).contains(&m)
+                && (1..=65536).contains(&m)
                 && (64..=17408).contains(&k)
                 && k.is_multiple_of(64)
                 && (128..=17408).contains(&n)
@@ -194,8 +208,6 @@ impl GemmBenchmark {
             .then(|| std::env::var("CLEF_BENCH_INTEGER_REFERENCE_RESIDUAL_EXPORT").ok())
             .flatten();
         let fuse_residual = residual == Some(true) || reference_fused_export.is_some();
-        let context = ModelContext::new(Default::default())?;
-        let mut engine = Engine::new(&context)?;
         let stride = k + if padded && k.is_multiple_of(1024) {
             512 / bits
         } else {
@@ -203,6 +215,25 @@ impl GemmBenchmark {
         };
         let per_word = 32 / bits;
         let row_bytes = stride * bits / 8;
+        let copies = minimum_weight_bytes.div_ceil(n * row_bytes).max(1);
+        // Bound both original and tiled weights, every rotating output, and
+        // residual intermediates before allocating host fixtures or GPU buffers.
+        // Include headroom for allocator granularity and temporary workspaces.
+        let output_bytes = m * n * 2;
+        let allocation_bound = m * row_bytes
+            + (m + n) * 4
+            + usize::from(residual.is_some()) * output_bytes
+            + copies
+                * (n * row_bytes
+                    + n * k * bits / 8
+                    + output_bytes * if residual == Some(false) { 2 } else { 1 })
+            + (16 << 20);
+        anyhow::ensure!(
+            allocation_bound <= 1 << 30,
+            "packed integer benchmark exceeds 1 GiB allocation budget ({allocation_bound} bytes)"
+        );
+        let context = ModelContext::new(Default::default())?;
+        let mut engine = Engine::new(&context)?;
         let scale = 1.0 / (1usize << (bits - 1)) as f32;
         let varying_scales = std::env::var("CLEF_BENCH_INTEGER_ROW_SCALES").as_deref() == Ok("1");
         let scales = |rows, factor, zero_period| {
@@ -242,7 +273,6 @@ impl GemmBenchmark {
         } else {
             None
         };
-        let copies = minimum_weight_bytes.div_ceil(n * row_bytes).max(1);
         let mut graphs = Vec::with_capacity(copies);
         let mut first_output = None;
         for _ in 0..copies {

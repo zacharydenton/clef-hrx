@@ -2,6 +2,12 @@
 
 For the 500 input tokens/s BF16 invoice target, see the
 [long-context experiments and reproduction](long-context-bf16.md).
+For the optimized INT4 profile and BF16/FP16 attention comparison, see
+[attention precision experiments](attention-precision.md).
+For the long-invoice INT4 matrix-multiply sweep, see
+[long-context INT4 benchmarks](long-context-int4.md).
+For subsequent attention tiling and prefetch results, see
+[attention kernel tuning](attention-kernel-tuning.md).
 
 Optimize completed resident requests on the public JevBench suite. The target is
 1,000 **input tokens/second**, including encoding, graph preparation, compilation,
@@ -374,7 +380,9 @@ For alternating-order integer comparisons, select `paired_integer_gemm` and set
 `CLEF_BENCH_INTEGER_PADDED`. It keeps the current and candidate kernels resident
 with separate identical operands, checks exact output bits, and records raw
 paired batches and 99% bootstrap intervals. Rotating cases allocate at least
-64 MiB of weights per variant; combined engine allocation is capped at 1 GiB.
+64 MiB of weights per variant. Each integer fixture checks a conservative
+1 GiB allocation bound before opening a GPU or allocating inputs; combined
+engine allocation is capped at 2 GiB. BF16 pairs retain their 1 GiB cap.
 This group times prepacked operands only. Set
 `CLEF_BENCH_INTEGER_ROW_SCALES=1` for an additional correctness sweep with distinct,
 nonuniform FP32 input/weight row scales and zero-scale rows. Use that flag with
@@ -387,8 +395,10 @@ chooses the reference dispatch (`auto` by default). Use `wide` to reproduce the
 older K/V path after a production dispatch change. Both paired GEMM groups
 retain raw timing batches and 99% bootstrap speedup intervals.
 `CLEF_BENCH_LENGTHS=257,384,513,640,769,896` overrides the quick/full row sweep
-in the workload suite with up to 64 comma-separated lengths in 1–4,032.
-Values are sorted and deduplicated. For example:
+in the workload suite with up to 64 comma-separated lengths in 1–65,536.
+Values are sorted and deduplicated. Individual groups retain their shape and
+allocation limits; paired integer GEMM now includes long lengths instead of
+silently filtering them out. For example:
 
 ```sh
 CLEF_BENCH_INTEGER_SOURCE=artifacts/throughput-1000/gemm-integer-epilogue-unroll.loom \

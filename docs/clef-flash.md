@@ -21,8 +21,13 @@ replay and all retrieval answers. All three Flash modes have completed the full
 [workflow results](workflowevals.md#flash-full-suite-results). Original CLEF's
 WorkflowEvals runs remain in progress.
 
-The newer shared-memory attention kernel is undergoing separate
-[Flash long-context qualification](flash-long-context.md).
+The shared-memory attention kernel is now the default for Flash BF16 at 8k–64k,
+after complete [long-context qualification](flash-long-context.md). It measures
+1,556.96 resident input tokens/s on the full workflow suite, 2.93× the original
+530.54 result, with unchanged accuracy metrics.
+Broader INT4 uses a separately qualified 16-key kernel, measuring **1,847.81
+tokens/s** (3.10×) with all 1,294 predictions and 1,524 workflow decisions exact.
+See [INT4 qualification and reproduction](attention-kernel-tuning.md#model-qualification).
 
 ## JevBench results
 

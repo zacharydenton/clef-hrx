@@ -12,6 +12,9 @@ struct Args {
     /// Compare with the production attention selector instead of the scalar oracle.
     #[arg(long)]
     integrated_reference: bool,
+    /// Compare with an explicit source, for example a former production kernel.
+    #[arg(long, conflicts_with = "integrated_reference")]
+    reference_source: Option<PathBuf>,
     /// Specialize and report compiler resources without opening the GPU.
     #[arg(long)]
     compile_only: bool,
@@ -50,7 +53,11 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&artifact.report())?);
         return Ok(());
     }
-    let mut baseline = AttentionBenchmark::for_model(a.tokens, a.model, a.integrated_reference)?;
+    let mut baseline = if let Some(path) = &a.reference_source {
+        AttentionBenchmark::source_for_model(a.tokens, a.model, &std::fs::read_to_string(path)?)?
+    } else {
+        AttentionBenchmark::for_model(a.tokens, a.model, a.integrated_reference)?
+    };
     let expected = baseline.output()?;
     anyhow::ensure!(
         expected.iter().all(|v| v.is_finite()),

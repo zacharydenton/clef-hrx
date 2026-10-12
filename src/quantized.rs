@@ -37,6 +37,20 @@ struct PreparedActivation {
     stride: usize,
 }
 impl QuantizedProjections {
+    pub(crate) fn is_bf16(&self) -> bool {
+        self.bits.is_none() && self.backbone_bits.is_none()
+    }
+
+    pub(crate) fn is_full_int4(&self) -> bool {
+        self.bits.is_none()
+            && self.backbone_bits == Some(4)
+            && self
+                .projections
+                .iter()
+                .map(String::as_str)
+                .eq(["up", "gate", "down"])
+    }
+
     pub(crate) fn for_precision(precision: Precision) -> Self {
         Self {
             bits: (precision == Precision::Int4Mlp).then_some(4),
@@ -775,6 +789,8 @@ mod tests {
             (Precision::Int4, Some(4), Some(4)),
         ] {
             let config = QuantizedProjections::for_precision(mode);
+            assert_eq!(config.is_bf16(), mode == Precision::Bf16);
+            assert_eq!(config.is_full_int4(), mode == Precision::Int4);
             assert_eq!(config.precision(mlp, 17408, 5120), mlp_bits);
             assert_eq!(config.precision(qkv, 10240, 5120), qkv_bits);
             assert_eq!(

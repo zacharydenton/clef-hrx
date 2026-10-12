@@ -734,7 +734,7 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
     };
     let mut group = c.benchmark_group(group_name);
     configure(&mut group);
-    for m in lengths().into_iter().filter(|&n| !integer || n <= 4032) {
+    for m in lengths() {
         for (role, k, n) in [
             ("mlp_up_gate", 5120, 17408),
             ("mlp_down", 17408, 5120),
@@ -798,8 +798,9 @@ fn paired_gemm(c: &mut Criterion, integer: bool) {
                             GemmBenchmark::with_working_set(m, k, n, bf16_candidate.clone(), minimum_bytes)
                         }.unwrap();
                         assert!(
-                            reference.allocated_bytes() + candidate.allocated_bytes() <= 1 << 30,
-                            "paired GEMM exceeds 1 GiB allocation budget"
+                            reference.allocated_bytes() + candidate.allocated_bytes()
+                                <= (if integer { 2 } else { 1 }) << 30,
+                            "paired GEMM exceeds allocation budget"
                         );
                         let output = reference.output().unwrap();
                         assert!(output.iter().all(|x| x.is_finite()));

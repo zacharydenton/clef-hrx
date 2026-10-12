@@ -1,7 +1,9 @@
 # CLEF through llama.cpp on WorkflowEvals
 
 The BF16 comparison is queued. There are no llama.cpp WorkflowEvals accuracy or
-throughput results yet. [JevBench measurements](llama-jevbench.md) cover shorter
+throughput results yet. A [Q4_K_M invoice pilot](attention-precision.md#llamacpp-q4-comparison)
+was stopped by the swap-pressure guard during loading, before any request completed.
+[JevBench measurements](llama-jevbench.md) cover shorter
 inputs and do not establish performance on this suite.
 
 The adapter uses the same pinned WorkflowEvals source, four datasets, 705 cases,

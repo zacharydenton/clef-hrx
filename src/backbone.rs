@@ -5,6 +5,37 @@ use crate::{
 use anyhow::ensure;
 use hrx::{Constants, loom::Specialization};
 
+fn qualified_shared_attention(
+    architecture: crate::architecture::Architecture,
+    quantized: &crate::quantized::QuantizedProjections,
+    tokens: usize,
+    heads: usize,
+    kv_heads: usize,
+    causal: bool,
+) -> Option<&'static str> {
+    if architecture != crate::ModelVariant::ClefFlash.architecture()
+        || !causal
+        || !(8192..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&tokens)
+        || heads != 16
+        || kv_heads != 4
+    {
+        return None;
+    }
+    if quantized.is_bf16() {
+        Some(concat!(
+            include_str!("../kernels/common.loom"),
+            include_str!("../kernels/attention_shared_bf16.loom")
+        ))
+    } else if quantized.is_full_int4() {
+        Some(concat!(
+            include_str!("../kernels/common.loom"),
+            include_str!("../kernels/attention_shared_k16.loom")
+        ))
+    } else {
+        None
+    }
+}
+
 impl Engine {
     /// Online softmax attention with bounded memory and tiled long-sequence execution.
     pub fn attention(
@@ -115,6 +146,16 @@ impl Engine {
             && let Some(source) = self.experimental_attention.clone()
         {
             return self.attention_tiled_source(q, k, v, causal, &source);
+        }
+        if let Some(source) = qualified_shared_attention(
+            self.architecture,
+            &self.quantized,
+            q.rows,
+            heads,
+            kv_heads,
+            causal,
+        ) {
+            return self.attention_tiled_source(q, k, v, causal, source);
         }
         self.attention_tiled_source(
             q,
@@ -705,6 +746,45 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn shared_attention_stays_within_qualified_model_precision_and_context() {
+        use crate::{ModelVariant, Precision, quantized::QuantizedProjections};
+        for model in [ModelVariant::Clef, ModelVariant::ClefFlash] {
+            for precision in [Precision::Bf16, Precision::Int4Mlp, Precision::Int4] {
+                let quantized = QuantizedProjections::for_precision(precision);
+                for tokens in [8191, 8192, 65536, 65537] {
+                    let selected = qualified_shared_attention(
+                        model.architecture(),
+                        &quantized,
+                        tokens,
+                        16,
+                        4,
+                        true,
+                    );
+                    assert_eq!(
+                        selected.is_some(),
+                        model == ModelVariant::ClefFlash
+                            && matches!(precision, Precision::Bf16 | Precision::Int4)
+                            && (8192..=65536).contains(&tokens),
+                    );
+                }
+                for (heads, kv_heads, causal) in [(16, 4, false), (24, 4, true), (16, 8, true)] {
+                    assert!(
+                        qualified_shared_attention(
+                            model.architecture(),
+                            &quantized,
+                            8192,
+                            heads,
+                            kv_heads,
+                            causal,
+                        )
+                        .is_none()
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     #[ignore = "requires gfx1151; checks causal history, row tails, slices, rounding and replay"]

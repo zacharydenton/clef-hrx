@@ -90,18 +90,20 @@ CLEF Flash with the model already loaded and a warm kernel cache for JevBench:
 
 | Mode | Full JevBench accuracy | JevBench input tok/s | WorkflowEvals input tok/s |
 | --- | ---: | ---: | ---: |
-| BF16 | 191/231 (82.7%) | 1,794 | 531 |
+| BF16 | 191/231 (82.7%) | 1,794 | 1,557 |
 | INT4 MLP only | 183/231 (79.2%) | 2,261 | 599 |
-| INT4 backbone | 165/231 (71.4%) | 2,523 | 596 |
+| INT4 backbone | 165/231 (71.4%) | 2,523 | 1,848 |
 
 [Flash results and reproduction](docs/clef-flash.md).
 WorkflowEvals rates cover [all 705 cases](docs/workflowevals.md#flash-full-suite-results)
 with the model already loaded; original CLEF runs are in progress.
 
-Experimental BF16 attention reaches **539 input tok/s for CLEF** and **1,597 for
-Flash** on a complete 30,342-token invoice with a shared GPU. Full-suite accuracy
+Flash's optimized attention gives **2.93× faster WorkflowEvals in BF16** and
+**3.10× in INT4**, with unchanged accuracy metrics. Original CLEF's experimental
+kernel reaches **539 tok/s** on a complete 30,342-token invoice; its full-suite
 qualification is pending. Results and reproduction:
-[CLEF](docs/long-context-bf16.md), [Flash](docs/flash-long-context.md).
+[CLEF](docs/long-context-bf16.md), [Flash BF16](docs/flash-long-context.md),
+[Flash INT4](docs/attention-kernel-tuning.md#model-qualification).
 
 ## Library
 

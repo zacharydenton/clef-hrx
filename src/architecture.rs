@@ -59,7 +59,7 @@ impl ModelVariant {
         }
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Architecture {
     pub layers: usize,
     pub hidden: usize,

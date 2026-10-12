@@ -119,28 +119,44 @@ the pinned model-generated references, not human-labelled question accuracy.
 
 | Precision | Resident input tok/s | Resident tokens | Resident seconds | Peak engine GiB |
 | --- | ---: | ---: | ---: | ---: |
-| BF16 | 530.54 | 6,439,577 | 12,137.78 | 37.31 |
+| BF16 | 1,556.96 | 6,439,577 | 4,135.98 | 37.31 |
 | MLP INT4 | 599.01 | 6,433,241 | 10,739.84 | 29.90 |
-| INT4 backbone | 596.09 | 6,428,896 | 10,785.08 | 29.98 |
+| INT4 backbone | 1,847.81 | 6,404,177 | 3,465.81 | 30.10 |
+
+BF16's shared attention gives a **2.93×** speedup over the original 530.54
+tokens/s, with unchanged accuracy metrics. Broader INT4's 16-key attention gives
+**3.10×**, with every native prediction and workflow decision identical to its
+original implementation. Both are selected by default at 8k–64k in their
+respective Flash precision modes. MLP-only INT4 retains its earlier attention
+path and measurement.
 
 MLP INT4 improves invoice primary-action agreement but lowers every other listed
 metric. Broader INT4 lowers customer-service agreement by 33.50 percentage points
-and invoice exact-action agreement by 24.44 points relative to BF16, while adding
-no measured throughput over MLP INT4 on this workload. BF16 remains the default.
+and invoice exact-action agreement by 24.44 points relative to BF16. These are
+quantization effects; BF16 remains the default precision.
 
 Each mode needed one capacity split; accepted inputs were never truncated.
-Telemetry recorded at most one KFD client throughout each run. The speeds use
-the native timing boundary above. Branches differ with model answers, so the
+The original runs and the new INT4 run recorded at most one KFD client; the
+optimized BF16 qualification shared the GPU. The speeds use the native timing
+boundary above. Branches differ with model answers, so the
 slightly different request mixes are not a paired kernel speedup experiment.
 These long workflow requests also differ from the shorter JevBench workload.
 
-Results are in
+Original baseline results are in
 `tests/results/flash-support-matrix/workflowevals-clef-flash-{bf16,int4-mlp,int4}`.
 All use Flash revision `8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3` and frozen
 executable SHA256
 `18b7de8cc007ad00149cae61084de29d0a596c92e3fe370b25b7a300190ba708`.
 The interrupted first BF16 attempt completed no requests or cases; its logs are
-retained and the full resumed run supplies all BF16 native timings here.
+retained.
+
+The current BF16 result is from `tests/results/flash-long-attention-20261012/`;
+see [its qualification and reproduction](flash-long-context.md). The current
+INT4 result is from `tests/results/attention-k16-qualification-20261012/`;
+see [its qualification and reproduction](attention-kernel-tuning.md#model-qualification).
+INT4 resumed after a pilot and excludes two model-loading requests. Its matched
+comparison uses the same 1,292 resident requests and 6,404,177 tokens in both
+runs: 595.95 versus 1,847.81 tokens/s. All 705 cases remain included in accuracy.
 
 Reproduce a full Flash run with the pinned environment above:
 
