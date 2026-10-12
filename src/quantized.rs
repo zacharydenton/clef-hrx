@@ -103,6 +103,14 @@ impl QuantizedProjections {
             .then_some(self.backbone_bits)
             .flatten()
     }
+    pub(crate) fn resident_bytes(&self, name: &str, rows: usize, cols: usize) -> u64 {
+        let elements = rows as u64 * cols as u64;
+        match self.precision(name, rows, cols) {
+            // Retiled codes have no stride padding; one FP32 scale per row survives.
+            Some(bits) => elements * bits as u64 / 8 + rows as u64 * 4,
+            None => elements * 2,
+        }
+    }
     pub(crate) fn validate_loaded(&self) -> Result<()> {
         if self.bits.is_some() || self.backbone_bits.is_some() {
             ensure!(
@@ -711,6 +719,25 @@ fn prepare_normalized(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resident_storage_keeps_scales_and_original_precision_outside_backbone() {
+        let packing = QuantizedProjections::for_precision(Precision::Int4);
+        assert_eq!(
+            packing.resident_bytes(
+                "model.language_model.layers.0.mlp.up_proj.weight",
+                17408,
+                5120
+            ),
+            17408 * 5120 / 2 + 17408 * 4
+        );
+        for name in [
+            "model.visual.blocks.0.mlp.up_proj.weight",
+            "head.scorer.weight",
+        ] {
+            assert_eq!(packing.resident_bytes(name, 4096, 4096), 4096 * 4096 * 2);
+        }
+    }
 
     fn rotated(row: &[half::bf16]) -> Vec<f32> {
         let mut out: Vec<_> = row.iter().map(|x| x.to_f32()).collect();

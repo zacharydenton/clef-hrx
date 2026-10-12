@@ -105,8 +105,8 @@ impl ClefModel {
         let info = options.source.inspect()?;
         // Context capacity is not an allocation request. HRX enforces the budget
         // and Engine checks available RAM as actual request buffers are allocated.
-        let required =
-            info.resident_weight_bytes + options.source.model.architecture().workspace_estimate(0);
+        let required = crate::checkpoint::resident_weight_bytes(info.model, options.precision)?
+            + options.source.model.architecture().workspace_estimate(0);
         ensure!(
             required <= options.memory_budget_bytes as u64,
             "memory budget cannot fit weights and minimum workspace"

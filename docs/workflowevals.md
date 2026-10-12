@@ -73,6 +73,12 @@ The default 80 GiB model allocation budget includes weights and workspace. Run
 GPU jobs sequentially. The four workflows share one model process, one case runs
 at a time, and all questions in a fitting node are evaluated jointly.
 
+`--memory-gib` can lower the allocation budget for quantized runs. The loader's
+minimum-memory check uses packed weights and FP32 scales for the selected
+precision, retaining the original storage for vision and the decision head.
+Actual allocations still enforce the budget; leave separate headroom for the
+OS, loading and other GPU clients.
+
 For resumable GPU scheduling, add `--new-cases-per-workflow 1` to execute one
 additional case from each workflow's sorted full case list. Repeat with `--resume`
 and any positive batch size, or omit the batch option to finish every remaining

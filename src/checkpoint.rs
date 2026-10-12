@@ -335,6 +335,25 @@ struct Meta {
     shape: Vec<usize>,
     dtype: String,
 }
+/// Resident storage after optional packing; excludes host-backed embedding tables.
+pub(crate) fn resident_weight_bytes(
+    model: ModelVariant,
+    precision: crate::Precision,
+) -> Result<u64> {
+    let packing = crate::quantized::QuantizedProjections::for_precision(precision);
+    let mut bytes = 0;
+    for metadata in ["backbone_metadata.json", "joint_head_metadata.json"] {
+        let tensors: BTreeMap<String, Meta> = serde_json::from_str(model.reference(metadata))?;
+        for (name, tensor) in tensors {
+            if crate::embedding::TABLES.contains(&name.as_str()) {
+                continue;
+            }
+            let (rows, cols) = rows_cols(&tensor.shape);
+            bytes += packing.resident_bytes(&name, rows, cols);
+        }
+    }
+    Ok(bytes)
+}
 #[derive(Debug, Serialize)]
 pub struct Inspection {
     pub model: ModelVariant,
@@ -508,6 +527,48 @@ impl Checkpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resident_estimate_respects_precision_and_pinned_mlp_shapes() -> Result<()> {
+        for model in [ModelVariant::Clef, ModelVariant::ClefFlash] {
+            let source = Source {
+                model,
+                ..Default::default()
+            };
+            // Inspection reads pinned metadata; this check needs no model or GPU.
+            let index: Index =
+                serde_json::from_str(model.reference("model.safetensors.index.json"))?;
+            let head: BTreeMap<String, Meta> =
+                serde_json::from_str(model.reference("joint_head_metadata.json"))?;
+            let dense = index.metadata.total_size
+                + head
+                    .values()
+                    .map(|m| m.shape.iter().product::<usize>() as u64 * 2)
+                    .sum::<u64>()
+                - source.model.architecture().embedding_bytes();
+            assert_eq!(resident_weight_bytes(model, crate::Precision::Bf16)?, dense);
+            let arch = model.architecture();
+            let (hidden, intermediate, layers) = (
+                arch.hidden as u64,
+                arch.intermediate as u64,
+                arch.layers as u64,
+            );
+            let mlp_elements = 3 * layers * hidden * intermediate;
+            let mlp_scales = layers * (2 * intermediate + hidden) * 4;
+            let mlp = resident_weight_bytes(model, crate::Precision::Int4Mlp)?;
+            assert_eq!(mlp, dense - mlp_elements * 3 / 2 + mlp_scales);
+            let broader = resident_weight_bytes(model, crate::Precision::Int4)?;
+            assert!(broader < mlp && mlp < dense);
+            // Regression: CLEF INT4 must pass the 40 GiB admission that BF16 rejects.
+            if model == ModelVariant::Clef {
+                let workspace = arch.workspace_estimate(0);
+                assert!(dense + workspace > 40 << 30);
+                assert!(broader + workspace < 40 << 30);
+                assert!(mlp + workspace < 48 << 30);
+            }
+        }
+        Ok(())
+    }
 
     fn position(cols: usize, n: usize, k: usize) -> usize {
         (((n / TILE_ROWS) * (cols / TILE_COLS) + k / TILE_COLS) * TILE_ROWS + n % TILE_ROWS)
