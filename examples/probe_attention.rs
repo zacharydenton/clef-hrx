@@ -3,6 +3,8 @@ use clef_hrx::{Result, benchmarking::AttentionBenchmark};
 use std::{path::PathBuf, time::Instant};
 #[derive(Parser)]
 struct Args {
+    #[arg(long, value_enum, default_value_t = clef_hrx::ModelVariant::Clef)]
+    model: clef_hrx::ModelVariant,
     #[arg(long, default_value_t = 256)]
     tokens: usize,
     #[arg(long, default_value_t = 10)]
@@ -25,10 +27,17 @@ fn main() -> Result<()> {
     if a.compile_only {
         let compiler = hrx::loom::Compiler::resolve(None)?;
         let mut spec = hrx::loom::Specialization::new("clef_op");
+        let heads = match a.model {
+            clef_hrx::ModelVariant::Clef => 24,
+            clef_hrx::ModelVariant::ClefFlash => 16,
+        };
+        let heads_text = heads.to_string();
+        let ratio = (heads / 4).to_string();
+        let qw = (heads * 256).to_string();
         for (key, value) in [
-            ("heads", "24"),
-            ("ratio", "6"),
-            ("qw", "6144"),
+            ("heads", heads_text.as_str()),
+            ("ratio", ratio.as_str()),
+            ("qw", qw.as_str()),
             ("kw", "1024"),
             ("scale", "6.25e-2"),
             ("causal", "1"),
@@ -41,17 +50,13 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&artifact.report())?);
         return Ok(());
     }
-    let mut baseline = if a.integrated_reference {
-        AttentionBenchmark::integrated(a.tokens)?
-    } else {
-        AttentionBenchmark::new(a.tokens, None)?
-    };
+    let mut baseline = AttentionBenchmark::for_model(a.tokens, a.model, a.integrated_reference)?;
     let expected = baseline.output()?;
     anyhow::ensure!(
         expected.iter().all(|v| v.is_finite()),
         "nonfinite reference"
     );
-    let mut candidate = AttentionBenchmark::new(a.tokens, Some(&source))?;
+    let mut candidate = AttentionBenchmark::source_for_model(a.tokens, a.model, &source)?;
     let actual = candidate.output()?;
     anyhow::ensure!(actual.len() == expected.len(), "output shape mismatch");
     let max_error = actual

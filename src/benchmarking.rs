@@ -452,6 +452,18 @@ impl AttentionBenchmark {
             model.architecture().attention_heads,
         )
     }
+    pub fn source_for_model(
+        tokens: usize,
+        model: crate::ModelVariant,
+        source: &str,
+    ) -> Result<Self> {
+        Self::build(
+            tokens,
+            Some(source),
+            false,
+            model.architecture().attention_heads,
+        )
+    }
     fn build(tokens: usize, source: Option<&str>, integrated: bool, heads: usize) -> Result<Self> {
         anyhow::ensure!(
             tokens > 0 && tokens <= crate::encoding::MAX_CONTEXT_TOKENS,
@@ -459,6 +471,9 @@ impl AttentionBenchmark {
         );
         let context = ModelContext::new(Default::default())?;
         let mut engine = Engine::new(&context)?;
+        // Model-level overrides must not replace an operator's production reference.
+        // Operator candidates are selected explicitly through `source` above.
+        engine.experimental_attention = None;
         let values = |len, factor| {
             (0..len)
                 .map(|i| half::bf16::from_f32(((i * factor % 251) as f32 - 125.) / 64.))

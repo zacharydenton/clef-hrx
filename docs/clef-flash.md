@@ -21,6 +21,9 @@ replay and all retrieval answers. All three Flash modes have completed the full
 [workflow results](workflowevals.md#flash-full-suite-results). Original CLEF's
 WorkflowEvals runs remain in progress.
 
+The newer shared-memory attention kernel is undergoing separate
+[Flash long-context qualification](flash-long-context.md).
+
 ## JevBench results
 
 The complete 231-case public suite on gfx1151, using the same binary and input

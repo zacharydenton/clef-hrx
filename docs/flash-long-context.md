@@ -1,0 +1,100 @@
+# Flash long-context attention
+
+This experiment applies the [shared-memory attention kernel](long-context-bf16.md)
+to CLEF Flash's 16 query heads and four KV heads. It uses the pinned Flash
+checkpoint and BF16 projections. Flash retains its existing DeltaNet kernel.
+Production dispatch is unchanged; the candidate requires `bench-internals` and an
+explicit source override.
+
+The qualification compares production attention against the single-component
+BF16 probability variant at 8,192, 16,384 and 30,342 tokens, with a separate
+65,536-token check. Each paired Criterion run alternates reference and candidate
+execution order. Full-model benchmarks rebuild the graph on every request and
+exclude initial model loading. Measurements share the GPU with another client.
+
+The full-model request is WorkflowEvals invoice `ap_00051`, with all 30,342 encoded
+tokens retained. A separate baseline run uses the same request, checkpoint and
+benchmark executable without the attention override. These repeated-invoice
+measurements are separate from aggregate WorkflowEvals throughput.
+
+## Reproduction
+
+Generate the candidate and benchmark Flash's actual head geometry:
+
+```sh
+python3 scripts/attention_probability_candidate.py \
+  --output artifacts/flash-attention-single.loom
+cargo build --release --locked --features bench-internals \
+  --bin clef --example probe_attention
+target/release/examples/probe_attention --model clef-flash \
+  --tokens 65536 --rounds 1 --integrated-reference \
+  artifacts/flash-attention-single.loom
+CLEF_BENCH_MODEL=clef-flash CLEF_BENCH_LENGTHS=8192,16384,30342 \
+CLEF_BENCH_ATTENTION_SOURCE=artifacts/flash-attention-single.loom \
+  python3 scripts/bench_workload.py flash-attention-repro --filter paired_attention
+```
+
+Operator references always use production dispatch, independently of model-level
+experiment environment variables. Candidate source selection is explicit. Both
+variants must produce finite outputs, pass the 0.008 maximum absolute difference
+check and reproduce their own outputs exactly. Model evaluations gate acceptance.
+
+Extract `request` for invoice `ap_00051` from the saved Flash baseline's
+`native-calls.jsonl` as one line in `requests.jsonl`. See the
+[WorkflowEvals adapter](workflowevals.md) to generate requests and reproduce the
+baseline. For the full-model benchmark:
+
+```sh
+CLEF_BENCH_MODEL=clef-flash CLEF_MODEL_DIR=artifacts/model-flash \
+CLEF_BENCH_FULL_MODEL=1 CLEF_BENCH_PRECISION=bf16 \
+CLEF_BENCH_REQUESTS=requests.jsonl \
+CLEF_BENCH_ATTENTION_SOURCE=artifacts/flash-attention-single.loom \
+CLEF_EXPERIMENT_ATTENTION_SOURCE=artifacts/flash-attention-single.loom \
+  python3 scripts/bench_workload.py flash-invoice-repro \
+    --suite workload_inference --filter rebuild_wall
+```
+
+Repeat with a distinct benchmark name and both attention-source variables unset
+to measure the existing production path. Criterion collects ten samples and a
+99% mean-latency confidence interval for each run. Operator speedup intervals use
+20 paired batches and 10,000 paired bootstrap resamples.
+
+Keep the candidate source and executable immutable during model evaluation:
+
+```sh
+export CLEF_EXPERIMENT_ATTENTION_SOURCE="$PWD/artifacts/flash-attention-single.loom"
+python3 scripts/eval_jevbench.py --binary target/release/clef \
+  --model clef-flash --model-dir artifacts/model-flash --precision bf16 \
+  --output tests/results/flash-attention-jevbench
+python3 scripts/qualify_context.py --binary target/release/clef \
+  --model clef-flash --model-dir artifacts/model-flash --precision bf16 \
+  --lengths 8192 32768 65536 --output tests/results/flash-attention-context
+artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals.py \
+  --binary target/release/clef --model clef-flash \
+  --model-dir artifacts/model-flash --precision bf16 \
+  --output tests/results/flash-attention-workflows
+python3 scripts/compare_jevbench.py \
+  tests/results/flash-support-baseline/clef-flash-bf16 \
+  tests/results/flash-attention-jevbench
+python3 scripts/compare_workflowevals.py \
+  tests/results/flash-support-matrix/workflowevals-clef-flash-bf16 \
+  tests/results/flash-attention-workflows
+unset CLEF_EXPERIMENT_ATTENTION_SOURCE
+```
+
+The JevBench floor is 191/231. WorkflowEvals must complete all 705 cases and
+preserve every consensus metric per workflow. Its references score action
+agreement, not human-labelled question accuracy. The context check requires
+15/15 retrieval answers and exact 8k/64k replays.
+
+## Run records
+
+Frozen inputs, hashes, telemetry and qualification state are under
+`tests/results/flash-long-attention-20261012/`. Original CLEF's evaluation was
+checkpointed after 35 completed cases to give Flash the owned GPU slot. The Flash
+supervisor resumes it automatically on completion or failure; the original
+six-mode matrix resumes after that evaluation finishes.
+
+An initial operator run inherited the model-level experiment override in its
+reference. That run is invalidated and excluded. The corrected reference ignores
+the override, and its measurements use the `flash-shared-attention-long-v2` name.

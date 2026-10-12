@@ -305,6 +305,18 @@ fn paired_attention(c: &mut Criterion) {
         return;
     };
     let source = std::fs::read_to_string(path).unwrap();
+    let model = match std::env::var("CLEF_BENCH_MODEL")
+        .as_deref()
+        .unwrap_or("clef")
+    {
+        "clef" => clef_hrx::ModelVariant::Clef,
+        "clef-flash" => clef_hrx::ModelVariant::ClefFlash,
+        other => panic!("unknown benchmark model {other}"),
+    };
+    let shape = match model {
+        clef_hrx::ModelVariant::Clef => "causal_24q_4kv_d256",
+        clef_hrx::ModelVariant::ClefFlash => "causal_16q_4kv_d256",
+    };
     let reference_source = std::env::var_os("CLEF_BENCH_ATTENTION_REFERENCE_SOURCE")
         .map(|path| std::fs::read_to_string(path).unwrap());
     let mut group = c.benchmark_group("paired_attention");
@@ -315,15 +327,15 @@ fn paired_attention(c: &mut Criterion) {
         let mut samples = Vec::new();
         let mut sequence = 0u64;
         group.throughput(Throughput::Elements(tokens as u64));
-        group.bench_function(BenchmarkId::new("causal_24q_4kv_d256", tokens), |b| {
+        group.bench_function(BenchmarkId::new(shape, tokens), |b| {
             let graphs = graphs.get_or_insert_with(|| {
                 let mut graphs = [
                     if let Some(source) = &reference_source {
-                        AttentionBenchmark::new(tokens, Some(source)).unwrap()
+                        AttentionBenchmark::source_for_model(tokens, model, source).unwrap()
                     } else {
-                        AttentionBenchmark::integrated(tokens).unwrap()
+                        AttentionBenchmark::for_model(tokens, model, true).unwrap()
                     },
-                    AttentionBenchmark::new(tokens, Some(&source)).unwrap(),
+                    AttentionBenchmark::source_for_model(tokens, model, &source).unwrap(),
                 ];
                 for (i, graph) in graphs.iter_mut().enumerate() {
                     expected[i] = graph.output().unwrap();
@@ -381,9 +393,9 @@ fn paired_attention(c: &mut Criterion) {
                 .iter()
                 .zip(&expected[1])
                 .all(|(a, b)| a.to_bits() == b.to_bits());
-            let root =
-                std::path::PathBuf::from("target/criterion/paired_attention/causal_24q_4kv_d256")
-                    .join(tokens.to_string());
+            let root = std::path::PathBuf::from("target/criterion/paired_attention")
+                .join(shape)
+                .join(tokens.to_string());
             std::fs::create_dir_all(&root).unwrap();
             let measured = if samples.len() >= 20 {
                 &samples[samples.len() - 20..]
@@ -391,7 +403,7 @@ fn paired_attention(c: &mut Criterion) {
                 &[]
             };
             std::fs::write(root.join("paired.json"), serde_json::to_vec_pretty(&serde_json::json!({
-                "tokens": tokens, "maximum_error": maximum_error,
+                "tokens": tokens, "shape": shape, "maximum_error": maximum_error,
                 "reference_source": reference_source,
                 "bitwise_identical": bitwise_identical, "sample_size": 20,
                 "samples": samples, "measurement_samples": measured,
