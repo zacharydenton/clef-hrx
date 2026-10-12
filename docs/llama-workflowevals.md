@@ -1,8 +1,11 @@
 # CLEF through llama.cpp on WorkflowEvals
 
-The BF16 comparison is queued. There are no llama.cpp WorkflowEvals accuracy or
-throughput results yet. A [Q4_K_M invoice pilot](attention-precision.md#llamacpp-q4-comparison)
-was stopped by the swap-pressure guard during loading, before any request completed.
+The Q4_K_M invoice pilot measures **202.81 resident input tokens/s** with exact
+replay. This is one complete invoice, not the 705-case WorkflowEvals suite.
+The BF16 comparison is held for input-serialization parity. The first
+[Q4_K_M invoice pilot](attention-precision.md#llamacpp-q4-comparison)
+was stopped by the swap-pressure guard during loading. A subsequent retry had
+enough memory and exposed the serialization difference described below.
 [JevBench measurements](llama-jevbench.md) cover shorter
 inputs and do not establish performance on this suite.
 
@@ -12,6 +15,54 @@ native llama.cpp `/v1/systemone` endpoint sequentially with one GPU slot. Every
 response must preserve the complete input-token count measured by the HRX CPU
 encoder. Native probabilities and expected scores reach the scorer without
 rounding or renormalization.
+
+## Q4 invoice result
+
+On October 13, 2026, the pinned Q4_K_M GGUF completed three executions of
+`ap_00051`, each containing all **30,342 input tokens**. The two resident calls
+contain 60,684 tokens and take **299.22 seconds**, or **202.81 tokens/s**. The
+first call is excluded. Server logs confirm zero cached prompt tokens on each
+execution; answers reproduce exactly. There are no transport errors or truncated
+inputs. Replaying the saved response through the pinned workflow matches
+consensus on all three policy action sets and primary actions; this single case
+does not establish suite accuracy.
+
+Telemetry recorded only the owned GPU process. Peak available-memory drop was
+**64.66 GiB** with a 20 GiB reserve, and the memory watchdog did not trigger.
+The unchanged 64k admission formula requires **224.92 GiB available** from this
+pilot's peak. The 64k run was therefore not launched. This is a conservative
+admission estimate, not a measured 64k allocation or proof that a differently
+configured implementation cannot fit.
+
+Records are in
+`tests/results/llama-q4-workflowevals-20261013/32k-canonical-pilot/`:
+`summary.json` contains throughput, `process.json` contains replay and memory
+checks, and `invoice-score.json` contains the three workflow decisions.
+The parent directory's `64k-admission.json` records the refused escalation.
+
+## Structured-state serialization
+
+The pinned llama.cpp Jinja renderer writes floating-point JSON values through a
+default C++ stream, using six significant digits and dropping integral `.0`
+suffixes. On invoice `ap_00051`, this changes the input from **30,342 to 30,308
+tokens**, including rounding `amount_vs_typical_ratio` from
+`2.901720335244817` to `2.90172`. The unmodified structured-state attempt was
+stopped before accepting a result.
+
+CLEF accepts state as either structured JSON or text. For a text-only comparison,
+serialize the state in advance with Python's compact, sorted, Unicode-preserving
+JSON format. The model then receives the same text as HRX. CPU encoding confirmed
+identical token IDs for the original request and its canonical-text version;
+simulating the C++ float formatting reproduced the exact 34-token discrepancy.
+Question schemas are preserved, and native model outputs are scored without
+adjustment.
+
+The evidence is in `artifacts/clef-comparisons-20261013/serialization-check.json`.
+The corrected Q4 pilot uses a separate output directory,
+`tests/results/llama-q4-workflowevals-20261013/32k-canonical-pilot/`.
+This text-only workaround does not establish parity for media requests or
+arbitrary structured question descriptions. The older BF16 queue is held until
+its requests preserve the same model inputs.
 
 ## Memory and scheduling
 
@@ -39,11 +90,10 @@ grows by more than 1 GiB, or monitoring fails. It cannot guarantee protection
 against an allocation spike between samples. Guard failures stop the run; they
 do not trigger retries, input truncation or an automatic precision change.
 
-The local queue is `artifacts/llama-workflowevals/run_queue.py`, with progress in
-`tests/results/llama-workflowevals-20261012/queue-status.json`. It waits for the
-Flash and CLEF candidate qualifications, then for the shared qualification lock
-and sufficient memory. It releases the lock while waiting for memory, allowing
-other qualification work to continue.
+The older local queue is `artifacts/llama-workflowevals/run_queue.py`. It was
+stopped before starting a server after the serialization discrepancy was found;
+the reason is recorded in
+`tests/results/llama-workflowevals-20261012/serialization-hold.json`.
 
 ## Reproduce
 
@@ -61,34 +111,37 @@ from pathlib import Path
 source = Path('tests/results/bf16-long-20261012/workflowevals/native-calls.jsonl')
 for line in source.open():
     call = json.loads(line)
-    if call['workflow'] == 'invoice_processing' and 30000 <= call['input_tokens'] <= 32768:
-        Path('artifacts/llama-workflowevals/invoice.json').write_text(json.dumps(call['request']) + '\n')
+    if (call['workflow'] == 'invoice_processing'
+            and call['request']['state']['case_id'] == 'ap_00051'):
+        assert call['input_tokens'] == 30342
+        request = call['request']
+        if not isinstance(request['state'], str):
+            request['state'] = json.dumps(request['state'], ensure_ascii=False,
+                                          sort_keys=True, separators=(',', ':'),
+                                          allow_nan=False)
+        Path('artifacts/llama-workflowevals/invoice.json').write_text(json.dumps(request) + '\n')
         break
 else:
-    raise SystemExit('No complete 30k–32k invoice request found')
+    raise SystemExit('No complete ap_00051 invoice request found')
 PY
 ```
 
-Run the pilot, then the full suite only after it succeeds:
+Run the Q4 pilot (substitute `Clef-BF16.gguf` for BF16):
 
 ```sh
 artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals_llama.py \
   --binary /home/zach/code/llama.cpp/build/bin/llama-server \
   --llama-source /home/zach/code/llama.cpp \
-  --model artifacts/llama-jevbench/gguf/Clef-BF16.gguf \
+  --model artifacts/llama-jevbench/gguf/Clef-Q4_K_M.gguf \
   --manifest artifacts/llama-jevbench/gguf/manifest.json \
-  --context 32768 \
+  --context 32768 --reserve-gib 20 \
   --smoke-request artifacts/llama-workflowevals/invoice.json \
-  --output tests/results/llama-workflowevals-pilot
-
-artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals_llama.py \
-  --binary /home/zach/code/llama.cpp/build/bin/llama-server \
-  --llama-source /home/zach/code/llama.cpp \
-  --model artifacts/llama-jevbench/gguf/Clef-BF16.gguf \
-  --manifest artifacts/llama-jevbench/gguf/manifest.json \
-  --pilot-output tests/results/llama-workflowevals-pilot \
-  --output tests/results/llama-workflowevals-bf16
+  --output tests/results/llama-workflowevals-q4-pilot
 ```
+
+Full-suite execution remains held: dynamic workflow requests need the same
+serialization correction, and 64k admission must pass using the pilot's measured
+memory use. The frozen runner still sends structured state during full suites.
 
 `--dry-run` validates inputs without starting a server. `--resume` requires the
 same manifest and keeps completed case checkpoints. Failed checkpoints remain

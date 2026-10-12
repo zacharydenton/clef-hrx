@@ -87,6 +87,12 @@ BF16 candidate measured 777.47 on the same requests; production attention measur
 between FP16 and shared BF16 does not establish an improvement. Seven invoices
 do not qualify the complete 705-case suite.
 
+A subsequent [16-key BF16 attention screen](attention-kernel-tuning.md#original-clef-int4-screen)
+preserves all seven invoices' logits, probabilities and policy decisions exactly,
+at 636.35 resident input tokens/s. It retains production's online-softmax update
+order and original DeltaNet path. It remains experimental pending full-suite
+qualification.
+
 ## llama.cpp Q4 comparison
 
 The Q4_K_M pilot used the pinned llama.cpp HIP build and GGUF from the
@@ -99,7 +105,10 @@ independently of the available-memory reserve. System and cgroup OOM-kill
 counters were zero when checked afterward.
 
 No request completed, so there is no Q4 throughput or accuracy result from this
-attempt. The 64k comparison was not launched. Preserve the failed pilot at
+attempt. A later canonical-text retry completed at **202.81 resident input
+tokens/s**, with exact replay; see the
+[Q4 invoice result](llama-workflowevals.md#q4-invoice-result). The 64k comparison
+remains held by memory admission. Preserve the failed pilot at
 `tests/results/attention-precision-20261012/llama-q4-32k/`; a later retry needs a
 fresh output directory and the same live memory guard. Admission based on GGUF
 file size alone did not establish safe loading under the observed host load.

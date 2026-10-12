@@ -20,6 +20,10 @@ probabilities to the original BF16 baseline. All five context requests at 8k,
 32k and 64k pass (15/15 retrieval answers), including exact 8k and 64k replays.
 The complete 705-case WorkflowEvals run is in progress in
 `tests/results/bf16-long-20261012/`. Full evaluation gates production promotion.
+The memory-guarded run resumed on October 13 from 89 completed invoices, using
+the same frozen executable, attention source and runner hashes. Its live state
+is in `guarded-resume-status.json` in that directory; the original production
+baseline matrix is queued afterward.
 
 The context checks measured 521.56 input tokens/s at 32,768 tokens and
 380.64/380.41 at 65,536 tokens, including preparation and readback. The 500

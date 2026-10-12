@@ -237,6 +237,42 @@ in the qualification directory.
 See [the full-suite instructions](workflowevals.md#flash-full-suite-results)
 to reproduce with `--model clef-flash --precision int4`.
 
+### Original CLEF INT4 screen
+
+On October 13, the same 16-key kernel completed the first seven original-CLEF
+invoices with broader INT4 projections and the original DeltaNet path. All seven
+native predictions, including logits and probabilities, match production
+exactly. All 21 policy decisions are unchanged: consensus agreement remains
+14/21 exact action sets and 18/21 primary actions.
+
+The six resident requests contain **164,064 tokens** and take **257.82 seconds**,
+or **636.35 input tokens/s**. The saved production run took 901.04 seconds on
+the same requests, or 182.08 tokens/s: a **3.49×** ratio. These are separate runs;
+the baseline shared the GPU, while this candidate recorded only its owned
+compute process. This seven-invoice result does not qualify the full suite or
+change original CLEF's default kernel.
+
+Peak engine allocation was **20.27 GiB** under a 40 GiB cap. Available host memory
+stayed above 90 GiB and swap usage did not grow. Records and the exact-output
+audit are in `tests/results/clef-k16-qualification-20261013/`; the audit is
+`pilot-audit.json`, with the frozen binary, source and runner hashes in
+`manifest.json`.
+
+To reproduce the screen with an experiment-enabled CLI and a fresh output:
+
+```sh
+cargo build --release --locked --features bench-internals --bin clef
+env -u CLEF_EXPERIMENT_DELTA_VECTOR_LONG \
+  CLEF_EXPERIMENT_ATTENTION_SOURCE="$PWD/kernels/attention_shared_k16.loom" \
+  artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals.py \
+    --binary target/release/clef --model clef --model-dir artifacts/model \
+    --precision int4 --memory-gib 40 --workflows invoice_processing \
+    --new-cases-per-workflow 7 --output tests/results/clef-k16-invoices-repro
+```
+
+Use the same live host-memory watchdog described below. The allocation cap
+alone does not enforce the host reserve or swap-growth stop.
+
 ## Reproduce
 
 Generate the reference and the two useful candidate changes:
