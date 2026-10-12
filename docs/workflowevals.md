@@ -97,8 +97,61 @@ includes preflight, question splitting and Python workflow execution. Report
 these timing boundaries separately; a kernel or native-call throughput figure
 is not the complete workflow's decision throughput.
 
-No full WorkflowEvals result has been qualified yet. The initial joint smoke run
-failed on schema capacity and is retained in
+## Flash full-suite results
+
+All three Flash modes completed all 705 cases and 1,524 policy decisions with
+zero execution failures. These are consensus action agreement scores against
+the pinned model-generated references, not human-labelled question accuracy.
+
+| Metric | BF16 | MLP INT4 | INT4 backbone |
+| --- | ---: | ---: | ---: |
+| Invoice exact actions (450 decisions) | 257/450 (57.11%) | 253/450 (56.22%) | 147/450 (32.67%) |
+| Invoice primary action (450) | 331/450 (73.56%) | 341/450 (75.78%) | 287/450 (63.78%) |
+| Customer service exact actions (612) | 469/612 (76.63%) | 435/612 (71.08%) | 264/612 (43.14%) |
+| Agent trace primary action (222) | 156/222 (70.27%) | 145/222 (65.32%) | 103/222 (46.40%) |
+| Security exact actions (240) | 147/240 (61.25%) | 144/240 (60.00%) | 140/240 (58.33%) |
+
+| Precision | Resident input tok/s | Resident tokens | Resident seconds | Peak engine GiB |
+| --- | ---: | ---: | ---: | ---: |
+| BF16 | 530.54 | 6,439,577 | 12,137.78 | 37.31 |
+| MLP INT4 | 599.01 | 6,433,241 | 10,739.84 | 29.90 |
+| INT4 backbone | 596.09 | 6,428,896 | 10,785.08 | 29.98 |
+
+MLP INT4 improves invoice primary-action agreement but lowers every other listed
+metric. Broader INT4 lowers customer-service agreement by 33.50 percentage points
+and invoice exact-action agreement by 24.44 points relative to BF16, while adding
+no measured throughput over MLP INT4 on this workload. BF16 remains the default.
+
+Each mode needed one capacity split; accepted inputs were never truncated.
+Telemetry recorded at most one KFD client throughout each run. The speeds use
+the native timing boundary above. Branches differ with model answers, so the
+slightly different request mixes are not a paired kernel speedup experiment.
+These long workflow requests also differ from the shorter JevBench workload.
+
+Results are in
+`tests/results/flash-support-matrix/workflowevals-clef-flash-{bf16,int4-mlp,int4}`.
+All use Flash revision `8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3` and frozen
+executable SHA256
+`18b7de8cc007ad00149cae61084de29d0a596c92e3fe370b25b7a300190ba708`.
+The interrupted first BF16 attempt completed no requests or cases; its logs are
+retained and the full resumed run supplies all BF16 native timings here.
+
+Reproduce a full Flash run with the pinned environment above:
+
+```sh
+artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals.py \
+  --binary target/release/clef --model clef-flash \
+  --model-dir artifacts/model-flash --precision bf16 \
+  --output tests/results/workflowevals-flash-bf16-repro
+```
+
+Repeat sequentially with `--precision int4-mlp` and `--precision int4`, using a
+fresh output directory each time. Original CLEF's three full runs remain in
+progress in the same matrix.
+
+## Earlier smoke runs
+
+The initial joint smoke run failed on schema capacity and is retained in
 `tests/results/workflowevals-bf16-smoke/`; it is not an accuracy result.
 
 ### First resumable 64k batch
@@ -146,7 +199,8 @@ binary, runner, precision, context limit and dataset pins when resuming.
 The current [six-configuration matrix](clef-flash.md#full-context-and-workflow-matrix)
 has completed actual 65,536-token inference for CLEF and Flash in all three
 precisions, with all retrieval answers correct and exact long/short replay.
-Its full 705-case WorkflowEvals runs are in progress. Inspect current case counts
+Its three Flash WorkflowEvals runs are complete; original CLEF runs are in
+progress. Inspect current case counts
 and request throughput with `python3 scripts/report_matrix.py tests/results/flash-support-matrix`.
 
 The 64k build passes GPU attention indexing checks with 65,536 query rows and

@@ -16,7 +16,10 @@ winners, maximum probability error 0.002057 (limit 0.003), and exact changed-inp
 fixtures and their environment manifest are in `tests/fixtures/flash/`.
 All three Flash JevBench runs and their warm-cache repeats are complete. The
 six-configuration 64k context matrix has passed, including exact long/short
-replay and all retrieval answers. Full WorkflowEvals qualification remains pending.
+replay and all retrieval answers. All three Flash modes have completed the full
+705-case WorkflowEvals suite without execution failures; see
+[workflow results](workflowevals.md#flash-full-suite-results). Original CLEF's
+WorkflowEvals runs remain in progress.
 
 ## JevBench results
 

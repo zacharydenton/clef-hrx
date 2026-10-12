@@ -95,7 +95,8 @@ CLEF Flash on the same suite, with a warm kernel cache:
 | INT4 backbone | 165/231 (71.4%) | 2,523 |
 
 [Flash results and reproduction](docs/clef-flash.md).
-[WorkflowEvals](docs/workflowevals.md) is still in progress.
+[Flash WorkflowEvals results](docs/workflowevals.md#flash-full-suite-results);
+original CLEF runs are in progress.
 
 ## Library
 
