@@ -86,17 +86,21 @@ BF16 is **1.79× faster** than llama.cpp HIP BF16. MLP-only INT4 is
 
 [Results and reproduction](docs/evaluation.md#tiled-weight-layout).
 
-CLEF Flash on the same suite, with a warm kernel cache:
+CLEF Flash with the model already loaded and a warm kernel cache for JevBench:
 
-| Mode | Full JevBench accuracy | Resident input tok/s |
-| --- | ---: | ---: |
-| BF16 | 191/231 (82.7%) | 1,794 |
-| INT4 MLP only | 183/231 (79.2%) | 2,261 |
-| INT4 backbone | 165/231 (71.4%) | 2,523 |
+| Mode | Full JevBench accuracy | JevBench input tok/s | WorkflowEvals input tok/s |
+| --- | ---: | ---: | ---: |
+| BF16 | 191/231 (82.7%) | 1,794 | 531 |
+| INT4 MLP only | 183/231 (79.2%) | 2,261 | 599 |
+| INT4 backbone | 165/231 (71.4%) | 2,523 | 596 |
 
 [Flash results and reproduction](docs/clef-flash.md).
-[Flash WorkflowEvals results](docs/workflowevals.md#flash-full-suite-results);
-original CLEF runs are in progress.
+WorkflowEvals rates cover [all 705 cases](docs/workflowevals.md#flash-full-suite-results)
+with the model already loaded; original CLEF runs are in progress.
+
+An experimental original CLEF BF16 kernel reaches **539 input tok/s** on a complete
+30,342-token invoice with a shared GPU. Full WorkflowEvals qualification is running.
+[Long-context results and reproduction](docs/long-context-bf16.md).
 
 ## Library
 

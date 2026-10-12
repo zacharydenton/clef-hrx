@@ -15,9 +15,15 @@ measurements of one complete invoice, not throughput across the full suite.
 
 Two preceding graph replays measured 557.62 tokens/s combined (560.76 and 554.51).
 Every selected answer matched the original result; maximum probability change
-was 0.008160 and replay was exact. Full JevBench is running, followed by 64k
-retrieval/replay checks and all 705 WorkflowEvals cases in
+was 0.008160 and replay was exact. Full JevBench passes at 202/231 with identical
+probabilities to the original BF16 baseline. All five context requests at 8k,
+32k and 64k pass (15/15 retrieval answers), including exact 8k and 64k replays.
+The complete 705-case WorkflowEvals run is in progress in
 `tests/results/bf16-long-20261012/`. Full evaluation gates production promotion.
+
+The context checks measured 521.56 input tokens/s at 32,768 tokens and
+380.64/380.41 at 65,536 tokens, including preparation and readback. The 500
+tokens/s result applies to the 30k invoice; it does not extend to 64k inputs.
 
 Measurements on October 12, 2026 share the gfx1151 GPU with an unrelated compute
 client. The first invoice experiment recorded up to three KFD clients; the paired
