@@ -6,6 +6,12 @@ checkpoint and BF16 projections. Flash retains its existing DeltaNet kernel.
 Production dispatch is unchanged; the candidate requires `bench-internals` and an
 explicit source override.
 
+The candidate measures **1,597.05 resident input tokens/s** on the complete
+30,342-token invoice. Ten graph-rebuild Criterion samples give a 99% interval of
+**1,490.91–1,689.51 tokens/s** and a mean latency of 19.00 seconds. Encoding,
+preparation, GPU execution and readback are included; model loading is excluded.
+The production baseline and full accuracy qualification are in progress.
+
 The qualification compares production attention against the single-component
 BF16 probability variant at 8,192, 16,384 and 30,342 tokens, with a separate
 65,536-token check. Each paired Criterion run alternates reference and candidate
@@ -16,6 +22,26 @@ The full-model request is WorkflowEvals invoice `ap_00051`, with all 30,342 enco
 tokens retained. A separate baseline run uses the same request, checkpoint and
 benchmark executable without the attention override. These repeated-invoice
 measurements are separate from aggregate WorkflowEvals throughput.
+
+## Operator results
+
+Measured on October 12, 2026 under shared GPU load:
+
+| Tokens | Existing attention | Candidate | Speedup | 99% paired interval |
+| ---: | ---: | ---: | ---: | ---: |
+| 8,192 | 168.17 ms | 27.29 ms | 6.16× | 6.11–6.22× |
+| 16,384 | 1,219.28 ms | 154.46 ms | 7.89× | 6.95–8.64× |
+| 30,342 | 6,282.63 ms | 542.24 ms | 11.59× | 10.61–12.69× |
+
+These include value packing and completion fences. Every candidate replay is
+exact; the maximum absolute output difference is 0.0078125 at each length.
+The full-model result above measures the complete network; operator speedups do
+not imply the same end-to-end speedup. Full accuracy qualification is in progress.
+
+The separate 65,536-token probe also passes the 0.008 error limit and exact
+candidate replay. Its one timing pair measured 34.90 seconds for existing
+attention and 3.84 seconds for the candidate; this is a correctness screen with
+a timing observation, not a repeated Criterion speedup estimate.
 
 ## Reproduction
 

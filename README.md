@@ -98,9 +98,10 @@ CLEF Flash with the model already loaded and a warm kernel cache for JevBench:
 WorkflowEvals rates cover [all 705 cases](docs/workflowevals.md#flash-full-suite-results)
 with the model already loaded; original CLEF runs are in progress.
 
-An experimental original CLEF BF16 kernel reaches **539 input tok/s** on a complete
-30,342-token invoice with a shared GPU. Full WorkflowEvals qualification is running.
-[Long-context results and reproduction](docs/long-context-bf16.md).
+Experimental BF16 attention reaches **539 input tok/s for CLEF** and **1,597 for
+Flash** on a complete 30,342-token invoice with a shared GPU. Full-suite accuracy
+qualification is pending. Results and reproduction:
+[CLEF](docs/long-context-bf16.md), [Flash](docs/flash-long-context.md).
 
 ## Library
 
