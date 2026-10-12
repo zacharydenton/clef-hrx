@@ -962,7 +962,7 @@ mod tests {
                 e.run(&mut graph)?;
                 let actual = e.read_f32(&output)?;
                 let mut sum = 0.;
-                for (row, channels) in actual.chunks_exact(512).enumerate() {
+                for (row, channels) in actual.as_chunks::<512>().0.iter().enumerate() {
                     sum += row_value(row);
                     for (col, &value) in channels.iter().enumerate() {
                         let expected = sum / (row + 1) as f64 + channel_value(col);

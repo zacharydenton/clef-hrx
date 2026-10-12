@@ -6,11 +6,17 @@ and the complete 30,342-token `ap_00051` request from WorkflowEvals. No input is
 truncated. Production dispatch is unchanged; experimental switches require
 `--features bench-internals`.
 
-The fastest candidate measured **557.62 resident input tokens/s** over two full
-invoice replays (560.76 and 554.51). Every selected answer matched the original
-result; maximum probability change was 0.008160 and replay was exact. This is a
-single repeated invoice. A ten-sample graph-rebuild benchmark, full JevBench,
-64k retrieval/replay checks and all 705 WorkflowEvals cases are queued in
+The fastest candidate measured **539.25 resident input tokens/s** across ten
+Criterion samples that rebuild the graph for every request. The 99% interval is
+**535.51–541.60 tokens/s**, above the 500 tokens/s target throughout. Each sample
+includes encoding, graph preparation, GPU execution and readback; initial model
+loading is excluded. Mean request time is 56.27 seconds. These are repeated
+measurements of one complete invoice, not throughput across the full suite.
+
+Two preceding graph replays measured 557.62 tokens/s combined (560.76 and 554.51).
+Every selected answer matched the original result; maximum probability change
+was 0.008160 and replay was exact. Full JevBench is running, followed by 64k
+retrieval/replay checks and all 705 WorkflowEvals cases in
 `tests/results/bf16-long-20261012/`. Full evaluation gates production promotion.
 
 Measurements on October 12, 2026 share the gfx1151 GPU with an unrelated compute
@@ -194,6 +200,10 @@ possible graphics workload. Omit the guard for intentionally shared-GPU runs.
   `attention-shared-single-padding/`: numerical ablation and subsequent exact layout comparison.
 - `artifacts/bf16-invoice-500/invoice-candidate-single/`: 557.62 tokens/s invoice
   measurements, complete predictions and shared-GPU telemetry.
+- `benches/results/bf16-long-invoice-rebuild/`: ten-sample full-model Criterion
+  benchmark, raw latency samples, source snapshots and telemetry.
+- `tests/results/bf16-long-20261012/throughput.json`: 539.25 tokens/s graph-rebuild
+  result and inverted 99% mean-latency confidence interval.
 - `tests/results/bf16-long-20261012/manifest.json` and `status.json`: frozen candidate,
   experiment environment, evaluation queue and completion state.
 
