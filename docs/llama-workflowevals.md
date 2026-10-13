@@ -2,7 +2,8 @@
 
 The Q4_K_M invoice pilot measures **202.81 resident input tokens/s** with exact
 replay. This is one complete invoice, not the 705-case WorkflowEvals suite.
-The BF16 comparison is held for input-serialization parity. The first
+Full-suite comparisons remain held for memory admission; a separate text-state
+adapter now addresses the serialization difference. The first
 [Q4_K_M invoice pilot](attention-precision.md#llamacpp-q4-comparison)
 was stopped by the swap-pressure guard during loading. A subsequent retry had
 enough memory and exposed the serialization difference described below.
@@ -61,8 +62,27 @@ The evidence is in `artifacts/clef-comparisons-20261013/serialization-check.json
 The corrected Q4 pilot uses a separate output directory,
 `tests/results/llama-q4-workflowevals-20261013/32k-canonical-pilot/`.
 This text-only workaround does not establish parity for media requests or
-arbitrary structured question descriptions. The older BF16 queue is held until
-its requests preserve the same model inputs.
+arbitrary structured question descriptions.
+
+`scripts/eval_workflowevals_llama_canonical.py` applies this transformation to
+every dynamic workflow request, including preflight. It reuses the frozen
+runner's guards, token-count checks and scorer. Its harness identity hashes both
+source files, so it requires a fresh pilot and cannot reuse an older runner's
+checkpoints. Both sources are archived with each new run.
+
+CPU checks on 12 saved requests across all four workflows, including the longest
+request from each, produce exactly the same token IDs before and after state
+serialization. The longest checked input is 61,580 tokens. Records are in
+`artifacts/remaining-comparisons-20261013/serialization-parity.json`. This verifies
+HRX input identity; the new adapter still needs a guarded llama.cpp pilot before
+a full-suite run.
+
+The current follow-up queue is
+`artifacts/remaining-comparisons-20261013/llama-queue.py`. It waits for the quant
+comparisons to finish and at least 93 GiB available before starting the fresh Q4
+pilot. That admission retains the observed footprint, a 24 GiB reserve and
+loading headroom. It attempts the 64k suite only if the pilot-based admission
+passes; a guard failure stops the queue without an automatic retry.
 
 ## Memory and scheduling
 
@@ -129,19 +149,21 @@ PY
 Run the Q4 pilot (substitute `Clef-BF16.gguf` for BF16):
 
 ```sh
-artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals_llama.py \
+artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals_llama_canonical.py \
   --binary /home/zach/code/llama.cpp/build/bin/llama-server \
   --llama-source /home/zach/code/llama.cpp \
   --model artifacts/llama-jevbench/gguf/Clef-Q4_K_M.gguf \
   --manifest artifacts/llama-jevbench/gguf/manifest.json \
-  --context 32768 --reserve-gib 20 \
+  --context 32768 --reserve-gib 24 \
   --smoke-request artifacts/llama-workflowevals/invoice.json \
   --output tests/results/llama-workflowevals-q4-pilot
 ```
 
-Full-suite execution remains held: dynamic workflow requests need the same
-serialization correction, and 64k admission must pass using the pilot's measured
-memory use. The frozen runner still sends structured state during full suites.
+Full-suite execution remains held until a fresh canonical-adapter pilot and
+64k memory admission pass. The earlier Q4 pilot used 64.66 GiB beyond its starting
+available memory, so schedule another 32k pilot only when that footprint plus the
+24 GiB reserve and loading headroom fit. The guard is retained; no full-suite
+speed or accuracy is claimed from the invoice pilot.
 
 `--dry-run` validates inputs without starting a server. `--resume` requires the
 same manifest and keeps completed case checkpoints. Failed checkpoints remain

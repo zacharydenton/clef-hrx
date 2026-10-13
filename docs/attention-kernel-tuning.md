@@ -258,6 +258,15 @@ audit are in `tests/results/clef-k16-qualification-20261013/`; the audit is
 `pilot-audit.json`, with the frozen binary, source and runner hashes in
 `manifest.json`.
 
+The original INT4 qualification has resumed from these seven invoice cases,
+using the same frozen binary, runner and attention source. The remaining three
+workflows are scheduled separately in `workflowevals-int4-other/` under the same
+parent result directory. Both parts must finish before reporting a 705-case
+result. The current supervisor is
+`artifacts/remaining-comparisons-20261013/run.py`; it enforces a 24 GiB host reserve
+and a 1 GiB swap-growth stop. MLP-only INT4 follows with its existing production
+kernels. The INT4 attention candidate remains opt-in during qualification.
+
 To reproduce the screen with an experiment-enabled CLI and a fresh output:
 
 ```sh
