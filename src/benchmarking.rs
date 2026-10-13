@@ -469,38 +469,35 @@ pub struct AttentionBenchmark {
 }
 impl AttentionBenchmark {
     pub fn new(tokens: usize, source: Option<&str>) -> Result<Self> {
-        Self::build(tokens, source, false, 24)
+        Self::build(tokens, source, false, crate::ModelVariant::Clef)
     }
     pub fn integrated(tokens: usize) -> Result<Self> {
-        Self::build(tokens, None, true, 24)
+        Self::build(tokens, None, true, crate::ModelVariant::Clef)
     }
     pub fn for_model(tokens: usize, model: crate::ModelVariant, integrated: bool) -> Result<Self> {
-        Self::build(
-            tokens,
-            None,
-            integrated,
-            model.architecture().attention_heads,
-        )
+        Self::build(tokens, None, integrated, model)
     }
     pub fn source_for_model(
         tokens: usize,
         model: crate::ModelVariant,
         source: &str,
     ) -> Result<Self> {
-        Self::build(
-            tokens,
-            Some(source),
-            false,
-            model.architecture().attention_heads,
-        )
+        Self::build(tokens, Some(source), false, model)
     }
-    fn build(tokens: usize, source: Option<&str>, integrated: bool, heads: usize) -> Result<Self> {
+    fn build(
+        tokens: usize,
+        source: Option<&str>,
+        integrated: bool,
+        model: crate::ModelVariant,
+    ) -> Result<Self> {
         anyhow::ensure!(
             tokens > 0 && tokens <= crate::encoding::MAX_CONTEXT_TOKENS,
             "unsupported attention probe shape"
         );
         let context = ModelContext::new(Default::default())?;
         let mut engine = Engine::new(&context)?;
+        engine.architecture = model.architecture();
+        let heads = engine.architecture.attention_heads;
         // Model-level overrides must not replace an operator's production reference.
         // Operator candidates are selected explicitly through `source` above.
         engine.experimental_attention = None;
@@ -696,6 +693,7 @@ impl DeltaBenchmark {
         let arch = model.architecture();
         let context = ModelContext::new(Default::default())?;
         let mut engine = Engine::new(&context)?;
+        engine.architecture = arch;
         let width = 4096 + arch.delta_heads * 128;
         let values: Vec<_> = (0..tokens * width)
             .map(|i| half::bf16::from_f32(((i * 17 % 251) as f32 - 125.) / 512.))

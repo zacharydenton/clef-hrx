@@ -5,8 +5,8 @@ to CLEF Flash's 16 query heads and four KV heads. It uses the pinned Flash
 checkpoint and BF16 projections. Flash retains its existing DeltaNet kernel.
 It is now selected by default for Flash BF16 causal text attention from 8,192
 through 65,536 tokens. Broader INT4 uses a separately qualified
-[16-key kernel](attention-kernel-tuning.md#model-qualification). Original CLEF
-and Flash MLP-only INT4 retain their previous paths.
+[16-key kernel](attention-kernel-tuning.md#model-qualification). Original CLEF's
+quantized modes and Flash MLP-only INT4 retain their previous paths.
 
 The candidate measures **1,597.05 resident input tokens/s** on the complete
 30,342-token invoice. Ten graph-rebuild Criterion samples give a 99% interval of
@@ -136,8 +136,9 @@ agreement, not human-labelled question accuracy. The context check requires
 
 Frozen inputs, hashes, telemetry and completed qualification state are under
 `tests/results/flash-long-attention-20261012/`. Its `workflowevals-comparison.json`
-contains the per-workflow accuracy and throughput comparison. Original CLEF's
-separate full-suite qualification remains incomplete and held for memory.
+contains the per-workflow accuracy and throughput comparison. Original CLEF
+BF16's separate [full-suite result](long-context-bf16.md) is now accepted against
+Cloudflare's published scores.
 
 An initial operator run inherited the model-level experiment override in its
 reference. That run is invalidated and excluded. The corrected reference ignores

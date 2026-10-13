@@ -9,7 +9,7 @@ struct Args {
     values: usize,
     #[arg(long, default_value_t = 10)]
     rounds: usize,
-    /// Compare against production selection, including the long-context scalar kernel.
+    /// Compare against production selection for the original CLEF architecture.
     #[arg(long)]
     integrated_reference: bool,
     #[arg(long, default_value_t = 0.002)]

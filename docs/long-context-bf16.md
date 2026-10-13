@@ -1,12 +1,19 @@
-# Long-context BF16 experiments
+# Long-context BF16 results
 
-The target is 500 resident input tokens/s for original CLEF on the long invoice
-workload. These experiments use the pinned original checkpoint, BF16 projections,
-and the complete 30,342-token `ap_00051` request from WorkflowEvals. No input is
-truncated. Production dispatch is unchanged; experimental switches require
-`--features bench-internals`.
+Original CLEF BF16 processes the full 705-case WorkflowEvals suite at **547.53
+resident input tokens/s**, with zero execution failures. All five consensus
+metrics match or exceed Cloudflare’s published scores at their one-decimal
+precision. See the [score comparison](workflowevals.md#original-clef-bf16-results).
 
-The fastest candidate measured **539.25 resident input tokens/s** across ten
+The qualified kernels are now the defaults for original CLEF BF16: shared
+attention at 8,192–65,536 tokens and eight-channel vector DeltaNet at
+4,033–65,536 tokens. Quantized original CLEF modes keep their previous paths.
+Experimental overrides still require `--features bench-internals`.
+
+The invoice experiments below use the pinned original checkpoint, BF16
+projections and the complete 30,342-token `ap_00051` request. No input is truncated.
+
+The selected candidate measured **539.25 resident input tokens/s** across ten
 Criterion samples that rebuild the graph for every request. The 99% interval is
 **535.51–541.60 tokens/s**, above the 500 tokens/s target throughout. Each sample
 includes encoding, graph preparation, GPU execution and readback; initial model
@@ -18,16 +25,18 @@ Every selected answer matched the original result; maximum probability change
 was 0.008160 and replay was exact. Full JevBench passes at 202/231 with identical
 probabilities to the original BF16 baseline. All five context requests at 8k,
 32k and 64k pass (15/15 retrieval answers), including exact 8k and 64k replays.
-The complete 705-case WorkflowEvals run is in progress in
-`tests/results/bf16-long-20261012/`. Full evaluation gates production promotion.
-The memory-guarded run resumed on October 13 from 89 completed invoices, using
-the same frozen executable, attention source and runner hashes. Its live state
-is in `guarded-resume-status.json` in that directory; the original production
-baseline matrix is queued afterward.
+The complete run is saved in `tests/results/bf16-long-20261012/`. It resumed
+with the same frozen executable, attention source and runner hashes; each
+process's first request is excluded from resident throughput. The public-score
+acceptance record is `published-score-acceptance.json` in that directory.
+
+Promotion uses published-score parity for original CLEF BF16. The unfinished old-kernel baseline queue is retired, preserving its
+35 completed cases. This establishes public-score parity, not identical
+per-case predictions or a measured full-suite speedup against the old kernels.
 
 The context checks measured 521.56 input tokens/s at 32,768 tokens and
-380.64/380.41 at 65,536 tokens, including preparation and readback. The 500
-tokens/s result applies to the 30k invoice; it does not extend to 64k inputs.
+380.64/380.41 at 65,536 tokens, including preparation and readback. The 548
+tokens/s suite average does not imply that rate on every 64k input.
 
 Measurements on October 12, 2026 share the gfx1151 GPU with an unrelated compute
 client. The first invoice experiment recorded up to three KFD clients; the paired
@@ -114,11 +123,26 @@ each uses 40 measured Criterion batches under shared GPU load.
 | 30,342 | 1.67× | 1.60–1.78× |
 | 65,536 | 1.49× | 1.37–1.59× |
 
-`CLEF_EXPERIMENT_DELTA_VECTOR_LONG=1` extends this kernel to original CLEF inputs
-above 4,032 tokens in a benchmark build. Flash and shorter-input dispatch remain
-unchanged. Raw records are in `benches/results/delta-vector8-long/`.
+The vector kernel is now selected for original CLEF BF16 above 4,032 tokens.
+In a benchmark build, `CLEF_EXPERIMENT_DELTA_VECTOR_LONG=0` restores the previous
+long-context scalar path; `=1` explicitly selects the vector experiment. Flash
+and shorter-input dispatch remain unchanged. Raw records are in
+`benches/results/delta-vector8-long/`.
 
 ## Reproduce
+
+Run the qualified defaults without experiment variables:
+
+```sh
+cargo build --release --locked --bin clef
+artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals.py \
+  --binary target/release/clef --model-dir artifacts/model --precision bf16 \
+  --output tests/results/clef-bf16-default-repro
+```
+
+Use the pinned datasets and environment in [WorkflowEvals reproduction](workflowevals.md).
+The full run reached 68.74 GiB of engine allocations; allow additional RAM for
+loading, the OS and other clients, and run GPU jobs sequentially.
 
 Build the operator probes and run the independent oracle:
 
@@ -129,18 +153,20 @@ cargo test --release --locked --lib --features bench-internals \
 target/release/examples/probe_attention --compile-only \
   benches/kernels/attention_shared.loom
 target/release/examples/probe_attention --tokens 30342 --rounds 10 \
-  --integrated-reference benches/kernels/attention_shared.loom
+  --reference-source kernels/attention_tiled.loom benches/kernels/attention_shared.loom
 CLEF_BENCH_ATTENTION_SOURCE=benches/kernels/attention_shared.loom \
+CLEF_BENCH_ATTENTION_REFERENCE_SOURCE=kernels/attention_tiled.loom \
 CLEF_BENCH_LENGTHS=8192,16384,30342 \
   python3 scripts/bench_workload.py attention-shared-repro --filter paired_attention
 CLEF_BENCH_DELTA_SOURCE=kernels/delta_persistent_vector.loom \
+CLEF_BENCH_DELTA_REFERENCE_SOURCE=kernels/delta_persistent.loom \
 CLEF_BENCH_DELTA_VALUES=8 CLEF_BENCH_LENGTHS=4033,8192,16384,30342,65536 \
   python3 scripts/bench_workload.py delta-vector-long-repro \
     --suite kernels --filter paired_delta_prefill
 ```
 
-For full-model testing, set `CLEF_EXPERIMENT_ATTENTION_SOURCE` to the candidate
-file. It replaces causal d256 attention only at 8,192 tokens and above. Short
+To reproduce historical candidates, set `CLEF_EXPERIMENT_ATTENTION_SOURCE` to
+the candidate file. It replaces causal d256 attention only at 8,192 tokens and above. Short
 requests retain their existing kernels. The source is read once when the engine
 is created. Keep it immutable for the duration of an evaluation and record its
 hash with the binary and result manifest.
@@ -151,6 +177,10 @@ CLEF_EXPERIMENT_ATTENTION_SOURCE=benches/kernels/attention_shared.loom \
   target/release/clef --model-dir artifacts/model --offline --strict-context \
   --precision bf16 decide requests.jsonl --jsonl --raw
 ```
+
+To reproduce the former BF16 defaults, use both
+`CLEF_EXPERIMENT_ATTENTION_SOURCE=kernels/attention_tiled.loom` and
+`CLEF_EXPERIMENT_DELTA_VECTOR_LONG=0` with the benchmark build.
 
 Use the [WorkflowEvals adapter](workflowevals.md) to generate the request. The
 existing local baseline is
@@ -197,6 +227,22 @@ It waits for idle KFD clients and stops only its own benchmark process group if
 another client appears. It does not stop another application or detect every
 possible graphics workload. Omit the guard for intentionally shared-GPU runs.
 
+## Default selection checks
+
+The promoted attention source has exactly the same instructions as the frozen
+705-case candidate. GPU probes compare the production selector with that source
+at 8,192 and 65,536 tokens, and compare selected DeltaNet with the qualified
+vector source at 4,033 and 65,536 tokens. All outputs and replays match exactly.
+The explicit scalar DeltaNet override also passes an exact comparison at 4,033
+tokens. Flash BF16 selection is checked separately at 8,192 tokens.
+
+CPU selector tests cover model, precision, context boundaries and head geometry.
+All CPU tests, doctests, Clippy and the ordinary release build pass. The ordinary
+release was not run through the full model again: roughly 63 GiB of available
+RAM would not leave the 24 GiB runtime reserve. The completed frozen candidate
+run supplies the model-level qualification. Probe logs and binary hashes are in
+`artifacts/clef-bf16-promotion-20261013/validation.json`.
+
 ## Records
 
 - `artifacts/bf16-invoice-500/profile.log`: ordinary and serialized profile timings.
@@ -220,5 +266,5 @@ possible graphics workload. Omit the guard for intentionally shared-GPU runs.
 The frozen six-mode qualification matrix retains its original executable and
 completed checkpoints; experimental runs must not replace its binary or change
 its pinned runner scripts.
-The candidate queue resumes that matrix automatically after qualification finishes
-or fails. Its status currently retains all completed baseline checkpoints.
+Automatic baseline resumption is retired. `tests/results/flash-support-matrix/retired.json`
+records the decision; all completed baseline checkpoints are preserved.

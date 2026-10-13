@@ -177,8 +177,8 @@ seconds; this is a correctness check with a timing observation, not a repeated
 speedup estimate.
 It gives up some of the larger tiles' speed to retain the original arithmetic
 cadence. After full qualification, it is now selected by default for Flash INT4
-causal text attention at 8,192–65,536 tokens. Original CLEF and Flash MLP-only
-INT4 retain their previous paths; BF16 remains the default precision.
+causal text attention at 8,192–65,536 tokens. Original CLEF's quantized modes and
+Flash MLP-only INT4 retain their previous paths; BF16 remains the default precision.
 
 ### Model qualification
 

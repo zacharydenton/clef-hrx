@@ -103,6 +103,43 @@ includes preflight, question splitting and Python workflow execution. Report
 these timing boundaries separately; a kernel or native-call throughput figure
 is not the complete workflow's decision throughput.
 
+## Original CLEF BF16 results
+
+The optimized BF16 run completed **705/705 cases**, covering all 1,524 policy
+decisions, with zero execution failures. Its five consensus metrics match or
+exceed the published CLEF results at the reported one-decimal precision:
+
+| Consensus metric | Local BF16 | Published CLEF |
+| --- | ---: | ---: |
+| Invoice exact actions | 291/450 (64.7%) | 64.7% |
+| Invoice primary action | 389/450 (86.4%) | 86.2% |
+| Customer service exact actions | 468/612 (76.5%) | 76.3% |
+| Agent trace primary action | 152/222 (68.5%) | 68.5% |
+| Security exact actions | 151/240 (62.9%) | 62.9% |
+
+Published values come from the [pinned Cloudflare CLEF model card](https://huggingface.co/Cloudflare/clef/blob/2f3de3dd85f379784083b0814d997ab627200f0c/README.md#workflow-evals).
+These small differences do not establish a statistically significant improvement
+or identical per-case predictions. Published-score parity replaces the unfinished
+local old-kernel baseline gate for this BF16 promotion.
+
+The run processed **6,385,614 resident input tokens in 11,662.54 native seconds**
+over 1,257 resident requests: **547.53 input tok/s**. Each resumed process's first
+request is excluded. This uses the native timing boundary described above;
+preflight and Python workflow overhead are separate. Measurements include shared
+GPU conditions. Peak engine allocation was 68.74 GiB on a 61,580-token request.
+
+Original CLEF BF16 now selects the qualified shared attention at 8,192–65,536
+tokens and vector DeltaNet at 4,033–65,536 tokens. Quantized original CLEF modes
+retain their previous paths. The ordinary release build and run command above
+use these defaults; see [kernel experiments and reproduction](long-context-bf16.md)
+for explicit old-kernel comparisons.
+
+Raw results are in `tests/results/bf16-long-20261012/workflowevals/`, with frozen
+binary, source and runner hashes in the parent `manifest.json` and acceptance in
+`published-score-acceptance.json`. The old-kernel matrix is retired with 35
+original BF16 cases preserved. There is no full-suite speedup claim against that
+partial baseline.
+
 ## Flash full-suite results
 
 All three Flash modes completed all 705 cases and 1,524 policy decisions with
@@ -168,8 +205,9 @@ artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals.py \
 ```
 
 Repeat sequentially with `--precision int4-mlp` and `--precision int4`, using a
-fresh output directory each time. Original CLEF's three full runs remain in
-progress in the same matrix.
+fresh output directory each time. Original CLEF BF16 is complete in the separate
+run above. Original CLEF's quantized full-suite runs remain incomplete; the old
+baseline matrix is retired.
 
 ## Earlier smoke runs
 
@@ -221,9 +259,10 @@ binary, runner, precision, context limit and dataset pins when resuming.
 The current [six-configuration matrix](clef-flash.md#full-context-and-workflow-matrix)
 has completed actual 65,536-token inference for CLEF and Flash in all three
 precisions, with all retrieval answers correct and exact long/short replay.
-Its three Flash WorkflowEvals runs are complete; original CLEF runs are in
-progress. Inspect current case counts
-and request throughput with `python3 scripts/report_matrix.py tests/results/flash-support-matrix`.
+Its three Flash WorkflowEvals runs are complete. The separate original CLEF BF16
+run above is also complete; the old baseline matrix is retired with its partial
+original CLEF results preserved. Inspect checkpoint counts and request throughput
+with `python3 scripts/report_matrix.py tests/results/flash-support-matrix`.
 
 The 64k build passes GPU attention indexing checks with 65,536 query rows and
 65,536 key rows (tested separately against a uniform-softmax oracle), as well as

@@ -96,12 +96,13 @@ CLEF Flash with the model already loaded and a warm kernel cache for JevBench:
 
 [Flash results and reproduction](docs/clef-flash.md).
 WorkflowEvals rates cover [all 705 cases](docs/workflowevals.md#flash-full-suite-results)
-with the model already loaded; original CLEF runs are in progress.
+with the model already loaded.
 
+Original CLEF BF16 reaches **548 input tok/s across all 705 WorkflowEvals cases**,
+matching or exceeding Cloudflare's published accuracy scores.
 Flash's optimized attention gives **2.93× faster WorkflowEvals in BF16** and
-**3.10× in INT4**, with unchanged accuracy metrics. Original CLEF's experimental
-kernel reaches **539 tok/s** on a complete 30,342-token invoice; its full-suite
-qualification is pending. Results and reproduction:
+**3.10× in INT4**, with unchanged accuracy metrics. These kernels are enabled by
+default in their qualified precision modes. Results and reproduction:
 [CLEF](docs/long-context-bf16.md), [Flash BF16](docs/flash-long-context.md),
 [Flash INT4](docs/attention-kernel-tuning.md#model-qualification).
 

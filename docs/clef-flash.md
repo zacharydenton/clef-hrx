@@ -18,8 +18,8 @@ All three Flash JevBench runs and their warm-cache repeats are complete. The
 six-configuration 64k context matrix has passed, including exact long/short
 replay and all retrieval answers. All three Flash modes have completed the full
 705-case WorkflowEvals suite without execution failures; see
-[workflow results](workflowevals.md#flash-full-suite-results). Original CLEF's
-WorkflowEvals runs remain in progress.
+[workflow results](workflowevals.md#flash-full-suite-results). Original CLEF BF16
+has also completed the [full suite](workflowevals.md#original-clef-bf16-results).
 
 The shared-memory attention kernel is now the default for Flash BF16 at 8k–64k,
 after complete [long-context qualification](flash-long-context.md). It measures
@@ -234,6 +234,12 @@ Raw records: `tests/results/flash-support-matrix/context-clef-flash-bf16`.
 Matrix executable SHA256:
 `18b7de8cc007ad00149cae61084de29d0a596c92e3fe370b25b7a300190ba708`.
 
+The historical matrix is retired: its context ladder and three Flash workflow
+runs are complete, while the original CLEF baseline results remain partial.
+Original CLEF BF16 is qualified by the separate
+[completed run](workflowevals.md#original-clef-bf16-results). For a new matrix,
+use a fresh output directory in the commands below.
+
 The matrix runner freezes the executable and schedules the six combinations on
 one GPU. It runs the actual context ladder before the full WorkflowEvals matrix.
 Each context run includes facts at the beginning, middle and end, all three
@@ -242,10 +248,10 @@ latency, memory and hardware telemetry are retained separately.
 
 ```sh
 python3 scripts/qualify_matrix.py --binary target/release/clef \
-  --output tests/results/flash-support-matrix
-# Resume with the frozen executable if target/release/clef was rebuilt:
-python3 scripts/qualify_matrix.py --binary tests/results/flash-support-matrix/clef \
-  --output tests/results/flash-support-matrix --resume
+  --output tests/results/new-support-matrix
+# Resume with that matrix’s frozen executable if target/release/clef was rebuilt:
+python3 scripts/qualify_matrix.py --binary tests/results/new-support-matrix/clef \
+  --output tests/results/new-support-matrix --resume
 ```
 
 `status.json` distinguishes running, failed and completed jobs. A lock rejects a

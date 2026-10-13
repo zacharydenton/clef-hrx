@@ -123,7 +123,7 @@ pub(crate) struct Engine {
     #[cfg(feature = "bench-internals")]
     pub experimental_attention: Option<std::sync::Arc<str>>,
     #[cfg(feature = "bench-internals")]
-    pub long_vector_delta: bool,
+    pub long_vector_delta: Option<bool>,
     #[cfg(feature = "bench-internals")]
     pub bf16_m_group: usize,
     stream: Stream,
@@ -231,8 +231,9 @@ impl Engine {
                     format!("{}\n{source}", include_str!("../kernels/common.loom")).into()
                 }),
             #[cfg(feature = "bench-internals")]
-            long_vector_delta: std::env::var("CLEF_EXPERIMENT_DELTA_VECTOR_LONG").as_deref()
-                == Ok("1"),
+            long_vector_delta: std::env::var("CLEF_EXPERIMENT_DELTA_VECTOR_LONG")
+                .ok()
+                .map(|value| value == "1"),
             #[cfg(feature = "bench-internals")]
             bf16_m_group: std::env::var("CLEF_EXPERIMENT_BF16_M_GROUP")
                 .ok()

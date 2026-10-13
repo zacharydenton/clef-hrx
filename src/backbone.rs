@@ -13,10 +13,11 @@ fn qualified_shared_attention(
     kv_heads: usize,
     causal: bool,
 ) -> Option<&'static str> {
-    if architecture != crate::ModelVariant::ClefFlash.architecture()
+    let flash = architecture == crate::ModelVariant::ClefFlash.architecture() && heads == 16;
+    let clef = architecture == crate::ModelVariant::Clef.architecture() && heads == 24;
+    if !(flash || clef)
         || !causal
         || !(8192..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&tokens)
-        || heads != 16
         || kv_heads != 4
     {
         return None;
@@ -26,7 +27,7 @@ fn qualified_shared_attention(
             include_str!("../kernels/common.loom"),
             include_str!("../kernels/attention_shared_bf16.loom")
         ))
-    } else if quantized.is_full_int4() {
+    } else if flash && quantized.is_full_int4() {
         Some(concat!(
             include_str!("../kernels/common.loom"),
             include_str!("../kernels/attention_shared_k16.loom")
@@ -34,6 +35,18 @@ fn qualified_shared_attention(
     } else {
         None
     }
+}
+
+fn qualified_long_vector_delta(
+    architecture: crate::architecture::Architecture,
+    quantized: &crate::quantized::QuantizedProjections,
+    tokens: usize,
+    heads: usize,
+) -> bool {
+    architecture == crate::ModelVariant::Clef.architecture()
+        && quantized.is_bf16()
+        && heads == 48
+        && (4033..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&tokens)
 }
 
 impl Engine {
@@ -377,10 +390,13 @@ impl Engine {
             );
         }
         let out = self.alloc(n, a.cols * 128, DType::Bf16)?;
+        let long_vector =
+            qualified_long_vector_delta(self.architecture, &self.quantized, n, a.cols);
         #[cfg(feature = "bench-internals")]
-        let long_vector = n > 4032 && self.long_vector_delta;
-        #[cfg(not(feature = "bench-internals"))]
-        let long_vector = false;
+        let long_vector = self
+            .long_vector_delta
+            .map(|enabled| n > 4032 && enabled)
+            .unwrap_or(long_vector);
         // Qualified vector scheduling range; preserve the scalar implementation
         // for shorter inputs and long-context workloads outside this range.
         let (source, values_per_wave) = if a.cols == 32 {
@@ -753,23 +769,26 @@ mod tests {
         for model in [ModelVariant::Clef, ModelVariant::ClefFlash] {
             for precision in [Precision::Bf16, Precision::Int4Mlp, Precision::Int4] {
                 let quantized = QuantizedProjections::for_precision(precision);
+                let heads = model.architecture().attention_heads;
                 for tokens in [8191, 8192, 65536, 65537] {
                     let selected = qualified_shared_attention(
                         model.architecture(),
                         &quantized,
                         tokens,
-                        16,
+                        heads,
                         4,
                         true,
                     );
                     assert_eq!(
                         selected.is_some(),
-                        model == ModelVariant::ClefFlash
-                            && matches!(precision, Precision::Bf16 | Precision::Int4)
+                        (precision == Precision::Bf16
+                            || (model == ModelVariant::ClefFlash && precision == Precision::Int4))
                             && (8192..=65536).contains(&tokens),
                     );
                 }
-                for (heads, kv_heads, causal) in [(16, 4, false), (24, 4, true), (16, 8, true)] {
+                for (heads, kv_heads, causal) in
+                    [(heads, 4, false), (heads + 8, 4, true), (heads, 8, true)]
+                {
                     assert!(
                         qualified_shared_attention(
                             model.architecture(),
@@ -781,6 +800,32 @@ mod tests {
                         )
                         .is_none()
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_vector_delta_stays_within_qualified_model_precision_and_context() {
+        use crate::{ModelVariant, Precision, quantized::QuantizedProjections};
+        for model in [ModelVariant::Clef, ModelVariant::ClefFlash] {
+            for precision in [Precision::Bf16, Precision::Int4Mlp, Precision::Int4] {
+                let quantized = QuantizedProjections::for_precision(precision);
+                for tokens in [4032, 4033, 8192, 65536, 65537] {
+                    for heads in [32, 48] {
+                        assert_eq!(
+                            qualified_long_vector_delta(
+                                model.architecture(),
+                                &quantized,
+                                tokens,
+                                heads
+                            ),
+                            model == ModelVariant::Clef
+                                && precision == Precision::Bf16
+                                && heads == 48
+                                && (4033..=65536).contains(&tokens)
+                        );
+                    }
                 }
             }
         }
