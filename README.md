@@ -105,6 +105,8 @@ Flash's optimized attention gives **2.93× faster WorkflowEvals in BF16** and
 default in their qualified precision modes. Results and reproduction:
 [CLEF](docs/long-context-bf16.md), [Flash BF16](docs/flash-long-context.md),
 [Flash INT4](docs/attention-kernel-tuning.md#model-qualification).
+Original CLEF INT4 also uses optimized long-context attention; see its
+[qualification coverage](docs/attention-kernel-tuning.md#acceptance-with-partial-coverage-october-15).
 
 ## Library
 

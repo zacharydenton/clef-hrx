@@ -32,6 +32,12 @@ fn qualified_shared_attention(
             include_str!("../kernels/common.loom"),
             include_str!("../kernels/attention_shared_k16.loom")
         ))
+    } else if clef && quantized.is_full_int4() {
+        // Accepted with partial suite coverage; see attention-kernel-tuning.md.
+        Some(concat!(
+            include_str!("../kernels/common.loom"),
+            include_str!("../kernels/attention_shared_k16_scheduled.loom")
+        ))
     } else {
         None
     }
@@ -779,12 +785,26 @@ mod tests {
                         4,
                         true,
                     );
-                    assert_eq!(
-                        selected.is_some(),
-                        (precision == Precision::Bf16
-                            || (model == ModelVariant::ClefFlash && precision == Precision::Int4))
-                            && (8192..=65536).contains(&tokens),
-                    );
+                    let expected = if !(8192..=65536).contains(&tokens) {
+                        None
+                    } else {
+                        match (model, precision) {
+                            (_, Precision::Bf16) => Some(concat!(
+                                include_str!("../kernels/common.loom"),
+                                include_str!("../kernels/attention_shared_bf16.loom")
+                            )),
+                            (ModelVariant::ClefFlash, Precision::Int4) => Some(concat!(
+                                include_str!("../kernels/common.loom"),
+                                include_str!("../kernels/attention_shared_k16.loom")
+                            )),
+                            (ModelVariant::Clef, Precision::Int4) => Some(concat!(
+                                include_str!("../kernels/common.loom"),
+                                include_str!("../kernels/attention_shared_k16_scheduled.loom")
+                            )),
+                            (_, Precision::Int4Mlp) => None,
+                        }
+                    };
+                    assert_eq!(selected, expected);
                 }
                 for (heads, kv_heads, causal) in
                     [(heads, 4, false), (heads + 8, 4, true), (heads, 8, true)]

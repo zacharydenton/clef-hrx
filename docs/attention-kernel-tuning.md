@@ -177,8 +177,9 @@ seconds; this is a correctness check with a timing observation, not a repeated
 speedup estimate.
 It gives up some of the larger tiles' speed to retain the original arithmetic
 cadence. After full qualification, it is now selected by default for Flash INT4
-causal text attention at 8,192–65,536 tokens. Original CLEF's quantized modes and
-Flash MLP-only INT4 retain their previous paths; BF16 remains the default precision.
+causal text attention at 8,192–65,536 tokens. Flash MLP-only INT4 retains its
+previous path; original CLEF INT4 now uses the scheduled variant described below.
+BF16 remains the default precision.
 
 ### Model qualification
 
@@ -249,8 +250,8 @@ The six resident requests contain **164,064 tokens** and take **257.82 seconds**
 or **636.35 input tokens/s**. The saved production run took 901.04 seconds on
 the same requests, or 182.08 tokens/s: a **3.49×** ratio. These are separate runs;
 the baseline shared the GPU, while this candidate recorded only its owned
-compute process. This seven-invoice result does not qualify the full suite or
-change original CLEF's default kernel.
+compute process. This seven-invoice result did not qualify the full suite or
+change original CLEF's default kernel at that time.
 
 Peak engine allocation was **20.27 GiB** under a 40 GiB cap. Available host memory
 stayed above 90 GiB and swap usage did not grow. Records and the exact-output
@@ -258,14 +259,10 @@ audit are in `tests/results/clef-k16-qualification-20261013/`; the audit is
 `pilot-audit.json`, with the frozen binary, source and runner hashes in
 `manifest.json`.
 
-The original INT4 qualification has resumed from these seven invoice cases,
-using the same frozen binary, runner and attention source. The remaining three
-workflows are scheduled separately in `workflowevals-int4-other/` under the same
-parent result directory. Both parts must finish before reporting a 705-case
-result. The current supervisor is
-`artifacts/remaining-comparisons-20261013/run.py`; it enforces a 24 GiB host reserve
-and a 1 GiB swap-growth stop. MLP-only INT4 follows with its existing production
-kernels. The INT4 attention candidate remains opt-in during qualification.
+The original INT4 qualification subsequently reached 30 invoices and 555 cases
+from other workflows. Its ignored artifacts were later lost; the fresh October 14
+run below is a separate evaluation. The scheduled variant was
+[accepted with partial coverage on October 15](#acceptance-with-partial-coverage-october-15).
 
 To reproduce the screen with an experiment-enabled CLI and a fresh output:
 
@@ -373,3 +370,279 @@ The Flash geometry extension is `attention-k64-prefetch-flash-20261012`, using
 `CLEF_BENCH_MODEL=clef-flash` and
 `CLEF_BENCH_LENGTHS=8192,16384,30342,65536` with the same BF16 sources.
 The production-order candidate's paired run is `attention-k16-flash-20261012`.
+
+## Rejected INT8 Q/K experiment (October 13)
+
+Removed after an invoice pilot regressed. The experiment adapted h3-hrx's
+H256 rotation and per-token/head INT8 Q/K packing, retaining BF16 values and
+FP32 softmax/accumulation. Its kernels, generator, runtime override and benchmark
+options are no longer part of the implementation.
+
+Compacting shared memory from 64,768 to 43,264 bytes produced these paired
+attention results on original CLEF geometry, including packing:
+
+| Tokens | Speedup over BF16 | 99% paired interval |
+| ---: | ---: | ---: |
+| 8,192 | 1.066× | 1.058–1.074× |
+| 32,768 | 1.118× | 1.071–1.164× |
+| 65,536 | 0.951× | 0.905–1.0004× |
+
+Each shared-GPU measurement retained 20 alternating-order batches, with 10,000
+paired bootstrap resamples. The 64k result establishes no gain.
+
+With original CLEF INT4 weights, a repeated 36,916-token invoice request reached
+745.33 input tok/s with weights and the compiled graph resident. Four of 55
+argmax answers changed versus the saved INT4/k16 result; maximum probability
+shift was 0.19136. Replaying both outputs through WorkflowEvals for `ap_00000`
+reduced correct primary actions and exact action sets from **1/3 to 0/3 policy
+decisions**, under all three label sets. This is one invoice, not a suite score.
+The speed result does not establish a paired end-to-end improvement.
+
+Archived sources, measurements and telemetry remain under
+`benches/results/sage-int8-{initial,compact,compact-64k}-20261013/`.
+Raw model outputs, correctness logs, watchdog records and the offline workflow
+comparison remain under `artifacts/sage-attention-20261013/`. Offline replay
+timings are not inference measurements. Existing BF16 attention and optional
+INT4 weight quantization are unchanged.
+
+## Preserving 16-key arithmetic (October 13)
+
+After rejecting INT8 Q/K, a fresh original-CLEF INT4 profile of a 36,916-token
+invoice attributed 46.3% of serialized GPU time to attention, 32.8% to INT4
+projections and 10.6% to DeltaNet. Serialization adds barriers: its 73.47 seconds
+is diagnostic, not a request-throughput measurement. Ordinary requests before
+and after the profile reached 562 and 472 input tok/s on the shared GPU. Both
+reproduced the saved k16 prediction exactly.
+
+`scripts/attention_key16_schedule_candidate.py` generates variants of the pinned
+`kernels/attention_shared_k16.loom` without modifying it. The combined candidate:
+
+- Skips QK dot products and K staging for the unused half of the 32-key storage.
+- Loads V before QK computation, retaining the original LDS-store location.
+- Shrinks the V shared-memory view to the columns needed by the 16-key tile,
+  with bank padding retained.
+
+Active QK, online softmax and both BF16 probability-component accumulations keep
+their arithmetic order. Q/K/V remain BF16. The combined kernel uses 200 VGPRs
+and 56,576 bytes of LDS, versus 208 and 64,768 for the reference; both report
+25% occupancy and no spills.
+
+Every isolated variant and the combined candidate passed the independent
+attention oracle through 65,536 tokens, including tile boundaries, grouped
+query heads and nonzero slices. Direct reference comparisons at 65, 8,193 and
+36,916 tokens were bitwise exact across three repetitions.
+
+Paired Criterion runs include value packing and retain 20 alternating-order
+batches, with 10,000 paired bootstrap resamples and 99% intervals:
+
+| Tokens | Reference ms | Candidate ms | Speedup | 99% paired interval |
+| ---: | ---: | ---: | ---: | ---: |
+| 8,192 | 86.28 | 68.35 | 1.262× | 1.251–1.274× |
+| 36,916 | 1,900.14 | 1,393.95 | 1.363× | 1.322–1.409× |
+| 65,536 | 9,104.95 | 7,439.77 | 1.224× | 1.189–1.253× |
+
+All three paired fixtures were bitwise exact, including replay.
+
+The single-model invoice pilot used original CLEF INT4 weights, BF16 attention
+and the same 36,916-token request. After one warmup per source, three pairs
+alternated execution order on the shared GPU:
+
+| Pair | Reference input tok/s | Candidate input tok/s | Speedup |
+| ---: | ---: | ---: | ---: |
+| 1 | 500.36 | 554.33 | 1.108× |
+| 2 | 502.89 | 546.64 | 1.087× |
+| 3 | 504.89 | 593.24 | 1.175× |
+| Aggregate | 502.71 | 564.02 | 1.122× |
+
+Aggregate throughput divides total input tokens by total request time. Each
+request includes encoding, graph preparation, GPU execution and readback;
+loading and initial compilation are excluded. All eight executions, including
+warmups, reproduced the saved k16 result's 55 question outputs exactly,
+including logits and probabilities. Peak engine allocation was 20.11 GiB;
+minimum sampled available RAM was 36.06 GiB, with 222 MiB maximum additional
+system swap usage. The guard completed normally.
+
+This is a three-pair, single-invoice pilot, not a suite accuracy score. The
+reference is the earlier k16 candidate, not the production kernel in use at the
+time. The 1.122× ratio measures the scheduling change alone; it is not a measured
+speedup over the former production default.
+
+At the end of the October 13 session, the pinned invoice qualification retained
+30 completed invoices and 555 completed cases from other workflows. Its
+remaining 120 invoices were held by the guard's 72 GiB admission threshold.
+Those case files and frozen binaries were absent from the October 14 checkout;
+the fresh run below does not count them as completed or reconstruct their raw
+predictions from the reported scores.
+
+### Reproduce the scheduling experiment
+
+Generate a fresh candidate and build the diagnostic tools:
+
+```sh
+python3 scripts/attention_key16_schedule_candidate.py \
+  --skip-masked-qk --prefetch-values --compact-values \
+  --output artifacts/attention-k16-schedule.loom
+cargo build --release --locked --features bench-internals \
+  --example compare_attention_inference --example probe_attention
+CLEF_BENCH_ATTENTION_REFERENCE_SOURCE=kernels/attention_shared_k16.loom \
+CLEF_BENCH_ATTENTION_SOURCE=artifacts/attention-k16-schedule.loom \
+CLEF_BENCH_LENGTHS=8192,36916,65536 \
+  python3 scripts/bench_workload.py attention-k16-schedule-repro \
+    --filter paired_attention
+```
+
+For an end-to-end comparison, provide a CLEF request JSON that encodes to at
+least 8,192 tokens. The example loads one model, warms both attention sources,
+then alternates their order. Each switch rebuilds the graph; timed requests
+include encoding, preparation, execution and readback. Loading and initial
+compilation are excluded. It checks every prediction against the reference
+and saves source hashes, warmup outputs and individual timings.
+The recorded request is
+`artifacts/bf16-attention-followup-20261013/invoice.json`.
+
+```sh
+CLEF_MODEL_DIR=artifacts/model \
+  python3 scripts/memory_guard.py \
+    --output artifacts/attention-k16-model-pair-guard --memory-gib 28 -- \
+    target/release/examples/compare_attention_inference \
+    --model clef --precision int4 --memory-gib 28 --max-length 65536 \
+    --rounds 3 --reference kernels/attention_shared_k16.loom \
+    --candidate artifacts/attention-k16-schedule.loom \
+    --output artifacts/attention-k16-model-pair.json invoice.json
+```
+
+Run operator commands under `scripts/memory_guard.py` as well. The recorded operator runs
+use 8/12 GiB admission budgets, and the model pilot uses a 28 GiB engine cap.
+The watchdog requires the budget plus 32 GiB available before starting, stops
+its own process group below 24 GiB available or after more than 1 GiB additional
+swap, and serializes GPU experiments with the qualification lock. The engine
+cap alone does not enforce host-memory reserves.
+
+Profiles, generated sources, compiler reports, probe logs and guard records
+are in `artifacts/bf16-attention-followup-20261013/`. Criterion samples and source
+snapshots are in `benches/results/attention-k16-schedule-combined-20261013/` and
+`benches/results/attention-k16-schedule-combined-64k-20261013/`.
+The full-model records are `model-pair.json` and `model-pair-summary.json` under
+the artifact directory. Clippy with all targets and `bench-internals`, the
+default-feature all-target check, and the library suite (24 passed; 43 GPU or
+model tests ignored) passed; the separate GPU oracle and probes above also
+passed.
+
+### Fresh qualification after restoring artifacts (October 14)
+
+The source checkout retained the generator, comparison example and pilot summary,
+but most ignored artifacts were missing, including the frozen evaluation binaries,
+case checkpoints and model weight blobs. The Hugging Face snapshot contained
+dangling symlinks. The first four-case setup attempt failed during encoding with
+missing `tokenizer.json`; it performed no inference and is retained separately
+at `tests/results/attention-schedule-20261014/`. Its zeros are execution errors,
+not accuracy measurements.
+
+The restored environment uses the same checkpoint, WorkflowEvals commit,
+dependency lock and dataset revisions. A fresh binary and regenerated candidate
+are frozen under `artifacts/attention-qualification-20261014/`. The rebuilt 64k
+operator probe passes with zero output error. Its single-round 1.260× timing is
+a smoke check, not a replacement for the paired Criterion results above.
+All 13 restored weight files and the tokenizer match their pinned content hashes;
+the audit is saved as `checkpoint-integrity.json` in that artifact directory.
+The first model load rebuilds the missing tiled weight cache; this preparation
+is part of the excluded first request, not resident inference throughput.
+
+The new qualification uses a 32 GiB engine cap, 64 GiB memory admission,
+24 GiB live reserve and 1 GiB maximum additional system swap. The tracked
+`scripts/memory_guard.py` serializes jobs using the existing qualification lock,
+records telemetry, and stops only its owned process group. It never retries a
+failed job. Its tests cover memory thresholds, refused admission, lock contention,
+child failures and isolation from unrelated process groups.
+
+After restoring all checkpoint files, the supervisor ran one case from each
+workflow, checked the invoice against the k16 reference using one model allocation,
+and started the candidate's full 705-case plan. The fresh output is
+`tests/results/attention-schedule-20261014-restored/`. The supervisor's stage,
+commands and exit status are recorded in
+`artifacts/attention-qualification-20261014/qualification-status.json`; each
+stage has its own guard status and logs. A failed stage stops the sequence.
+The run stopped before completing that plan; its disposition is recorded below.
+
+The four-case pilot completed with zero execution failures. Its 36,916-token
+invoice retained 1/3 correct policy decisions. Both executions in the separate
+k16/candidate comparison matched all 55 question outputs from that pilot exactly,
+including logits and probabilities. These pilot results do not establish
+full-suite accuracy or throughput.
+
+The following reproduces the recorded attempt after generating and freezing the
+binary and candidate. Its 32 GiB engine cap proved insufficient for a 49,396-token
+invoice; it is not a validated budget for completing the suite:
+
+```sh
+CLEF_EXPERIMENT_ATTENTION_SOURCE="$PWD/artifacts/attention-qualification-20261014/candidate.loom" \
+  python3 scripts/memory_guard.py \
+    --output artifacts/attention-schedule-full-guard --memory-gib 32 -- \
+    artifacts/WorkflowEvals/.venv/bin/python scripts/eval_workflowevals.py \
+      --binary artifacts/attention-qualification-20261014/clef \
+      --model clef --model-dir artifacts/model --precision int4 \
+      --memory-gib 32 --max-length 65536 \
+      --output tests/results/attention-schedule-repro
+```
+
+For a pilot, add `--new-cases-per-workflow 1`. To continue its full plan, use
+the same evaluation output with `--resume` and a fresh guard output directory.
+Never resume the setup attempt containing failed case checkpoints.
+
+### Acceptance with partial coverage (October 15)
+
+The user accepted the available evidence and retired the remaining evaluation.
+The scheduled 16-key kernel is now selected automatically for original CLEF with
+`--precision int4`, causal attention and 8,192–65,536 input tokens. BF16 remains
+the default precision. Flash, MLP-only INT4 and shorter contexts keep their
+existing kernels.
+
+The fresh run completed 572 of 705 cases without execution errors:
+
+| Workflow | Successful cases | Planned cases |
+| --- | ---: | ---: |
+| Customer service | 204 | 204 |
+| Agent trace observability | 111 | 111 |
+| Security incidents | 240 | 240 |
+| Invoice processing | 17 | 150 |
+
+Invoice `ap_00022` (49,396 input tokens) failed with
+`resource busy: residency budget is pinned or loading` under the 32 GiB engine
+cap. The next queued invoice, `ap_00023`, encountered the stopped CLI. These are
+one resource failure and one resulting execution error, not two incorrect
+predictions. The host-memory watchdog did not trip. Another 131 cases were not
+attempted, leaving 133 cases without successful results.
+
+Acceptance rests on the exact-output operator checks through 65,536 tokens,
+the paired model checks covering all 55 question outputs on the 36,916-token
+invoice, the earlier seven-invoice comparison against production, and the
+partial suite run. Successful execution alone does not establish accuracy
+agreement. Full-suite accuracy and throughput for this candidate remain
+unmeasured; completion of the remaining cases was explicitly waived.
+
+`kernels/attention_shared_k16_scheduled.loom` is a byte-for-byte copy of the
+measured candidate, including its original experimental header. Its SHA-256 is
+`8f975c5e2a8de3400465fd7e825a5e4afa64f971414eee9322e1ad8c6a203793`.
+The original k16 source used by Flash is unchanged. Dispatch tests check the
+selected source for each model and precision at both context boundaries, plus
+unsupported geometry and noncausal requests.
+
+The failed run, checkpoints and pause record are preserved. The separate
+`artifacts/attention-qualification-20261014/acceptance.json` records acceptance
+and retirement without relabeling the run as complete. There is no automatic
+resume. A normal release build now uses the scheduled source without experiment
+features or an attention-source override:
+
+```sh
+cargo build --release --locked --bin clef
+CLEF_MODEL_DIR=artifacts/model target/release/clef \
+  --model clef --precision int4 --max-length 65536 decide invoice.json
+```
+
+This uses the CLI's normal memory budget; accepting the kernel does not make
+the failed 32 GiB allocation cap sufficient for the remaining invoices.
+
+After enabling dispatch, the release library tests passed (24 passed, 43 GPU or
+model tests ignored), along with all-target Clippy using `bench-internals`,
+the default-feature all-target check and formatting. No new model evaluation
+was launched; the installed kernel's hash matches the already-tested candidate.

@@ -258,6 +258,33 @@ impl ClefModel {
         }
         result
     }
+    /// Switches an attention source for paired diagnostics with one resident model.
+    /// Rebuilds the graph; weights and unrelated kernel selections stay fixed.
+    #[cfg(feature = "bench-internals")]
+    pub fn set_benchmark_attention_source(&mut self, source: Option<&str>) -> Result<()> {
+        ensure!(
+            !self.failed,
+            "model execution failed; reload model before reusing it"
+        );
+        let source: Option<std::sync::Arc<str>> = source
+            .map(|source| format!("{}\n{source}", include_str!("../kernels/common.loom")).into());
+        // Safety: only owned source text crosses the native session. Resetting
+        // the plan follows the same lifetime rules as set_reference_kernels.
+        let result = unsafe {
+            self.native.run(|state| -> Result<()> {
+                state.plan = None;
+                state.engine.reset_plan()?;
+                state.engine.experimental_attention = source;
+                Ok(())
+            })
+        }
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
     pub fn infer_with_media(
         &mut self,
         request: &Request,

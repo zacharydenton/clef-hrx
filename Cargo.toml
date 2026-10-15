@@ -88,6 +88,10 @@ name = "compare_inference"
 required-features = ["bench-internals"]
 
 [[example]]
+name = "compare_attention_inference"
+required-features = ["bench-internals"]
+
+[[example]]
 name = "probe_gemm"
 required-features = ["bench-internals"]
 
