@@ -158,6 +158,38 @@ impl Engine {
             rows.is_multiple_of(256) && cols.is_multiple_of(256),
             "unsupported quantized weight shape"
         );
+        let stride = cols
+            + if cols.is_multiple_of(1024) {
+                512 / bits
+            } else {
+                0
+            };
+        #[cfg(feature = "bench-internals")]
+        let cache_key = self
+            .packed_weight_cache
+            .as_ref()
+            .map(|cache| cache.key(name, rows, cols, bits, bytes));
+        #[cfg(feature = "bench-internals")]
+        if let Some(key) = &cache_key
+            && let Some(cached) = self.packed_weight_cache.as_mut().unwrap().read(key)?
+        {
+            let mut codes = self.input(rows, cols / (32 / bits), DType::U32, &cached.codes)?;
+            codes.layout = Layout::Tiled;
+            let scales = self.input(1, rows, DType::F32, &cached.scales)?;
+            self.quantized.weights.insert(
+                name.into(),
+                QuantizedWeight {
+                    codes,
+                    scales,
+                    rows,
+                    cols,
+                    stride,
+                    bits,
+                },
+            );
+            self.reset_plan()?;
+            return Ok(true);
+        }
         // Packing reads logical rows; restore them from the tiled checkpoint order.
         let untiled;
         let bytes = if crate::checkpoint::tiled_projection(name, rows, cols) {
@@ -166,12 +198,6 @@ impl Engine {
         } else {
             bytes
         };
-        let stride = cols
-            + if cols.is_multiple_of(1024) {
-                512 / bits
-            } else {
-                0
-            };
         let dense = self.input(rows, cols, DType::Bf16, bytes)?;
         let (packed, packed_scales) = prepare(self, &dense, bits, stride)?;
         // Keep only the tiled codes and a compact scale row resident; the packing
@@ -181,6 +207,15 @@ impl Engine {
         self.copy_into(&packed_scales, &scales)?;
         let mut graph = self.finish()?;
         self.run(&mut graph)?;
+        #[cfg(feature = "bench-internals")]
+        if let Some(key) = &cache_key {
+            let code_bytes = self.read_bytes(&codes)?;
+            let scale_bytes = self.read_bytes(&scales)?;
+            self.packed_weight_cache
+                .as_ref()
+                .unwrap()
+                .write(key, &code_bytes, &scale_bytes)?;
+        }
         self.quantized.weights.insert(
             name.into(),
             QuantizedWeight {
@@ -211,6 +246,16 @@ impl Engine {
             x.cols == w.cols && x.dtype == DType::Bf16,
             "quantized projection shape/dtype mismatch"
         );
+        let (a, scales) = self.prepare_quantized_input(x, w)?;
+        self.project_prepared(x.rows, w, &a, &scales, residual)
+    }
+
+    /// Reuse packed input only for the same leased tensor view and packing layout.
+    pub(crate) fn prepare_quantized_input(
+        &mut self,
+        x: &Tensor,
+        w: &QuantizedWeight,
+    ) -> Result<(Tensor, Tensor)> {
         let cached = self
             .quantized
             .activation
@@ -231,7 +276,7 @@ impl Engine {
             }
             (a, scales)
         };
-        self.project_prepared(x.rows, w, &a, &scales, residual)
+        Ok((a, scales))
     }
 
     pub(crate) fn project_residual(
@@ -839,7 +884,8 @@ mod tests {
         let weights: Vec<_> = (0..256 * 256)
             .map(|i| half::bf16::from_f32(if i / 256 == i % 256 { 1. } else { 0. }))
             .collect();
-        e.load_quantized_weight(name, 256, 256, bytemuck::cast_slice(&weights))?;
+        let tiled = crate::checkpoint::tile_rows(bytemuck::cast_slice(&weights), 256, 256);
+        e.load_quantized_weight(name, 256, 256, &tiled)?;
         let w = e.quantized.weights[name].clone();
         let values: Vec<_> = (0..17 * 256)
             .map(|i| half::bf16::from_f32(1. + (i / 256) as f32 / 16.))
@@ -864,6 +910,66 @@ mod tests {
         for _ in 0..2 {
             e.run(&mut graph)?;
             assert_eq!(e.read_f32(&x)?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "bench-internals")]
+    #[ignore = "requires gfx1151; compares cached integer weights and outputs byte-for-byte"]
+    fn packed_weight_cache_reloads_exact_codes_scales_and_outputs() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let manager = hrx::residency::ResidencyManager::new(64 << 20)?;
+        let context = ModelContext::new(hrx::execution::RuntimeOptions {
+            memory_budget: Some(manager.budget()),
+            ..Default::default()
+        })?;
+        for bits in [4, 8] {
+            for (rows, cols) in [(256, 256), (256, 1024), (512, 768)] {
+                let name = "model.language_model.layers.0.mlp.up_proj.weight";
+                let values: Vec<_> = (0..rows * cols)
+                    .map(|i| half::bf16::from_f32(((i * 37 % 251) as f32 - 125.) / 128.))
+                    .collect();
+                let tiled = crate::checkpoint::tile_rows(bytemuck::cast_slice(&values), rows, cols);
+                let mut expected = None;
+                for cached in [false, true] {
+                    let mut engine = Engine::new(&context)?;
+                    engine.quantized = QuantizedProjections::for_precision(Precision::Int4Mlp);
+                    engine.quantized.bits = Some(bits);
+                    engine.set_packed_weight_cache(directory.path().into());
+                    assert!(engine.load_quantized_weight(name, rows, cols, &tiled)?);
+                    let cache = engine.packed_weight_cache.as_ref().unwrap();
+                    assert_eq!(
+                        (cache.hits, cache.misses),
+                        if cached { (1, 0) } else { (0, 1) }
+                    );
+                    let weight = engine.quantized.weights[name].clone();
+                    let codes = engine.read_bytes(&weight.codes)?;
+                    let scales = engine.read_bytes(&weight.scales)?;
+                    let mut outputs = Vec::new();
+                    for tokens in [1, 17] {
+                        let x: Vec<_> = (0..tokens * cols)
+                            .map(|i| half::bf16::from_f32(((i * 19 % 257) as f32 - 128.) / 64.))
+                            .collect();
+                        let x =
+                            engine.input(tokens, cols, DType::Bf16, bytemuck::cast_slice(&x))?;
+                        let out = engine.project_quantized(&x, &weight)?;
+                        let mut graph = engine.finish()?;
+                        engine.run(&mut graph)?;
+                        let output = engine.read_bytes(&out)?;
+                        engine.run(&mut graph)?;
+                        assert_eq!(output, engine.read_bytes(&out)?);
+                        outputs.push(output);
+                        engine.reset_plan()?;
+                    }
+                    let result = (codes, scales, outputs);
+                    if cached {
+                        assert_eq!(Some(result), expected);
+                    } else {
+                        expected = Some(result);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -903,7 +1009,10 @@ mod tests {
                         half::bf16::from_f32((((i * (17 + index * 4)) % 251) as f32 - 125.) / 128.)
                     })
                     .collect();
-                assert!(e.load_quantized_weight(name, 256, 256, bytemuck::cast_slice(&values))?);
+                // The loader accepts checkpoint tiles; the oracle below uses
+                // logical rows. Keep both representations explicit.
+                let tiled = crate::checkpoint::tile_rows(bytemuck::cast_slice(&values), 256, 256);
+                assert!(e.load_quantized_weight(name, 256, 256, &tiled)?);
                 weight_oracles.push(
                     values
                         .as_chunks::<256>()
@@ -1080,9 +1189,12 @@ mod tests {
     fn fused_swiglu_packing_matches_reference() -> Result<()> {
         let context = ModelContext::new(Default::default())?;
         let mut e = Engine::new(&context)?;
-        let width = 17408;
-        for bits in [4, 8] {
-            for rows in [1, 128, 158, 620] {
+        for (width, bits, row_counts) in [
+            (17408, 4, vec![1, 128, 158, 620]),
+            (17408, 8, vec![1, 128, 158, 620]),
+            (768, 4, vec![8, 136, 2048, 8192, 16384]),
+        ] {
+            for rows in row_counts {
                 let gates: Vec<_> = (0..(rows + 2) * width)
                     .map(|i| {
                         let col = i % width;

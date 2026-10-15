@@ -14,10 +14,10 @@ template.def<@h3.packed_schema> @h3_packed_i4(%registers: index) -> (encoding<sc
 template.decl @h3.packed_m128(%m_size: index, %a: buffer, %w: buffer, %scale: buffer, %a_scale: buffer, %residual: buffer, %fuse_residual: i1, %c: buffer, %cfg_k_size: index, %cfg_n_size: index, %cfg_k_stride: index, %cfg_m_group: index, %registers: index, %k_step: index, %packed_per_word: index, %rows_bound: index)
 
 template.def<@h3.packed_m128> @h3_packed_m128(%m_size: index, %a: buffer, %w: buffer, %scale: buffer, %a_scale: buffer, %residual: buffer, %fuse_residual: i1, %c: buffer, %cfg_k_size: index, %cfg_n_size: index, %cfg_k_stride: index, %cfg_m_group: index, %registers: index, %k_step: index, %packed_per_word: index, %rows_bound: index) {
-  %k_size = index.assume %cfg_k_size [range(%cfg_k_size, 64, 65536), mul(%cfg_k_size, 64)] : index
+  %k_size = index.assume %cfg_k_size [range(%cfg_k_size, 64, 65536), multiple_of(%cfg_k_size, 64)] : index
   // Pad 1024-aligned operand rows to avoid cache-set conflicts.
-  %k_stride = index.assume %cfg_k_stride [range(%cfg_k_stride, 64, 65536), mul(%cfg_k_stride, 64)] : index
-  %n_size = index.assume %cfg_n_size [range(%cfg_n_size, 128, 65536), mul(%cfg_n_size, 128)] : index
+  %k_stride = index.assume %cfg_k_stride [range(%cfg_k_stride, 64, 65536), multiple_of(%cfg_k_stride, 64)] : index
+  %n_size = index.assume %cfg_n_size [range(%cfg_n_size, 128, 65536), multiple_of(%cfg_n_size, 128)] : index
 
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -143,7 +143,7 @@ template.def<@h3.packed_m128> @h3_packed_m128(%m_size: index, %a: buffer, %w: bu
     %acc_init = vector.fragment<init> %zero_i32x8 shape [%m, %n] : vector<8xi32>
 
     // Gather of the first k step into registers.
-    %kq_first = index.assume %st_quad [le(%st_quad, %k_quad_limit), mul(%st_quad, 4)] : index
+    %kq_first = index.assume %st_quad [le(%st_quad, %k_quad_limit), multiple_of(%st_quad, 4)] : index
     %ga0 = vector.load %a_view[%a_row0, %kq_first] : view<[%m_bounded]x[%k_quads]xi32> -> vector<4xi32>
     %ga1 = vector.load %a_view[%a_row1, %kq_first] : view<[%m_bounded]x[%k_quads]xi32> -> vector<4xi32>
     %ga2 = vector.load %a_view[%a_row2, %kq_first] : view<[%m_bounded]x[%k_quads]xi32> -> vector<4xi32>
@@ -152,7 +152,7 @@ template.def<@h3.packed_m128> @h3_packed_m128(%m_size: index, %a: buffer, %w: bu
     %gwblk = index.add %w_block_n, %gwb : index
     %gwrow = index.mul %gwblk, %c128 : index
     %gwcol0 = index.rem %kq_first, %c32 : index
-    %gwcol = index.assume %gwcol0 [lt(%gwcol0, %c32), mul(%gwcol0, 4)] : index
+    %gwcol = index.assume %gwcol0 [lt(%gwcol0, %c32), multiple_of(%gwcol0, 4)] : index
     %gwr00 = index.add %gwrow, %st_wrow0 : index
     %gwr0 = index.assume %gwr00 [lt(%gwr00, %w_tiled_rows)] : index
     %gw0 = vector.load %w_tiled[%gwr0, %gwcol] : view<[%w_tiled_rows]x32xi32> -> vector<4xi32>
@@ -184,7 +184,7 @@ template.def<@h3.packed_m128> @h3_packed_m128(%m_size: index, %a: buffer, %w: bu
       %kq_next0 = index.div %k_next, %packed_per_word : index
       %kq_slot = index.add %kq_next0, %st_quad : index
       %kq_safe = scf.select %in_k, %kq_slot, %st_quad : index
-      %kq_next = index.assume %kq_safe [le(%kq_safe, %k_quad_limit), mul(%kq_safe, 4)] : index
+      %kq_next = index.assume %kq_safe [le(%kq_safe, %k_quad_limit), multiple_of(%kq_safe, 4)] : index
       %na0 = vector.load %a_view[%a_row0, %kq_next] : view<[%m_bounded]x[%k_quads]xi32> -> vector<4xi32>
       %na1 = vector.load %a_view[%a_row1, %kq_next] : view<[%m_bounded]x[%k_quads]xi32> -> vector<4xi32>
       %na2 = vector.load %a_view[%a_row2, %kq_next] : view<[%m_bounded]x[%k_quads]xi32> -> vector<4xi32>
@@ -193,7 +193,7 @@ template.def<@h3.packed_m128> @h3_packed_m128(%m_size: index, %a: buffer, %w: bu
       %nwblk = index.add %w_block_n, %nwb : index
       %nwrow = index.mul %nwblk, %c128 : index
       %nwcol0 = index.rem %kq_next, %c32 : index
-      %nwcol = index.assume %nwcol0 [lt(%nwcol0, %c32), mul(%nwcol0, 4)] : index
+      %nwcol = index.assume %nwcol0 [lt(%nwcol0, %c32), multiple_of(%nwcol0, 4)] : index
       %nwr00 = index.add %nwrow, %st_wrow0 : index
       %nwr0 = index.assume %nwr00 [lt(%nwr00, %w_tiled_rows)] : index
       %nw0 = vector.load %w_tiled[%nwr0, %nwcol] : view<[%w_tiled_rows]x32xi32> -> vector<4xi32>
@@ -316,11 +316,11 @@ template.def<@h3.packed_m128> @h3_packed_m128(%m_size: index, %a: buffer, %w: bu
 
 amdgpu.target<gfx11-generic> @h3_gemm_i4_256_gfx11 {subgroup_size = 32}
 
-config.decl @h3.gemm_i4_256.k_size : %value: index where [range(%value, 256, 65536), mul(%value, 256)]
+config.decl @h3.gemm_i4_256.k_size : %value: index where [range(%value, 256, 65536), multiple_of(%value, 256)]
 
-config.decl @h3.gemm_i4_256.n_size : %value: index where [range(%value, 128, 65536), mul(%value, 128)]
+config.decl @h3.gemm_i4_256.n_size : %value: index where [range(%value, 128, 65536), multiple_of(%value, 128)]
 
-config.decl @h3.gemm_i4_256.k_stride : %value: index where [range(%value, 128, 65536), mul(%value, 128)]
+config.decl @h3.gemm_i4_256.k_stride : %value: index where [range(%value, 128, 65536), multiple_of(%value, 128)]
 
 config.decl @h3.gemm_i4_256.m_group : %value: index where [range(%value, 1, 4)]
 

@@ -1,0 +1,817 @@
+// attention_tiled. Shapes and storage types are compiler specializations.
+// Omni 128-wide heads. Sixteen queries per wave, BF16 WMMA with FP32 online softmax.
+// V is transposed and padded; probabilities use high/residual BF16 components.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.heads : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ratio : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.qw : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.kw : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.scale : f32
+config.decl @clef.causal : %value: index where [range(%value, 0, 4294967295)]
+
+kernel.def target(@clef_target) export("clef_op") @clef_op(%query_rows: index, %key_rows: index, %v_capacity: index) {
+ %one = index.constant 1 : index
+ %two = index.constant 2 : index
+ %sixteen = index.constant 16 : index
+ %fifteen = index.constant 15 : index
+ %threads = index.constant 64 : index
+ %heads = config.get @clef.heads : index
+ %rounded = index.add %query_rows, %fifteen : index
+ %tiles = index.div %rounded, %sixteen : index
+ %waves = index.mul %tiles, %heads : index
+ %rounded_waves = index.add %waves, %one : index
+ %groups = index.div %rounded_waves, %two : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%query_rows: index, %key_rows: index, %v_capacity: index, %q_buffer: buffer, %k_buffer: buffer, %v_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %fone = scalar.constant 1.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %queries = index.assume %query_rows [range(%query_rows, 1, 65536)] : index
+ %qw_outer = config.get @clef.qw : index
+ %out_len = index.mul %queries, %qw_outer : index
+ %out_dtype = index.constant 0 : index
+ %heads_outer = config.get @clef.heads : index
+ %c15outer = index.constant 15 : index
+ %c16outer = index.constant 16 : index
+ %query_round = index.add %queries, %c15outer : index
+ %query_tiles = index.div %query_round, %c16outer : index
+ %c32outer = index.constant 32 : index
+ %c2outer = index.constant 2 : index
+ %local_wave = kernel.subgroup.id : index
+ %wavebase = index.mul %wg, %c2outer : index
+ %waveid = index.add %wavebase, %local_wave : index
+ %wavecount = index.mul %query_tiles, %heads_outer : index
+ %active = index.cmp ult, %waveid, %wavecount : index
+ %lds_bytes = index.constant 2048 : offset
+ %lds = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
+ scf.if %active {
+%c2 = index.constant 2 : index
+%c4 = index.constant 4 : index
+%c8 = index.constant 8 : index
+%c15 = index.constant 15 : index
+%c16 = index.constant 16 : index
+%c32 = index.constant 32 : index
+%c64 = index.constant 64 : index
+%c128 = index.constant 128 : index
+%c256 = index.constant 256 : index
+%i1 = scalar.constant 1 : i32
+%i2 = scalar.constant 2 : i32
+%i4 = scalar.constant 4 : i32
+%i8 = scalar.constant 8 : i32
+%i32 = scalar.constant 32 : i32
+%heads = config.get @clef.heads : index
+%ratio = config.get @clef.ratio : index
+%qw = config.get @clef.qw : index
+%kw = config.get @clef.kw : index
+%keys = index.assume %key_rows [range(%key_rows, 1, 65536), le(%key_rows, %v_capacity)] : index
+%vstride = index.assume %v_capacity [range(%v_capacity, 64, 65536), multiple_of(%v_capacity, 64)] : index
+%scale = config.get @clef.scale : f32
+%scalev = vector.splat %scale : vector<8xf32>
+%wave = index.add %waveid, %zero : index
+%ll = index.rem %id, %c32 : index
+%wave_local = kernel.subgroup.id : index
+%lc = index.rem %ll, %c16 : index
+%lg = index.div %ll, %c16 : index
+%head = index.rem %wave, %heads : index
+%tile = index.div %wave, %heads : index
+%qbase = index.mul %tile, %c16 : index
+%qr0 = index.add %qbase, %lc : index
+%qpresent = index.cmp ult, %qr0, %queries : index
+%qsafe = scf.select %qpresent, %qr0, %zero : index
+%qr = index.assume %qsafe [lt(%qsafe, %queries)] : index
+%kh = index.div %head, %ratio : index
+%qc = index.mul %head, %c128 : index
+%kc = index.mul %kh, %c128 : index
+%qg = buffer.assume.memory_space<global> %q_buffer : buffer
+%kg = buffer.assume.memory_space<global> %k_buffer : buffer
+%vg = buffer.assume.memory_space<global> %v_buffer : buffer
+%qview = buffer.view %qg[%offset] : buffer -> view<[%queries]x[%qw]xbf16>
+%kview = buffer.view %kg[%offset] : buffer -> view<[%keys]x[%kw]xbf16>
+%vview = buffer.view %vg[%offset] : buffer -> view<[%kw]x[%vstride]xbf16>
+%wave_bytes = index.constant 1024 : offset
+%wave_offset = index.scale %wave_local, %wave_bytes : index, offset -> offset
+%low_bytes = index.constant 512 : offset
+%low_offset = index.add %wave_offset, %low_bytes : offset
+%pvhi = buffer.view %lds[%wave_offset] : buffer -> view<16x16xbf16>
+%pvlo = buffer.view %lds[%low_offset] : buffer -> view<16x16xbf16>
+%negative = scalar.constant -3.402823466e38 : f32
+%negv = vector.splat %negative : vector<8xf32>
+%zv = vector.constant 0.0 : vector<8xf32>
+%init = vector.fragment<init> %zv shape [%c16, %c16] : vector<8xf32>
+%keyceil = index.add %keys, %c15 : index
+%keytiles = index.div %keyceil, %c16 : index
+%query_end = index.add %tile, %one : index
+%causal = config.get @clef.causal : index
+%causal_bool = index.cmp ne, %causal, %zero : index
+%end = scf.select %causal_bool, %query_end, %keytiles : index
+%rconst0 = index.constant 0 : index
+%rtemp0 = index.add %qbase, %rconst0 : index
+%r0 = index.add %rtemp0, %lg : index
+%rconst1 = index.constant 2 : index
+%rtemp1 = index.add %qbase, %rconst1 : index
+%r1 = index.add %rtemp1, %lg : index
+%rconst2 = index.constant 4 : index
+%rtemp2 = index.add %qbase, %rconst2 : index
+%r2 = index.add %rtemp2, %lg : index
+%rconst3 = index.constant 6 : index
+%rtemp3 = index.add %qbase, %rconst3 : index
+%r3 = index.add %rtemp3, %lg : index
+%rconst4 = index.constant 8 : index
+%rtemp4 = index.add %qbase, %rconst4 : index
+%r4 = index.add %rtemp4, %lg : index
+%rconst5 = index.constant 10 : index
+%rtemp5 = index.add %qbase, %rconst5 : index
+%r5 = index.add %rtemp5, %lg : index
+%rconst6 = index.constant 12 : index
+%rtemp6 = index.add %qbase, %rconst6 : index
+%r6 = index.add %rtemp6, %lg : index
+%rconst7 = index.constant 14 : index
+%rtemp7 = index.add %qbase, %rconst7 : index
+%r7 = index.add %rtemp7, %lg : index
+%finalmax, %finalsum, %final0, %final1, %final2, %final3, %final4, %final5, %final6, %final7 = scf.for %kt = [%zero to %end step %one](%accmax = %negv : vector<8xf32>, %accsum = %zv : vector<8xf32>, %acc0 = %init : vector<8xf32>, %acc1 = %init : vector<8xf32>, %acc2 = %init : vector<8xf32>, %acc3 = %init : vector<8xf32>, %acc4 = %init : vector<8xf32>, %acc5 = %init : vector<8xf32>, %acc6 = %init : vector<8xf32>, %acc7 = %init : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+%kb = index.mul %kt, %c16 : index
+%kr0 = index.add %kb, %lc : index
+%kpresent = index.cmp ult, %kr0, %keys : index
+%ksafe = scf.select %kpresent, %kr0, %zero : index
+%kr = index.assume %ksafe [lt(%ksafe, %keys)] : index
+// Keep the reset dependent on this key iteration. The pinned Loom compiler
+// otherwise produces stale values from an invariant zero in the nested MMA loop.
+// accsum is finite and nonnegative, so this is exactly zero.
+%qkzero = vector.subf %accsum, %accsum : vector<8xf32>
+%qkinit = vector.fragment<init> %qkzero shape [%c16, %c16] : vector<8xf32>
+%dot = scf.for %d = [%zero to %c128 step %c16](%da = %qkinit : vector<8xf32>) -> (vector<8xf32>) {
+ %qcol0 = index.add %qc, %d : index
+ %kcol0 = index.add %kc, %d : index
+ %qlim = index.sub %qw, %c16 : index
+ %klim = index.sub %kw, %c16 : index
+ %qcol = index.assume %qcol0 [le(%qcol0, %qlim), multiple_of(%qcol0, 16)] : index
+ %kcol = index.assume %kcol0 [le(%kcol0, %klim), multiple_of(%kcol0, 16)] : index
+ %qd = vector.load %qview[%qr, %qcol] : view<[%queries]x[%qw]xbf16> -> vector<16xbf16>
+ %kd = vector.load %kview[%kr, %kcol] : view<[%keys]x[%kw]xbf16> -> vector<16xbf16>
+ %lhs = vector.fragment<lhs> %qd shape [%c16, %c16] : vector<16xbf16>
+ %rhs = vector.fragment<rhs> %kd shape [%c16, %c16] : vector<16xbf16>
+ %dn = vector.mma %lhs, %rhs, %da : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+ scf.yield %dn : vector<8xf32>
+}
+%scaled = vector.mulf %dot, %scalev : vector<8xf32>
+%causalok0 = index.cmp ule, %kr0, %r0 : index
+%rowok0 = scf.select %causal_bool, %causalok0, %kpresent : i1
+%ok0 = scalar.andi %rowok0, %kpresent : i1
+%score0 = vector.extract %scaled[0] : vector<8xf32> -> f32
+%masked0 = scf.select %ok0, %score0, %negative : f32
+%mask0 = vector.insert %masked0 into %zv[0] : f32, vector<8xf32>
+%causalok1 = index.cmp ule, %kr0, %r1 : index
+%rowok1 = scf.select %causal_bool, %causalok1, %kpresent : i1
+%ok1 = scalar.andi %rowok1, %kpresent : i1
+%score1 = vector.extract %scaled[1] : vector<8xf32> -> f32
+%masked1 = scf.select %ok1, %score1, %negative : f32
+%mask1 = vector.insert %masked1 into %mask0[1] : f32, vector<8xf32>
+%causalok2 = index.cmp ule, %kr0, %r2 : index
+%rowok2 = scf.select %causal_bool, %causalok2, %kpresent : i1
+%ok2 = scalar.andi %rowok2, %kpresent : i1
+%score2 = vector.extract %scaled[2] : vector<8xf32> -> f32
+%masked2 = scf.select %ok2, %score2, %negative : f32
+%mask2 = vector.insert %masked2 into %mask1[2] : f32, vector<8xf32>
+%causalok3 = index.cmp ule, %kr0, %r3 : index
+%rowok3 = scf.select %causal_bool, %causalok3, %kpresent : i1
+%ok3 = scalar.andi %rowok3, %kpresent : i1
+%score3 = vector.extract %scaled[3] : vector<8xf32> -> f32
+%masked3 = scf.select %ok3, %score3, %negative : f32
+%mask3 = vector.insert %masked3 into %mask2[3] : f32, vector<8xf32>
+%causalok4 = index.cmp ule, %kr0, %r4 : index
+%rowok4 = scf.select %causal_bool, %causalok4, %kpresent : i1
+%ok4 = scalar.andi %rowok4, %kpresent : i1
+%score4 = vector.extract %scaled[4] : vector<8xf32> -> f32
+%masked4 = scf.select %ok4, %score4, %negative : f32
+%mask4 = vector.insert %masked4 into %mask3[4] : f32, vector<8xf32>
+%causalok5 = index.cmp ule, %kr0, %r5 : index
+%rowok5 = scf.select %causal_bool, %causalok5, %kpresent : i1
+%ok5 = scalar.andi %rowok5, %kpresent : i1
+%score5 = vector.extract %scaled[5] : vector<8xf32> -> f32
+%masked5 = scf.select %ok5, %score5, %negative : f32
+%mask5 = vector.insert %masked5 into %mask4[5] : f32, vector<8xf32>
+%causalok6 = index.cmp ule, %kr0, %r6 : index
+%rowok6 = scf.select %causal_bool, %causalok6, %kpresent : i1
+%ok6 = scalar.andi %rowok6, %kpresent : i1
+%score6 = vector.extract %scaled[6] : vector<8xf32> -> f32
+%masked6 = scf.select %ok6, %score6, %negative : f32
+%mask6 = vector.insert %masked6 into %mask5[6] : f32, vector<8xf32>
+%causalok7 = index.cmp ule, %kr0, %r7 : index
+%rowok7 = scf.select %causal_bool, %causalok7, %kpresent : i1
+%ok7 = scalar.andi %rowok7, %kpresent : i1
+%score7 = vector.extract %scaled[7] : vector<8xf32> -> f32
+%masked7 = scf.select %ok7, %score7, %negative : f32
+%mask7 = vector.insert %masked7 into %mask6[7] : f32, vector<8xf32>
+%ms1, %mv1 = kernel.subgroup.shuffle<xor> %mask7, %i1, %i32 : vector<8xf32>, i32, i32
+%mx1 = vector.maxnumf %mask7, %ms1 : vector<8xf32>
+%ms2, %mv2 = kernel.subgroup.shuffle<xor> %mx1, %i2, %i32 : vector<8xf32>, i32, i32
+%mx2 = vector.maxnumf %mx1, %ms2 : vector<8xf32>
+%ms4, %mv4 = kernel.subgroup.shuffle<xor> %mx2, %i4, %i32 : vector<8xf32>, i32, i32
+%mx4 = vector.maxnumf %mx2, %ms4 : vector<8xf32>
+%ms8, %mv8 = kernel.subgroup.shuffle<xor> %mx4, %i8, %i32 : vector<8xf32>, i32, i32
+%mx8 = vector.maxnumf %mx4, %ms8 : vector<8xf32>
+%nextmax = vector.maxnumf %accmax, %mx8 : vector<8xf32>
+%pdiff = vector.subf %mask7, %nextmax : vector<8xf32>
+%prob = vector.expf<afn> %pdiff : vector<8xf32>
+%odiff = vector.subf %accmax, %nextmax : vector<8xf32>
+%alpha = vector.expf<afn> %odiff : vector<8xf32>
+%ss1, %sv1 = kernel.subgroup.shuffle<xor> %prob, %i1, %i32 : vector<8xf32>, i32, i32
+%sum1 = vector.addf %prob, %ss1 : vector<8xf32>
+%ss2, %sv2 = kernel.subgroup.shuffle<xor> %sum1, %i2, %i32 : vector<8xf32>, i32, i32
+%sum2 = vector.addf %sum1, %ss2 : vector<8xf32>
+%ss4, %sv4 = kernel.subgroup.shuffle<xor> %sum2, %i4, %i32 : vector<8xf32>, i32, i32
+%sum4 = vector.addf %sum2, %ss4 : vector<8xf32>
+%ss8, %sv8 = kernel.subgroup.shuffle<xor> %sum4, %i8, %i32 : vector<8xf32>, i32, i32
+%sum8 = vector.addf %sum4, %ss8 : vector<8xf32>
+%oldsum = vector.mulf %accsum, %alpha : vector<8xf32>
+%nextsum = vector.addf %oldsum, %sum8 : vector<8xf32>
+%probhalf = vector.fptrunc %prob : vector<8xf32> to vector<8xbf16>
+%probhi = vector.extf %probhalf : vector<8xbf16> to vector<8xf32>
+%problo = vector.subf %prob, %probhi : vector<8xf32>
+vector.fragment.store<result> %probhi, %pvhi[%zero, %zero] shape [%c16, %c16] : vector<8xf32>, view<16x16xbf16>
+vector.fragment.store<result> %problo, %pvlo[%zero, %zero] shape [%c16, %c16] : vector<8xf32>, view<16x16xbf16>
+kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+%ph = vector.fragment.load<lhs> %pvhi[%zero, %zero] shape [%c16, %c16] : view<16x16xbf16> -> vector<16xbf16>
+%pl = vector.fragment.load<lhs> %pvlo[%zero, %zero] shape [%c16, %c16] : view<16x16xbf16> -> vector<16xbf16>
+%vc0 = index.constant 0 : index
+%vr0a = index.add %kc, %vc0 : index
+%vr0b = index.add %vr0a, %lc : index
+%vr0 = index.assume %vr0b [lt(%vr0b, %kw)] : index
+%klast0 = index.sub %vstride, %c16 : index
+%kb0 = index.assume %kb [le(%kb, %klast0), multiple_of(%kb, 16)] : index
+%vd0 = vector.load %vview[%vr0, %kb0] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
+%vf0 = vector.fragment<rhs> %vd0 shape [%c16, %c16] : vector<16xbf16>
+%rescale0 = vector.mulf %acc0, %alpha : vector<8xf32>
+%part0 = vector.mma %ph, %vf0, %rescale0 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%next0 = vector.mma %pl, %vf0, %part0 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%vc1 = index.constant 16 : index
+%vr1a = index.add %kc, %vc1 : index
+%vr1b = index.add %vr1a, %lc : index
+%vr1 = index.assume %vr1b [lt(%vr1b, %kw)] : index
+%klast1 = index.sub %vstride, %c16 : index
+%kb1 = index.assume %kb [le(%kb, %klast1), multiple_of(%kb, 16)] : index
+%vd1 = vector.load %vview[%vr1, %kb1] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
+%vf1 = vector.fragment<rhs> %vd1 shape [%c16, %c16] : vector<16xbf16>
+%rescale1 = vector.mulf %acc1, %alpha : vector<8xf32>
+%part1 = vector.mma %ph, %vf1, %rescale1 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%next1 = vector.mma %pl, %vf1, %part1 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%vc2 = index.constant 32 : index
+%vr2a = index.add %kc, %vc2 : index
+%vr2b = index.add %vr2a, %lc : index
+%vr2 = index.assume %vr2b [lt(%vr2b, %kw)] : index
+%klast2 = index.sub %vstride, %c16 : index
+%kb2 = index.assume %kb [le(%kb, %klast2), multiple_of(%kb, 16)] : index
+%vd2 = vector.load %vview[%vr2, %kb2] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
+%vf2 = vector.fragment<rhs> %vd2 shape [%c16, %c16] : vector<16xbf16>
+%rescale2 = vector.mulf %acc2, %alpha : vector<8xf32>
+%part2 = vector.mma %ph, %vf2, %rescale2 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%next2 = vector.mma %pl, %vf2, %part2 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%vc3 = index.constant 48 : index
+%vr3a = index.add %kc, %vc3 : index
+%vr3b = index.add %vr3a, %lc : index
+%vr3 = index.assume %vr3b [lt(%vr3b, %kw)] : index
+%klast3 = index.sub %vstride, %c16 : index
+%kb3 = index.assume %kb [le(%kb, %klast3), multiple_of(%kb, 16)] : index
+%vd3 = vector.load %vview[%vr3, %kb3] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
+%vf3 = vector.fragment<rhs> %vd3 shape [%c16, %c16] : vector<16xbf16>
+%rescale3 = vector.mulf %acc3, %alpha : vector<8xf32>
+%part3 = vector.mma %ph, %vf3, %rescale3 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%next3 = vector.mma %pl, %vf3, %part3 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%vc4 = index.constant 64 : index
+%vr4a = index.add %kc, %vc4 : index
+%vr4b = index.add %vr4a, %lc : index
+%vr4 = index.assume %vr4b [lt(%vr4b, %kw)] : index
+%klast4 = index.sub %vstride, %c16 : index
+%kb4 = index.assume %kb [le(%kb, %klast4), multiple_of(%kb, 16)] : index
+%vd4 = vector.load %vview[%vr4, %kb4] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
+%vf4 = vector.fragment<rhs> %vd4 shape [%c16, %c16] : vector<16xbf16>
+%rescale4 = vector.mulf %acc4, %alpha : vector<8xf32>
+%part4 = vector.mma %ph, %vf4, %rescale4 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%next4 = vector.mma %pl, %vf4, %part4 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%vc5 = index.constant 80 : index
+%vr5a = index.add %kc, %vc5 : index
+%vr5b = index.add %vr5a, %lc : index
+%vr5 = index.assume %vr5b [lt(%vr5b, %kw)] : index
+%klast5 = index.sub %vstride, %c16 : index
+%kb5 = index.assume %kb [le(%kb, %klast5), multiple_of(%kb, 16)] : index
+%vd5 = vector.load %vview[%vr5, %kb5] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
+%vf5 = vector.fragment<rhs> %vd5 shape [%c16, %c16] : vector<16xbf16>
+%rescale5 = vector.mulf %acc5, %alpha : vector<8xf32>
+%part5 = vector.mma %ph, %vf5, %rescale5 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%next5 = vector.mma %pl, %vf5, %part5 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%vc6 = index.constant 96 : index
+%vr6a = index.add %kc, %vc6 : index
+%vr6b = index.add %vr6a, %lc : index
+%vr6 = index.assume %vr6b [lt(%vr6b, %kw)] : index
+%klast6 = index.sub %vstride, %c16 : index
+%kb6 = index.assume %kb [le(%kb, %klast6), multiple_of(%kb, 16)] : index
+%vd6 = vector.load %vview[%vr6, %kb6] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
+%vf6 = vector.fragment<rhs> %vd6 shape [%c16, %c16] : vector<16xbf16>
+%rescale6 = vector.mulf %acc6, %alpha : vector<8xf32>
+%part6 = vector.mma %ph, %vf6, %rescale6 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%next6 = vector.mma %pl, %vf6, %part6 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%vc7 = index.constant 112 : index
+%vr7a = index.add %kc, %vc7 : index
+%vr7b = index.add %vr7a, %lc : index
+%vr7 = index.assume %vr7b [lt(%vr7b, %kw)] : index
+%klast7 = index.sub %vstride, %c16 : index
+%kb7 = index.assume %kb [le(%kb, %klast7), multiple_of(%kb, 16)] : index
+%vd7 = vector.load %vview[%vr7, %kb7] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
+%vf7 = vector.fragment<rhs> %vd7 shape [%c16, %c16] : vector<16xbf16>
+%rescale7 = vector.mulf %acc7, %alpha : vector<8xf32>
+%part7 = vector.mma %ph, %vf7, %rescale7 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+%next7 = vector.mma %pl, %vf7, %part7 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+scf.yield %nextmax, %nextsum, %next0, %next1, %next2, %next3, %next4, %next5, %next6, %next7 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+}
+%of0 = vector.divf %final0, %finalsum : vector<8xf32>
+%oc0 = index.constant 0 : index
+%ocol0a = index.add %qc, %oc0 : index
+%ocol0 = index.add %ocol0a, %lc : index
+%valid0_0 = index.cmp ult, %r0, %queries : index
+scf.if %valid0_0 {
+ %oi0_0a = index.mul %r0, %qw : index
+ %oi0_0 = index.add %oi0_0a, %ocol0 : index
+ %val0_0 = vector.extract %of0[0] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0_0, %val0_0) : (index, buffer, index, index, f32) -> ()
+}
+%valid0_1 = index.cmp ult, %r1, %queries : index
+scf.if %valid0_1 {
+ %oi0_1a = index.mul %r1, %qw : index
+ %oi0_1 = index.add %oi0_1a, %ocol0 : index
+ %val0_1 = vector.extract %of0[1] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0_1, %val0_1) : (index, buffer, index, index, f32) -> ()
+}
+%valid0_2 = index.cmp ult, %r2, %queries : index
+scf.if %valid0_2 {
+ %oi0_2a = index.mul %r2, %qw : index
+ %oi0_2 = index.add %oi0_2a, %ocol0 : index
+ %val0_2 = vector.extract %of0[2] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0_2, %val0_2) : (index, buffer, index, index, f32) -> ()
+}
+%valid0_3 = index.cmp ult, %r3, %queries : index
+scf.if %valid0_3 {
+ %oi0_3a = index.mul %r3, %qw : index
+ %oi0_3 = index.add %oi0_3a, %ocol0 : index
+ %val0_3 = vector.extract %of0[3] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0_3, %val0_3) : (index, buffer, index, index, f32) -> ()
+}
+%valid0_4 = index.cmp ult, %r4, %queries : index
+scf.if %valid0_4 {
+ %oi0_4a = index.mul %r4, %qw : index
+ %oi0_4 = index.add %oi0_4a, %ocol0 : index
+ %val0_4 = vector.extract %of0[4] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0_4, %val0_4) : (index, buffer, index, index, f32) -> ()
+}
+%valid0_5 = index.cmp ult, %r5, %queries : index
+scf.if %valid0_5 {
+ %oi0_5a = index.mul %r5, %qw : index
+ %oi0_5 = index.add %oi0_5a, %ocol0 : index
+ %val0_5 = vector.extract %of0[5] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0_5, %val0_5) : (index, buffer, index, index, f32) -> ()
+}
+%valid0_6 = index.cmp ult, %r6, %queries : index
+scf.if %valid0_6 {
+ %oi0_6a = index.mul %r6, %qw : index
+ %oi0_6 = index.add %oi0_6a, %ocol0 : index
+ %val0_6 = vector.extract %of0[6] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0_6, %val0_6) : (index, buffer, index, index, f32) -> ()
+}
+%valid0_7 = index.cmp ult, %r7, %queries : index
+scf.if %valid0_7 {
+ %oi0_7a = index.mul %r7, %qw : index
+ %oi0_7 = index.add %oi0_7a, %ocol0 : index
+ %val0_7 = vector.extract %of0[7] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi0_7, %val0_7) : (index, buffer, index, index, f32) -> ()
+}
+%of1 = vector.divf %final1, %finalsum : vector<8xf32>
+%oc1 = index.constant 16 : index
+%ocol1a = index.add %qc, %oc1 : index
+%ocol1 = index.add %ocol1a, %lc : index
+%valid1_0 = index.cmp ult, %r0, %queries : index
+scf.if %valid1_0 {
+ %oi1_0a = index.mul %r0, %qw : index
+ %oi1_0 = index.add %oi1_0a, %ocol1 : index
+ %val1_0 = vector.extract %of1[0] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1_0, %val1_0) : (index, buffer, index, index, f32) -> ()
+}
+%valid1_1 = index.cmp ult, %r1, %queries : index
+scf.if %valid1_1 {
+ %oi1_1a = index.mul %r1, %qw : index
+ %oi1_1 = index.add %oi1_1a, %ocol1 : index
+ %val1_1 = vector.extract %of1[1] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1_1, %val1_1) : (index, buffer, index, index, f32) -> ()
+}
+%valid1_2 = index.cmp ult, %r2, %queries : index
+scf.if %valid1_2 {
+ %oi1_2a = index.mul %r2, %qw : index
+ %oi1_2 = index.add %oi1_2a, %ocol1 : index
+ %val1_2 = vector.extract %of1[2] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1_2, %val1_2) : (index, buffer, index, index, f32) -> ()
+}
+%valid1_3 = index.cmp ult, %r3, %queries : index
+scf.if %valid1_3 {
+ %oi1_3a = index.mul %r3, %qw : index
+ %oi1_3 = index.add %oi1_3a, %ocol1 : index
+ %val1_3 = vector.extract %of1[3] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1_3, %val1_3) : (index, buffer, index, index, f32) -> ()
+}
+%valid1_4 = index.cmp ult, %r4, %queries : index
+scf.if %valid1_4 {
+ %oi1_4a = index.mul %r4, %qw : index
+ %oi1_4 = index.add %oi1_4a, %ocol1 : index
+ %val1_4 = vector.extract %of1[4] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1_4, %val1_4) : (index, buffer, index, index, f32) -> ()
+}
+%valid1_5 = index.cmp ult, %r5, %queries : index
+scf.if %valid1_5 {
+ %oi1_5a = index.mul %r5, %qw : index
+ %oi1_5 = index.add %oi1_5a, %ocol1 : index
+ %val1_5 = vector.extract %of1[5] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1_5, %val1_5) : (index, buffer, index, index, f32) -> ()
+}
+%valid1_6 = index.cmp ult, %r6, %queries : index
+scf.if %valid1_6 {
+ %oi1_6a = index.mul %r6, %qw : index
+ %oi1_6 = index.add %oi1_6a, %ocol1 : index
+ %val1_6 = vector.extract %of1[6] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1_6, %val1_6) : (index, buffer, index, index, f32) -> ()
+}
+%valid1_7 = index.cmp ult, %r7, %queries : index
+scf.if %valid1_7 {
+ %oi1_7a = index.mul %r7, %qw : index
+ %oi1_7 = index.add %oi1_7a, %ocol1 : index
+ %val1_7 = vector.extract %of1[7] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi1_7, %val1_7) : (index, buffer, index, index, f32) -> ()
+}
+%of2 = vector.divf %final2, %finalsum : vector<8xf32>
+%oc2 = index.constant 32 : index
+%ocol2a = index.add %qc, %oc2 : index
+%ocol2 = index.add %ocol2a, %lc : index
+%valid2_0 = index.cmp ult, %r0, %queries : index
+scf.if %valid2_0 {
+ %oi2_0a = index.mul %r0, %qw : index
+ %oi2_0 = index.add %oi2_0a, %ocol2 : index
+ %val2_0 = vector.extract %of2[0] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2_0, %val2_0) : (index, buffer, index, index, f32) -> ()
+}
+%valid2_1 = index.cmp ult, %r1, %queries : index
+scf.if %valid2_1 {
+ %oi2_1a = index.mul %r1, %qw : index
+ %oi2_1 = index.add %oi2_1a, %ocol2 : index
+ %val2_1 = vector.extract %of2[1] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2_1, %val2_1) : (index, buffer, index, index, f32) -> ()
+}
+%valid2_2 = index.cmp ult, %r2, %queries : index
+scf.if %valid2_2 {
+ %oi2_2a = index.mul %r2, %qw : index
+ %oi2_2 = index.add %oi2_2a, %ocol2 : index
+ %val2_2 = vector.extract %of2[2] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2_2, %val2_2) : (index, buffer, index, index, f32) -> ()
+}
+%valid2_3 = index.cmp ult, %r3, %queries : index
+scf.if %valid2_3 {
+ %oi2_3a = index.mul %r3, %qw : index
+ %oi2_3 = index.add %oi2_3a, %ocol2 : index
+ %val2_3 = vector.extract %of2[3] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2_3, %val2_3) : (index, buffer, index, index, f32) -> ()
+}
+%valid2_4 = index.cmp ult, %r4, %queries : index
+scf.if %valid2_4 {
+ %oi2_4a = index.mul %r4, %qw : index
+ %oi2_4 = index.add %oi2_4a, %ocol2 : index
+ %val2_4 = vector.extract %of2[4] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2_4, %val2_4) : (index, buffer, index, index, f32) -> ()
+}
+%valid2_5 = index.cmp ult, %r5, %queries : index
+scf.if %valid2_5 {
+ %oi2_5a = index.mul %r5, %qw : index
+ %oi2_5 = index.add %oi2_5a, %ocol2 : index
+ %val2_5 = vector.extract %of2[5] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2_5, %val2_5) : (index, buffer, index, index, f32) -> ()
+}
+%valid2_6 = index.cmp ult, %r6, %queries : index
+scf.if %valid2_6 {
+ %oi2_6a = index.mul %r6, %qw : index
+ %oi2_6 = index.add %oi2_6a, %ocol2 : index
+ %val2_6 = vector.extract %of2[6] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2_6, %val2_6) : (index, buffer, index, index, f32) -> ()
+}
+%valid2_7 = index.cmp ult, %r7, %queries : index
+scf.if %valid2_7 {
+ %oi2_7a = index.mul %r7, %qw : index
+ %oi2_7 = index.add %oi2_7a, %ocol2 : index
+ %val2_7 = vector.extract %of2[7] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi2_7, %val2_7) : (index, buffer, index, index, f32) -> ()
+}
+%of3 = vector.divf %final3, %finalsum : vector<8xf32>
+%oc3 = index.constant 48 : index
+%ocol3a = index.add %qc, %oc3 : index
+%ocol3 = index.add %ocol3a, %lc : index
+%valid3_0 = index.cmp ult, %r0, %queries : index
+scf.if %valid3_0 {
+ %oi3_0a = index.mul %r0, %qw : index
+ %oi3_0 = index.add %oi3_0a, %ocol3 : index
+ %val3_0 = vector.extract %of3[0] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3_0, %val3_0) : (index, buffer, index, index, f32) -> ()
+}
+%valid3_1 = index.cmp ult, %r1, %queries : index
+scf.if %valid3_1 {
+ %oi3_1a = index.mul %r1, %qw : index
+ %oi3_1 = index.add %oi3_1a, %ocol3 : index
+ %val3_1 = vector.extract %of3[1] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3_1, %val3_1) : (index, buffer, index, index, f32) -> ()
+}
+%valid3_2 = index.cmp ult, %r2, %queries : index
+scf.if %valid3_2 {
+ %oi3_2a = index.mul %r2, %qw : index
+ %oi3_2 = index.add %oi3_2a, %ocol3 : index
+ %val3_2 = vector.extract %of3[2] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3_2, %val3_2) : (index, buffer, index, index, f32) -> ()
+}
+%valid3_3 = index.cmp ult, %r3, %queries : index
+scf.if %valid3_3 {
+ %oi3_3a = index.mul %r3, %qw : index
+ %oi3_3 = index.add %oi3_3a, %ocol3 : index
+ %val3_3 = vector.extract %of3[3] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3_3, %val3_3) : (index, buffer, index, index, f32) -> ()
+}
+%valid3_4 = index.cmp ult, %r4, %queries : index
+scf.if %valid3_4 {
+ %oi3_4a = index.mul %r4, %qw : index
+ %oi3_4 = index.add %oi3_4a, %ocol3 : index
+ %val3_4 = vector.extract %of3[4] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3_4, %val3_4) : (index, buffer, index, index, f32) -> ()
+}
+%valid3_5 = index.cmp ult, %r5, %queries : index
+scf.if %valid3_5 {
+ %oi3_5a = index.mul %r5, %qw : index
+ %oi3_5 = index.add %oi3_5a, %ocol3 : index
+ %val3_5 = vector.extract %of3[5] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3_5, %val3_5) : (index, buffer, index, index, f32) -> ()
+}
+%valid3_6 = index.cmp ult, %r6, %queries : index
+scf.if %valid3_6 {
+ %oi3_6a = index.mul %r6, %qw : index
+ %oi3_6 = index.add %oi3_6a, %ocol3 : index
+ %val3_6 = vector.extract %of3[6] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3_6, %val3_6) : (index, buffer, index, index, f32) -> ()
+}
+%valid3_7 = index.cmp ult, %r7, %queries : index
+scf.if %valid3_7 {
+ %oi3_7a = index.mul %r7, %qw : index
+ %oi3_7 = index.add %oi3_7a, %ocol3 : index
+ %val3_7 = vector.extract %of3[7] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi3_7, %val3_7) : (index, buffer, index, index, f32) -> ()
+}
+%of4 = vector.divf %final4, %finalsum : vector<8xf32>
+%oc4 = index.constant 64 : index
+%ocol4a = index.add %qc, %oc4 : index
+%ocol4 = index.add %ocol4a, %lc : index
+%valid4_0 = index.cmp ult, %r0, %queries : index
+scf.if %valid4_0 {
+ %oi4_0a = index.mul %r0, %qw : index
+ %oi4_0 = index.add %oi4_0a, %ocol4 : index
+ %val4_0 = vector.extract %of4[0] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4_0, %val4_0) : (index, buffer, index, index, f32) -> ()
+}
+%valid4_1 = index.cmp ult, %r1, %queries : index
+scf.if %valid4_1 {
+ %oi4_1a = index.mul %r1, %qw : index
+ %oi4_1 = index.add %oi4_1a, %ocol4 : index
+ %val4_1 = vector.extract %of4[1] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4_1, %val4_1) : (index, buffer, index, index, f32) -> ()
+}
+%valid4_2 = index.cmp ult, %r2, %queries : index
+scf.if %valid4_2 {
+ %oi4_2a = index.mul %r2, %qw : index
+ %oi4_2 = index.add %oi4_2a, %ocol4 : index
+ %val4_2 = vector.extract %of4[2] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4_2, %val4_2) : (index, buffer, index, index, f32) -> ()
+}
+%valid4_3 = index.cmp ult, %r3, %queries : index
+scf.if %valid4_3 {
+ %oi4_3a = index.mul %r3, %qw : index
+ %oi4_3 = index.add %oi4_3a, %ocol4 : index
+ %val4_3 = vector.extract %of4[3] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4_3, %val4_3) : (index, buffer, index, index, f32) -> ()
+}
+%valid4_4 = index.cmp ult, %r4, %queries : index
+scf.if %valid4_4 {
+ %oi4_4a = index.mul %r4, %qw : index
+ %oi4_4 = index.add %oi4_4a, %ocol4 : index
+ %val4_4 = vector.extract %of4[4] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4_4, %val4_4) : (index, buffer, index, index, f32) -> ()
+}
+%valid4_5 = index.cmp ult, %r5, %queries : index
+scf.if %valid4_5 {
+ %oi4_5a = index.mul %r5, %qw : index
+ %oi4_5 = index.add %oi4_5a, %ocol4 : index
+ %val4_5 = vector.extract %of4[5] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4_5, %val4_5) : (index, buffer, index, index, f32) -> ()
+}
+%valid4_6 = index.cmp ult, %r6, %queries : index
+scf.if %valid4_6 {
+ %oi4_6a = index.mul %r6, %qw : index
+ %oi4_6 = index.add %oi4_6a, %ocol4 : index
+ %val4_6 = vector.extract %of4[6] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4_6, %val4_6) : (index, buffer, index, index, f32) -> ()
+}
+%valid4_7 = index.cmp ult, %r7, %queries : index
+scf.if %valid4_7 {
+ %oi4_7a = index.mul %r7, %qw : index
+ %oi4_7 = index.add %oi4_7a, %ocol4 : index
+ %val4_7 = vector.extract %of4[7] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi4_7, %val4_7) : (index, buffer, index, index, f32) -> ()
+}
+%of5 = vector.divf %final5, %finalsum : vector<8xf32>
+%oc5 = index.constant 80 : index
+%ocol5a = index.add %qc, %oc5 : index
+%ocol5 = index.add %ocol5a, %lc : index
+%valid5_0 = index.cmp ult, %r0, %queries : index
+scf.if %valid5_0 {
+ %oi5_0a = index.mul %r0, %qw : index
+ %oi5_0 = index.add %oi5_0a, %ocol5 : index
+ %val5_0 = vector.extract %of5[0] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5_0, %val5_0) : (index, buffer, index, index, f32) -> ()
+}
+%valid5_1 = index.cmp ult, %r1, %queries : index
+scf.if %valid5_1 {
+ %oi5_1a = index.mul %r1, %qw : index
+ %oi5_1 = index.add %oi5_1a, %ocol5 : index
+ %val5_1 = vector.extract %of5[1] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5_1, %val5_1) : (index, buffer, index, index, f32) -> ()
+}
+%valid5_2 = index.cmp ult, %r2, %queries : index
+scf.if %valid5_2 {
+ %oi5_2a = index.mul %r2, %qw : index
+ %oi5_2 = index.add %oi5_2a, %ocol5 : index
+ %val5_2 = vector.extract %of5[2] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5_2, %val5_2) : (index, buffer, index, index, f32) -> ()
+}
+%valid5_3 = index.cmp ult, %r3, %queries : index
+scf.if %valid5_3 {
+ %oi5_3a = index.mul %r3, %qw : index
+ %oi5_3 = index.add %oi5_3a, %ocol5 : index
+ %val5_3 = vector.extract %of5[3] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5_3, %val5_3) : (index, buffer, index, index, f32) -> ()
+}
+%valid5_4 = index.cmp ult, %r4, %queries : index
+scf.if %valid5_4 {
+ %oi5_4a = index.mul %r4, %qw : index
+ %oi5_4 = index.add %oi5_4a, %ocol5 : index
+ %val5_4 = vector.extract %of5[4] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5_4, %val5_4) : (index, buffer, index, index, f32) -> ()
+}
+%valid5_5 = index.cmp ult, %r5, %queries : index
+scf.if %valid5_5 {
+ %oi5_5a = index.mul %r5, %qw : index
+ %oi5_5 = index.add %oi5_5a, %ocol5 : index
+ %val5_5 = vector.extract %of5[5] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5_5, %val5_5) : (index, buffer, index, index, f32) -> ()
+}
+%valid5_6 = index.cmp ult, %r6, %queries : index
+scf.if %valid5_6 {
+ %oi5_6a = index.mul %r6, %qw : index
+ %oi5_6 = index.add %oi5_6a, %ocol5 : index
+ %val5_6 = vector.extract %of5[6] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5_6, %val5_6) : (index, buffer, index, index, f32) -> ()
+}
+%valid5_7 = index.cmp ult, %r7, %queries : index
+scf.if %valid5_7 {
+ %oi5_7a = index.mul %r7, %qw : index
+ %oi5_7 = index.add %oi5_7a, %ocol5 : index
+ %val5_7 = vector.extract %of5[7] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi5_7, %val5_7) : (index, buffer, index, index, f32) -> ()
+}
+%of6 = vector.divf %final6, %finalsum : vector<8xf32>
+%oc6 = index.constant 96 : index
+%ocol6a = index.add %qc, %oc6 : index
+%ocol6 = index.add %ocol6a, %lc : index
+%valid6_0 = index.cmp ult, %r0, %queries : index
+scf.if %valid6_0 {
+ %oi6_0a = index.mul %r0, %qw : index
+ %oi6_0 = index.add %oi6_0a, %ocol6 : index
+ %val6_0 = vector.extract %of6[0] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6_0, %val6_0) : (index, buffer, index, index, f32) -> ()
+}
+%valid6_1 = index.cmp ult, %r1, %queries : index
+scf.if %valid6_1 {
+ %oi6_1a = index.mul %r1, %qw : index
+ %oi6_1 = index.add %oi6_1a, %ocol6 : index
+ %val6_1 = vector.extract %of6[1] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6_1, %val6_1) : (index, buffer, index, index, f32) -> ()
+}
+%valid6_2 = index.cmp ult, %r2, %queries : index
+scf.if %valid6_2 {
+ %oi6_2a = index.mul %r2, %qw : index
+ %oi6_2 = index.add %oi6_2a, %ocol6 : index
+ %val6_2 = vector.extract %of6[2] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6_2, %val6_2) : (index, buffer, index, index, f32) -> ()
+}
+%valid6_3 = index.cmp ult, %r3, %queries : index
+scf.if %valid6_3 {
+ %oi6_3a = index.mul %r3, %qw : index
+ %oi6_3 = index.add %oi6_3a, %ocol6 : index
+ %val6_3 = vector.extract %of6[3] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6_3, %val6_3) : (index, buffer, index, index, f32) -> ()
+}
+%valid6_4 = index.cmp ult, %r4, %queries : index
+scf.if %valid6_4 {
+ %oi6_4a = index.mul %r4, %qw : index
+ %oi6_4 = index.add %oi6_4a, %ocol6 : index
+ %val6_4 = vector.extract %of6[4] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6_4, %val6_4) : (index, buffer, index, index, f32) -> ()
+}
+%valid6_5 = index.cmp ult, %r5, %queries : index
+scf.if %valid6_5 {
+ %oi6_5a = index.mul %r5, %qw : index
+ %oi6_5 = index.add %oi6_5a, %ocol6 : index
+ %val6_5 = vector.extract %of6[5] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6_5, %val6_5) : (index, buffer, index, index, f32) -> ()
+}
+%valid6_6 = index.cmp ult, %r6, %queries : index
+scf.if %valid6_6 {
+ %oi6_6a = index.mul %r6, %qw : index
+ %oi6_6 = index.add %oi6_6a, %ocol6 : index
+ %val6_6 = vector.extract %of6[6] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6_6, %val6_6) : (index, buffer, index, index, f32) -> ()
+}
+%valid6_7 = index.cmp ult, %r7, %queries : index
+scf.if %valid6_7 {
+ %oi6_7a = index.mul %r7, %qw : index
+ %oi6_7 = index.add %oi6_7a, %ocol6 : index
+ %val6_7 = vector.extract %of6[7] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi6_7, %val6_7) : (index, buffer, index, index, f32) -> ()
+}
+%of7 = vector.divf %final7, %finalsum : vector<8xf32>
+%oc7 = index.constant 112 : index
+%ocol7a = index.add %qc, %oc7 : index
+%ocol7 = index.add %ocol7a, %lc : index
+%valid7_0 = index.cmp ult, %r0, %queries : index
+scf.if %valid7_0 {
+ %oi7_0a = index.mul %r0, %qw : index
+ %oi7_0 = index.add %oi7_0a, %ocol7 : index
+ %val7_0 = vector.extract %of7[0] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7_0, %val7_0) : (index, buffer, index, index, f32) -> ()
+}
+%valid7_1 = index.cmp ult, %r1, %queries : index
+scf.if %valid7_1 {
+ %oi7_1a = index.mul %r1, %qw : index
+ %oi7_1 = index.add %oi7_1a, %ocol7 : index
+ %val7_1 = vector.extract %of7[1] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7_1, %val7_1) : (index, buffer, index, index, f32) -> ()
+}
+%valid7_2 = index.cmp ult, %r2, %queries : index
+scf.if %valid7_2 {
+ %oi7_2a = index.mul %r2, %qw : index
+ %oi7_2 = index.add %oi7_2a, %ocol7 : index
+ %val7_2 = vector.extract %of7[2] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7_2, %val7_2) : (index, buffer, index, index, f32) -> ()
+}
+%valid7_3 = index.cmp ult, %r3, %queries : index
+scf.if %valid7_3 {
+ %oi7_3a = index.mul %r3, %qw : index
+ %oi7_3 = index.add %oi7_3a, %ocol7 : index
+ %val7_3 = vector.extract %of7[3] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7_3, %val7_3) : (index, buffer, index, index, f32) -> ()
+}
+%valid7_4 = index.cmp ult, %r4, %queries : index
+scf.if %valid7_4 {
+ %oi7_4a = index.mul %r4, %qw : index
+ %oi7_4 = index.add %oi7_4a, %ocol7 : index
+ %val7_4 = vector.extract %of7[4] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7_4, %val7_4) : (index, buffer, index, index, f32) -> ()
+}
+%valid7_5 = index.cmp ult, %r5, %queries : index
+scf.if %valid7_5 {
+ %oi7_5a = index.mul %r5, %qw : index
+ %oi7_5 = index.add %oi7_5a, %ocol7 : index
+ %val7_5 = vector.extract %of7[5] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7_5, %val7_5) : (index, buffer, index, index, f32) -> ()
+}
+%valid7_6 = index.cmp ult, %r6, %queries : index
+scf.if %valid7_6 {
+ %oi7_6a = index.mul %r6, %qw : index
+ %oi7_6 = index.add %oi7_6a, %ocol7 : index
+ %val7_6 = vector.extract %of7[6] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7_6, %val7_6) : (index, buffer, index, index, f32) -> ()
+}
+%valid7_7 = index.cmp ult, %r7, %queries : index
+scf.if %valid7_7 {
+ %oi7_7a = index.mul %r7, %qw : index
+ %oi7_7 = index.add %oi7_7a, %ocol7 : index
+ %val7_7 = vector.extract %of7[7] : vector<8xf32> -> f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %oi7_7, %val7_7) : (index, buffer, index, index, f32) -> ()
+}
+
+ }
+ kernel.return
+}

@@ -1,0 +1,436 @@
+// Prefetch K256 packed codes per row; consume ascending K16 matrix fragments.
+// SPDX-License-Identifier: MIT AND Apache-2.0
+// BF16 fragments and publishing adapted from gemm_bf16_tiled.loom
+// (qwen-image-hrx / h3-hrx; see licenses/qwen-image-hrx-MIT.txt).
+// INT4 operand encoding and tiled addressing follow gemm_integer_m128.loom
+// (h3-hrx, Apache-2.0). A wave handles 32 routed rows x 32 output channels.
+// Gather/scatter keeps activation packing and combine order unchanged.
+// Each 32-row partition has its own wave; empty partitions exit before WMMA.
+// Omni grouped INT4 experts. Shapes are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.xs_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.xs_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ws_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ws_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.tokens : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.topk : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.k : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.stride : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.input_routed : %value: index where [range(%value, 0, 4294967295)]
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %basegroups = config.get @clef.groups : index
+ %tokens = config.get @clef.tokens : index
+ %c15 = index.constant 31 : index
+ %c32 = index.constant 32 : index
+ %two = index.constant 2 : index
+ %rounded = index.add %tokens, %c15 : index
+ %tiles = index.div %rounded, %c32 : index
+ %gt = index.mul %basegroups, %tiles : index
+ %groups = index.mul %gt, %two : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %w_buffer: buffer, %routes_buffer: buffer, %xs_buffer: buffer, %ws_buffer: buffer, %out_buffer: buffer) {
+ %c0 = index.constant 0 : index
+ %c1 = index.constant 1 : index
+ %c2 = index.constant 2 : index
+ %c4 = index.constant 4 : index
+ %c8 = index.constant 8 : index
+ %c16 = index.constant 16 : index
+ %c32 = index.constant 32 : index
+ %c64 = index.constant 64 : index
+ %c128 = index.constant 128 : index
+ %c256 = index.constant 256 : index
+ %offset = index.constant 0 : offset
+ %x_len = config.get @clef.x_len : index
+ %x_dtype = config.get @clef.x_dtype : index
+ %w_len = config.get @clef.w_len : index
+ %w_dtype = config.get @clef.w_dtype : index
+ %routes_len = config.get @clef.routes_len : index
+ %routes_dtype = config.get @clef.routes_dtype : index
+ %xs_len = config.get @clef.xs_len : index
+ %xs_dtype = config.get @clef.xs_dtype : index
+ %ws_len = config.get @clef.ws_len : index
+ %ws_dtype = config.get @clef.ws_dtype : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %tokens = config.get @clef.tokens : index
+ %topk = config.get @clef.topk : index
+ %k = config.get @clef.k : index
+ %n = config.get @clef.n : index
+ %stride = config.get @clef.stride : index
+ %input_routed = config.get @clef.input_routed : index
+ %wg = kernel.workgroup.id<x> : index
+ %subgroup = kernel.subgroup.id : index
+ %lane = kernel.subgroup.lane.id : index
+ %wgbase = index.mul %wg, %c2 : index
+ %wave0 = index.add %wgbase, %subgroup : index
+ %c15 = index.constant 31 : index
+ %rounded = index.add %tokens, %c15 : index
+ %tiles = index.div %rounded, %c32 : index
+ %rowtile = index.rem %wave0, %tiles : index
+ %wave = index.div %wave0, %tiles : index
+ %mbase = index.mul %rowtile, %c32 : index
+ %ntiles = index.div %n, %c32 : index
+ %expert = index.div %wave, %ntiles : index
+ %ntile = index.rem %wave, %ntiles : index
+ %nbase = index.mul %ntile, %c32 : index
+ %estride = index.add %tokens, %c1 : index
+ %ebase = index.mul %expert, %estride : index
+ %countf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %ebase) : (index, buffer, index, index) -> (f32)
+ %counti0 = scalar.fptosi %countf : f32 to i32
+ %counti = kernel.subgroup.broadcast.first %counti0 : i32
+ %count0 = index.cast %counti : i32 to index
+ %count = index.assume %count0 [range(%count0, 0, 2048)] : index
+ %lane16 = index.rem %lane, %c16 : index
+ %expertrow = index.mul %expert, %n : index
+ %wrowbase = index.add %expertrow, %nbase : index
+ %wrow = index.add %wrowbase, %lane16 : index
+ %routed = index.cmp ne, %input_routed, %c0 : index
+ %lds_bytes = index.constant 2048 : offset
+ %wave_bytes = index.constant 1024 : offset
+ %lds = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
+ %wave_offset = index.scale %subgroup, %wave_bytes : index, offset -> offset
+ %result = buffer.view %lds[%wave_offset] : buffer -> view<16x16xi32>
+ %x_global = buffer.assume.memory_space<global> %x_buffer : buffer
+ %xv = buffer.view %x_global[%offset] : buffer -> view<[%x_len]xi32>
+ %w_global = buffer.assume.memory_space<global> %w_buffer : buffer
+ %wv = buffer.view %w_global[%offset] : buffer -> view<[%w_len]xi32>
+ %init0 = vector.constant 0 : vector<8xi32>
+ %init = vector.fragment<init> %init0 shape [%c16, %c16] : vector<8xi32>
+ %schema = encoding.define #encoding.operand<element_format=i4, payload_elements=16, payload_registers=2> : encoding<schema>
+ %active = index.cmp ult, %mbase, %count : index
+ scf.if %active {
+  %mr = index.add %mbase, %lane16 : index
+  %ok = index.cmp ult, %mr, %count : index
+  %safe = scf.select %ok, %mr, %c0 : index
+  %slot0 = index.add %ebase, %safe : index
+  %slot = index.add %slot0, %c1 : index
+  %rf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %slot) : (index, buffer, index, index) -> (f32)
+  %ri = scalar.fptosi %rf : f32 to i32
+  %route0 = index.cast %ri : i32 to index
+  %route = index.assume %route0 [range(%route0, 0, 16383)] : index
+  %token = index.div %route, %topk : index
+  %xr = scf.select %routed, %route, %token : index
+  %xbase0 = index.mul %xr, %stride : index
+  %xbase = index.div %xbase0, %c8 : index
+  %mbase2 = index.add %mbase, %c16 : index
+  %smr = index.add %mbase2, %lane16 : index
+  %sok = index.cmp ult, %smr, %count : index
+  %ssafe = scf.select %sok, %smr, %c0 : index
+  %sslot0 = index.add %ebase, %ssafe : index
+  %sslot = index.add %sslot0, %c1 : index
+  %srf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %sslot) : (index, buffer, index, index) -> (f32)
+  %sri = scalar.fptosi %srf : f32 to i32
+  %sroute0 = index.cast %sri : i32 to index
+  %sroute = index.assume %sroute0 [range(%sroute0, 0, 16383)] : index
+  %stoken = index.div %sroute, %topk : index
+  %sxr = scf.select %routed, %sroute, %stoken : index
+  %sxbase0 = index.mul %sxr, %stride : index
+  %sxbase = index.div %sxbase0, %c8 : index
+  %acc0, %acc1, %acc2, %acc3 = scf.for %kk = [%c0 to %k step %c256](%a0 = %init : vector<8xi32>, %a1 = %init : vector<8xi32>, %a2 = %init : vector<8xi32>, %a3 = %init : vector<8xi32>) -> (vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>) {
+   %xk = index.div %kk, %c8 : index
+   %blocks = index.div %k, %c256 : index
+   %blockk = index.div %kk, %c256 : index
+   %kw = index.rem %xk, %c32 : index
+   %xa0 = index.add %xbase, %xk : index
+   %xlimit = index.constant 32 : index
+   %xmax = index.sub %x_len, %xlimit : index
+   %xa = index.assume %xa0 [range(%xa0, 0, 4294967294), le(%xa0, %xmax), multiple_of(%xa0, 16)] : index
+   %aa = vector.load %xv[%xa] : view<[%x_len]xi32> -> vector<32xi32>
+   %sxa0 = index.add %sxbase, %xk : index
+   %sxlimit = index.constant 32 : index
+   %sxmax = index.sub %x_len, %sxlimit : index
+   %sxa = index.assume %sxa0 [range(%sxa0, 0, 4294967294), le(%sxa0, %sxmax), multiple_of(%sxa0, 16)] : index
+   %saa = vector.load %xv[%sxa] : view<[%x_len]xi32> -> vector<32xi32>
+   %nc0 = index.constant 0 : index
+   %wr0 = index.add %wrow, %nc0 : index
+   %wn0 = index.div %wr0, %c128 : index
+   %wb00 = index.mul %wn0, %blocks : index
+   %wb10 = index.add %wb00, %blockk : index
+   %wb20 = index.mul %wb10, %c128 : index
+   %wl0 = index.rem %wr0, %c128 : index
+   %wb30 = index.add %wb20, %wl0 : index
+   %wb40 = index.mul %wb30, %c32 : index
+   %wa00 = index.add %wb40, %kw : index
+   %wmax0 = index.sub %w_len, %xlimit : index
+   %wa0 = index.assume %wa00 [range(%wa00, 0, 4294967294), le(%wa00, %wmax0), multiple_of(%wa00, 32)] : index
+   %bb0 = vector.load %wv[%wa0] : view<[%w_len]xi32> -> vector<32xi32>
+   %nc1 = index.constant 16 : index
+   %wr1 = index.add %wrow, %nc1 : index
+   %wn1 = index.div %wr1, %c128 : index
+   %wb01 = index.mul %wn1, %blocks : index
+   %wb11 = index.add %wb01, %blockk : index
+   %wb21 = index.mul %wb11, %c128 : index
+   %wl1 = index.rem %wr1, %c128 : index
+   %wb31 = index.add %wb21, %wl1 : index
+   %wb41 = index.mul %wb31, %c32 : index
+   %wa01 = index.add %wb41, %kw : index
+   %wmax1 = index.sub %w_len, %xlimit : index
+   %wa1 = index.assume %wa01 [range(%wa01, 0, 4294967294), le(%wa01, %wmax1), multiple_of(%wa01, 32)] : index
+   %bb1 = vector.load %wv[%wa1] : view<[%w_len]xi32> -> vector<32xi32>
+   %l0_p0_v = vector.slice %aa[0] : vector<32xi32> -> vector<2xi32>
+   %l0_p0 = vector.fragment<lhs> %l0_p0_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p0_v = vector.slice %saa[0] : vector<32xi32> -> vector<2xi32>
+   %l1_p0 = vector.fragment<lhs> %l1_p0_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p0_v = vector.slice %bb0[0] : vector<32xi32> -> vector<2xi32>
+   %r0_p0 = vector.fragment<rhs> %r0_p0_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p0_v = vector.slice %bb1[0] : vector<32xi32> -> vector<2xi32>
+   %r1_p0 = vector.fragment<rhs> %r1_p0_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p0 = vector.mma %l0_p0, %r0_p0, %a0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p0 = vector.mma %l0_p0, %r1_p0, %a1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p0 = vector.mma %l1_p0, %r0_p0, %a2 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p0 = vector.mma %l1_p0, %r1_p0, %a3 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p1_v = vector.slice %aa[2] : vector<32xi32> -> vector<2xi32>
+   %l0_p1 = vector.fragment<lhs> %l0_p1_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p1_v = vector.slice %saa[2] : vector<32xi32> -> vector<2xi32>
+   %l1_p1 = vector.fragment<lhs> %l1_p1_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p1_v = vector.slice %bb0[2] : vector<32xi32> -> vector<2xi32>
+   %r0_p1 = vector.fragment<rhs> %r0_p1_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p1_v = vector.slice %bb1[2] : vector<32xi32> -> vector<2xi32>
+   %r1_p1 = vector.fragment<rhs> %r1_p1_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p1 = vector.mma %l0_p1, %r0_p1, %v0_p0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p1 = vector.mma %l0_p1, %r1_p1, %v1_p0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p1 = vector.mma %l1_p1, %r0_p1, %v2_p0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p1 = vector.mma %l1_p1, %r1_p1, %v3_p0 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p2_v = vector.slice %aa[4] : vector<32xi32> -> vector<2xi32>
+   %l0_p2 = vector.fragment<lhs> %l0_p2_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p2_v = vector.slice %saa[4] : vector<32xi32> -> vector<2xi32>
+   %l1_p2 = vector.fragment<lhs> %l1_p2_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p2_v = vector.slice %bb0[4] : vector<32xi32> -> vector<2xi32>
+   %r0_p2 = vector.fragment<rhs> %r0_p2_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p2_v = vector.slice %bb1[4] : vector<32xi32> -> vector<2xi32>
+   %r1_p2 = vector.fragment<rhs> %r1_p2_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p2 = vector.mma %l0_p2, %r0_p2, %v0_p1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p2 = vector.mma %l0_p2, %r1_p2, %v1_p1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p2 = vector.mma %l1_p2, %r0_p2, %v2_p1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p2 = vector.mma %l1_p2, %r1_p2, %v3_p1 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p3_v = vector.slice %aa[6] : vector<32xi32> -> vector<2xi32>
+   %l0_p3 = vector.fragment<lhs> %l0_p3_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p3_v = vector.slice %saa[6] : vector<32xi32> -> vector<2xi32>
+   %l1_p3 = vector.fragment<lhs> %l1_p3_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p3_v = vector.slice %bb0[6] : vector<32xi32> -> vector<2xi32>
+   %r0_p3 = vector.fragment<rhs> %r0_p3_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p3_v = vector.slice %bb1[6] : vector<32xi32> -> vector<2xi32>
+   %r1_p3 = vector.fragment<rhs> %r1_p3_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p3 = vector.mma %l0_p3, %r0_p3, %v0_p2 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p3 = vector.mma %l0_p3, %r1_p3, %v1_p2 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p3 = vector.mma %l1_p3, %r0_p3, %v2_p2 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p3 = vector.mma %l1_p3, %r1_p3, %v3_p2 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p4_v = vector.slice %aa[8] : vector<32xi32> -> vector<2xi32>
+   %l0_p4 = vector.fragment<lhs> %l0_p4_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p4_v = vector.slice %saa[8] : vector<32xi32> -> vector<2xi32>
+   %l1_p4 = vector.fragment<lhs> %l1_p4_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p4_v = vector.slice %bb0[8] : vector<32xi32> -> vector<2xi32>
+   %r0_p4 = vector.fragment<rhs> %r0_p4_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p4_v = vector.slice %bb1[8] : vector<32xi32> -> vector<2xi32>
+   %r1_p4 = vector.fragment<rhs> %r1_p4_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p4 = vector.mma %l0_p4, %r0_p4, %v0_p3 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p4 = vector.mma %l0_p4, %r1_p4, %v1_p3 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p4 = vector.mma %l1_p4, %r0_p4, %v2_p3 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p4 = vector.mma %l1_p4, %r1_p4, %v3_p3 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p5_v = vector.slice %aa[10] : vector<32xi32> -> vector<2xi32>
+   %l0_p5 = vector.fragment<lhs> %l0_p5_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p5_v = vector.slice %saa[10] : vector<32xi32> -> vector<2xi32>
+   %l1_p5 = vector.fragment<lhs> %l1_p5_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p5_v = vector.slice %bb0[10] : vector<32xi32> -> vector<2xi32>
+   %r0_p5 = vector.fragment<rhs> %r0_p5_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p5_v = vector.slice %bb1[10] : vector<32xi32> -> vector<2xi32>
+   %r1_p5 = vector.fragment<rhs> %r1_p5_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p5 = vector.mma %l0_p5, %r0_p5, %v0_p4 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p5 = vector.mma %l0_p5, %r1_p5, %v1_p4 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p5 = vector.mma %l1_p5, %r0_p5, %v2_p4 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p5 = vector.mma %l1_p5, %r1_p5, %v3_p4 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p6_v = vector.slice %aa[12] : vector<32xi32> -> vector<2xi32>
+   %l0_p6 = vector.fragment<lhs> %l0_p6_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p6_v = vector.slice %saa[12] : vector<32xi32> -> vector<2xi32>
+   %l1_p6 = vector.fragment<lhs> %l1_p6_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p6_v = vector.slice %bb0[12] : vector<32xi32> -> vector<2xi32>
+   %r0_p6 = vector.fragment<rhs> %r0_p6_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p6_v = vector.slice %bb1[12] : vector<32xi32> -> vector<2xi32>
+   %r1_p6 = vector.fragment<rhs> %r1_p6_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p6 = vector.mma %l0_p6, %r0_p6, %v0_p5 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p6 = vector.mma %l0_p6, %r1_p6, %v1_p5 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p6 = vector.mma %l1_p6, %r0_p6, %v2_p5 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p6 = vector.mma %l1_p6, %r1_p6, %v3_p5 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p7_v = vector.slice %aa[14] : vector<32xi32> -> vector<2xi32>
+   %l0_p7 = vector.fragment<lhs> %l0_p7_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p7_v = vector.slice %saa[14] : vector<32xi32> -> vector<2xi32>
+   %l1_p7 = vector.fragment<lhs> %l1_p7_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p7_v = vector.slice %bb0[14] : vector<32xi32> -> vector<2xi32>
+   %r0_p7 = vector.fragment<rhs> %r0_p7_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p7_v = vector.slice %bb1[14] : vector<32xi32> -> vector<2xi32>
+   %r1_p7 = vector.fragment<rhs> %r1_p7_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p7 = vector.mma %l0_p7, %r0_p7, %v0_p6 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p7 = vector.mma %l0_p7, %r1_p7, %v1_p6 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p7 = vector.mma %l1_p7, %r0_p7, %v2_p6 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p7 = vector.mma %l1_p7, %r1_p7, %v3_p6 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p8_v = vector.slice %aa[16] : vector<32xi32> -> vector<2xi32>
+   %l0_p8 = vector.fragment<lhs> %l0_p8_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p8_v = vector.slice %saa[16] : vector<32xi32> -> vector<2xi32>
+   %l1_p8 = vector.fragment<lhs> %l1_p8_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p8_v = vector.slice %bb0[16] : vector<32xi32> -> vector<2xi32>
+   %r0_p8 = vector.fragment<rhs> %r0_p8_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p8_v = vector.slice %bb1[16] : vector<32xi32> -> vector<2xi32>
+   %r1_p8 = vector.fragment<rhs> %r1_p8_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p8 = vector.mma %l0_p8, %r0_p8, %v0_p7 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p8 = vector.mma %l0_p8, %r1_p8, %v1_p7 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p8 = vector.mma %l1_p8, %r0_p8, %v2_p7 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p8 = vector.mma %l1_p8, %r1_p8, %v3_p7 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p9_v = vector.slice %aa[18] : vector<32xi32> -> vector<2xi32>
+   %l0_p9 = vector.fragment<lhs> %l0_p9_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p9_v = vector.slice %saa[18] : vector<32xi32> -> vector<2xi32>
+   %l1_p9 = vector.fragment<lhs> %l1_p9_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p9_v = vector.slice %bb0[18] : vector<32xi32> -> vector<2xi32>
+   %r0_p9 = vector.fragment<rhs> %r0_p9_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p9_v = vector.slice %bb1[18] : vector<32xi32> -> vector<2xi32>
+   %r1_p9 = vector.fragment<rhs> %r1_p9_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p9 = vector.mma %l0_p9, %r0_p9, %v0_p8 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p9 = vector.mma %l0_p9, %r1_p9, %v1_p8 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p9 = vector.mma %l1_p9, %r0_p9, %v2_p8 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p9 = vector.mma %l1_p9, %r1_p9, %v3_p8 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p10_v = vector.slice %aa[20] : vector<32xi32> -> vector<2xi32>
+   %l0_p10 = vector.fragment<lhs> %l0_p10_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p10_v = vector.slice %saa[20] : vector<32xi32> -> vector<2xi32>
+   %l1_p10 = vector.fragment<lhs> %l1_p10_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p10_v = vector.slice %bb0[20] : vector<32xi32> -> vector<2xi32>
+   %r0_p10 = vector.fragment<rhs> %r0_p10_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p10_v = vector.slice %bb1[20] : vector<32xi32> -> vector<2xi32>
+   %r1_p10 = vector.fragment<rhs> %r1_p10_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p10 = vector.mma %l0_p10, %r0_p10, %v0_p9 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p10 = vector.mma %l0_p10, %r1_p10, %v1_p9 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p10 = vector.mma %l1_p10, %r0_p10, %v2_p9 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p10 = vector.mma %l1_p10, %r1_p10, %v3_p9 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p11_v = vector.slice %aa[22] : vector<32xi32> -> vector<2xi32>
+   %l0_p11 = vector.fragment<lhs> %l0_p11_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p11_v = vector.slice %saa[22] : vector<32xi32> -> vector<2xi32>
+   %l1_p11 = vector.fragment<lhs> %l1_p11_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p11_v = vector.slice %bb0[22] : vector<32xi32> -> vector<2xi32>
+   %r0_p11 = vector.fragment<rhs> %r0_p11_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p11_v = vector.slice %bb1[22] : vector<32xi32> -> vector<2xi32>
+   %r1_p11 = vector.fragment<rhs> %r1_p11_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p11 = vector.mma %l0_p11, %r0_p11, %v0_p10 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p11 = vector.mma %l0_p11, %r1_p11, %v1_p10 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p11 = vector.mma %l1_p11, %r0_p11, %v2_p10 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p11 = vector.mma %l1_p11, %r1_p11, %v3_p10 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p12_v = vector.slice %aa[24] : vector<32xi32> -> vector<2xi32>
+   %l0_p12 = vector.fragment<lhs> %l0_p12_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p12_v = vector.slice %saa[24] : vector<32xi32> -> vector<2xi32>
+   %l1_p12 = vector.fragment<lhs> %l1_p12_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p12_v = vector.slice %bb0[24] : vector<32xi32> -> vector<2xi32>
+   %r0_p12 = vector.fragment<rhs> %r0_p12_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p12_v = vector.slice %bb1[24] : vector<32xi32> -> vector<2xi32>
+   %r1_p12 = vector.fragment<rhs> %r1_p12_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p12 = vector.mma %l0_p12, %r0_p12, %v0_p11 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p12 = vector.mma %l0_p12, %r1_p12, %v1_p11 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p12 = vector.mma %l1_p12, %r0_p12, %v2_p11 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p12 = vector.mma %l1_p12, %r1_p12, %v3_p11 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p13_v = vector.slice %aa[26] : vector<32xi32> -> vector<2xi32>
+   %l0_p13 = vector.fragment<lhs> %l0_p13_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p13_v = vector.slice %saa[26] : vector<32xi32> -> vector<2xi32>
+   %l1_p13 = vector.fragment<lhs> %l1_p13_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p13_v = vector.slice %bb0[26] : vector<32xi32> -> vector<2xi32>
+   %r0_p13 = vector.fragment<rhs> %r0_p13_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p13_v = vector.slice %bb1[26] : vector<32xi32> -> vector<2xi32>
+   %r1_p13 = vector.fragment<rhs> %r1_p13_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p13 = vector.mma %l0_p13, %r0_p13, %v0_p12 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p13 = vector.mma %l0_p13, %r1_p13, %v1_p12 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p13 = vector.mma %l1_p13, %r0_p13, %v2_p12 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p13 = vector.mma %l1_p13, %r1_p13, %v3_p12 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p14_v = vector.slice %aa[28] : vector<32xi32> -> vector<2xi32>
+   %l0_p14 = vector.fragment<lhs> %l0_p14_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p14_v = vector.slice %saa[28] : vector<32xi32> -> vector<2xi32>
+   %l1_p14 = vector.fragment<lhs> %l1_p14_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p14_v = vector.slice %bb0[28] : vector<32xi32> -> vector<2xi32>
+   %r0_p14 = vector.fragment<rhs> %r0_p14_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p14_v = vector.slice %bb1[28] : vector<32xi32> -> vector<2xi32>
+   %r1_p14 = vector.fragment<rhs> %r1_p14_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %v0_p14 = vector.mma %l0_p14, %r0_p14, %v0_p13 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v1_p14 = vector.mma %l0_p14, %r1_p14, %v1_p13 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v2_p14 = vector.mma %l1_p14, %r0_p14, %v2_p13 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %v3_p14 = vector.mma %l1_p14, %r1_p14, %v3_p13 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %l0_p15_v = vector.slice %aa[30] : vector<32xi32> -> vector<2xi32>
+   %l0_p15 = vector.fragment<lhs> %l0_p15_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %l1_p15_v = vector.slice %saa[30] : vector<32xi32> -> vector<2xi32>
+   %l1_p15 = vector.fragment<lhs> %l1_p15_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r0_p15_v = vector.slice %bb0[30] : vector<32xi32> -> vector<2xi32>
+   %r0_p15 = vector.fragment<rhs> %r0_p15_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %r1_p15_v = vector.slice %bb1[30] : vector<32xi32> -> vector<2xi32>
+   %r1_p15 = vector.fragment<rhs> %r1_p15_v shape [%c16, %c16] using {schema = %schema : encoding<schema>} : vector<2xi32>
+   %next0 = vector.mma %l0_p15, %r0_p15, %v0_p14 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %next1 = vector.mma %l0_p15, %r1_p15, %v1_p14 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %next2 = vector.mma %l1_p15, %r0_p15, %v2_p14 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   %next3 = vector.mma %l1_p15, %r1_p15, %v3_p14 : vector<2xi32>, vector<2xi32>, vector<8xi32>
+   scf.yield %next0, %next1, %next2, %next3 : vector<8xi32>, vector<8xi32>, vector<8xi32>, vector<8xi32>
+  }
+  %pr0 = index.div %lane, %c4 : index
+  %pc0 = index.rem %lane, %c4 : index
+  %pc = index.mul %pc0, %c4 : index
+  scf.for %j = [%c0 to %c4 step %c1] unroll {
+   %is1 = index.cmp eq, %j, %c1 : index
+   %is2 = index.cmp eq, %j, %c2 : index
+   %c3 = index.constant 3 : index
+   %is3 = index.cmp eq, %j, %c3 : index
+   %pick1 = scf.select %is1, %acc1, %acc0 : vector<8xi32>
+   %pick2 = scf.select %is2, %acc2, %pick1 : vector<8xi32>
+   %pick3 = scf.select %is3, %acc3, %pick2 : vector<8xi32>
+   vector.fragment.store<result> %pick3, %result[%c0, %c0] shape [%c16, %c16] : vector<8xi32>, view<16x16xi32>
+   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+   %nj = index.rem %j, %c2 : index
+   %mj = index.div %j, %c2 : index
+   %mc = index.mul %mj, %c16 : index
+   %outmbase = index.add %mbase, %mc : index
+   %nc = index.mul %nj, %c16 : index
+   %oc0 = index.add %nbase, %nc : index
+   %oc = index.add %oc0, %pc : index
+   scf.for %half = [%c0 to %c2 step %c1] unroll {
+    %pr1 = index.mul %half, %c8 : index
+    %pr = index.add %pr0, %pr1 : index
+    %mrout = index.add %outmbase, %pr : index
+    %writes = index.cmp ult, %mrout, %count : index
+    scf.if %writes {
+     %oslot0 = index.add %ebase, %mrout : index
+     %oslot = index.add %oslot0, %c1 : index
+     %orf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %oslot) : (index, buffer, index, index) -> (f32)
+     %ori = scalar.fptosi %orf : f32 to i32
+     %oroute0 = index.cast %ori : i32 to index
+     %oroute = index.assume %oroute0 [range(%oroute0, 0, 16383)] : index
+     %vals = vector.load %result[%pr, %pc] : view<16x16xi32> -> vector<4xi32>
+     %vf = vector.sitofp %vals : vector<4xi32> to vector<4xf32>
+     %otoken = index.div %oroute, %topk : index
+     %oxr = scf.select %routed, %oroute, %otoken : index
+     %as = template.apply<@clef.load>(%xs_dtype, %xs_buffer, %xs_len, %oxr) : (index, buffer, index, index) -> (f32)
+     %wsat0 = index.add %expertrow, %oc : index
+     %wsmax = index.sub %ws_len, %c4 : index
+     %wsat = index.assume %wsat0 [range(%wsat0, 0, 4294967294), le(%wsat0, %wsmax), multiple_of(%wsat0, 4)] : index
+     %wsv = buffer.view %ws_buffer[%offset] : buffer -> view<[%ws_len]xf32>
+     %ws4 = vector.load %wsv[%wsat] : view<[%ws_len]xf32> -> vector<4xf32>
+     %as4 = vector.splat %as : vector<4xf32>
+     // Preserve reference scaling order: dot * (activation_scale * weight_scale).
+     %scale = vector.mulf %as4, %ws4 : vector<4xf32>
+     %scaled = vector.mulf %vf, %scale : vector<4xf32>
+     %narrow = vector.fptrunc %scaled : vector<4xf32> to vector<4xbf16>
+     %ob = index.mul %oroute, %n : index
+     %oa0 = index.add %ob, %oc : index
+     %omax = index.sub %out_len, %c4 : index
+     %oa = index.assume %oa0 [range(%oa0, 0, 4294967294), le(%oa0, %omax), multiple_of(%oa0, 4)] : index
+     %ov = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xbf16>
+     vector.store %narrow, %ov[%oa] : vector<4xbf16>, view<[%out_len]xbf16>
+    }
+   }
+   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+  }
+ }
+ kernel.return
+}

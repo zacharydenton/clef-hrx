@@ -1,0 +1,97 @@
+// Stable expert grouping plus ascending-expert rank order for accumulation.
+// Stable expert compaction: each lane finds one token's matching rank,
+// then a workgroup prefix scan assigns ordered output slots. The top-8
+// router selects distinct experts per token. Shapes are specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.tokens : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.topk : %value: index where [range(%value, 0, 4294967295)]
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%routes_buffer: buffer, %out_buffer: buffer) {
+ %c0 = index.constant 0 : index
+ %c1 = index.constant 1 : index
+ %c2 = index.constant 2 : index
+ %c4 = index.constant 4 : index
+ %c8 = index.constant 8 : index
+ %c16 = index.constant 16 : index
+ %c32 = index.constant 32 : index
+ %c64 = index.constant 64 : index
+ %c128 = index.constant 128 : index
+ %c256 = index.constant 256 : index
+ %offset = index.constant 0 : offset
+ %routes_len = config.get @clef.routes_len : index
+ %routes_dtype = config.get @clef.routes_dtype : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %tokens = config.get @clef.tokens : index
+ %topk = config.get @clef.topk : index
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %stride = index.add %tokens, %c1 : index
+ %ebase = index.mul %wg, %stride : index
+ %rw = index.mul %topk, %c2 : index
+ %expert_i = index.cast %wg : index to i32
+ %expert_f = scalar.sitofp %expert_i : i32 to f32
+ %group_len = index.mul %c128, %stride : index
+ %zero = scalar.constant 0 : i32
+ %one = scalar.constant 1 : i32
+ %count = scf.for %base = [%c0 to %tokens step %c64](%count0 = %zero : i32) -> (i32) {
+  %token = index.add %base, %lane : index
+  %valid = index.cmp ult, %token, %tokens : index
+  %rank, %sorted = scf.if %valid -> (index, index) {
+   %rb = index.mul %token, %rw : index
+   %found, %less = scf.for %r = [%c0 to %topk step %c1](%previous = %topk : index, %less0 = %c0 : index) -> (index, index) {
+    %ri = index.add %rb, %r : index
+    %ef = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %ri) : (index, buffer, index, index) -> (f32)
+    %ei = scalar.fptosi %ef : f32 to i32
+    %e = index.cast %ei : i32 to index
+    %match = index.cmp eq, %e, %wg : index
+    %next = scf.if %match -> (index) { scf.yield %r : index } else { scf.yield %previous : index }
+    %below = scalar.cmpf olt, %ef, %expert_f : f32
+    %increment = scf.select %below, %c1, %c0 : index
+    %next_less = index.add %less0, %increment : index
+    scf.yield %next, %next_less : index, index
+   }
+   scf.yield %found, %less : index, index
+  } else { scf.yield %topk, %c0 : index, index }
+  %matched = index.cmp ult, %rank, %topk : index
+  %flag = scf.if %matched -> (i32) { scf.yield %one : i32 } else { scf.yield %zero : i32 }
+  %prefix = kernel.workgroup.scan<addi> %flag {direction = forward, mode = exclusive} : i32
+  %sum = kernel.workgroup.reduce<addi> %flag : i32
+  %total = kernel.subgroup.broadcast.first %sum : i32
+  scf.if %matched {
+   %ordinal = scalar.addi %count0, %prefix : i32
+   %slot0 = index.cast %ordinal : i32 to index
+   %slot = index.add %slot0, %c1 : index
+   %at = index.add %ebase, %slot : index
+   %routebase = index.mul %token, %topk : index
+   // Unique selected experts give one writer for each sorted token/rank slot.
+   %order0 = index.add %group_len, %routebase : index
+   %order_at = index.add %order0, %sorted : index
+   %rank_i = index.cast %rank : index to i32
+   %rank_f = scalar.sitofp %rank_i : i32 to f32
+   template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %order_at, %rank_f) : (index, buffer, index, index, f32) -> ()
+   %route = index.add %routebase, %rank : index
+   %r = index.cast %route : index to i32
+   %rf = scalar.sitofp %r : i32 to f32
+   template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %at, %rf) : (index, buffer, index, index, f32) -> ()
+  }
+  %nextcount = scalar.addi %count0, %total : i32
+  scf.yield %nextcount : i32
+ }
+ %leader = index.cmp eq, %lane, %c0 : index
+ scf.if %leader {
+  %cf = scalar.sitofp %count : i32 to f32
+  template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %ebase, %cf) : (index, buffer, index, index, f32) -> ()
+ }
+ kernel.return
+}

@@ -55,7 +55,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("tests/results/jevbench"))
     parser.add_argument("--precision", choices=("bf16", "int4-mlp", "int4"), default="bf16")
     parser.add_argument("--memory-gib", type=int, default=80)
-    parser.add_argument("--model", choices=("clef", "clef-flash"), default="clef")
+    parser.add_argument("--model", choices=("clef", "clef-flash", "clef-omni"), default="clef")
     parser.add_argument("--model-dir", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--prepared", type=Path, help="Reuse a preflight from the same binary, data, and model source")
@@ -113,7 +113,7 @@ def main():
         "scoring": "Upstream score_task and summarize; raw native probabilities; score uses argmax",
         "latency_note": "Sequential local CLI; first call includes model loading. No warmup. Compilation included.",
         "cache_before": kernel_cache_snapshot(),
-        "environment": {k: v for k, v in os.environ.items() if k.startswith("CLEF_EXPERIMENT_") or k in ("XDG_CACHE_HOME", "HRX_RUNTIME_DIR", "HRX_BUNDLE_MANIFEST", "HRX_OFFLINE")},
+        "environment": {k: v for k, v in os.environ.items() if k.startswith(("CLEF_EXPERIMENT_", "CLEF_BENCH_")) or k in ("XDG_CACHE_HOME", "HRX_RUNTIME_DIR", "HRX_BUNDLE_MANIFEST", "HRX_OFFLINE")},
     }
     (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (args.output / "working-tree.diff").write_bytes(subprocess.check_output(["git", "diff", "HEAD"]))

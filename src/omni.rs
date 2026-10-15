@@ -8,6 +8,7 @@ use anyhow::ensure;
 
 const EXPERTS: usize = 128;
 const TOP_K: usize = 8;
+pub(crate) const MAX_EXPERT_CHUNK: usize = 2048;
 
 #[cfg(test)]
 #[path = "omni_validation.rs"]
@@ -21,7 +22,11 @@ pub(crate) fn load_experts(e: &mut Engine, checkpoint: &Checkpoint) -> Result<()
     }
     Ok(())
 }
-fn load_expert_layer(e: &mut Engine, checkpoint: &Checkpoint, layer: usize) -> Result<()> {
+pub(crate) fn load_expert_layer(
+    e: &mut Engine,
+    checkpoint: &Checkpoint,
+    layer: usize,
+) -> Result<()> {
     for projection in ["gate", "up", "down"] {
         let prefix = format!("model.language_model.layers.{layer}.mlp.experts");
         let name = format!("{prefix}.{projection}_proj.weight");
@@ -52,6 +57,51 @@ fn load_expert_layer(e: &mut Engine, checkpoint: &Checkpoint, layer: usize) -> R
 }
 
 impl Engine {
+    /// Prefix-compatible grouped routes, rank order, then a compact tile schedule.
+    pub(crate) fn omni_compact_routes(&mut self, routes: &Tensor) -> Result<(Tensor, Tensor)> {
+        ensure!(
+            (1..=MAX_EXPERT_CHUNK).contains(&routes.rows)
+                && routes.cols == TOP_K * 2
+                && routes.dtype == DType::F32,
+            "unsupported compact Omni routes"
+        );
+        let group_len = EXPERTS * (routes.rows + 1);
+        let order_len = routes.rows * TOP_K;
+        let task_len = 1 + 2 * ((routes.rows * TOP_K).div_ceil(16) + EXPERTS - 1);
+        let combined = self.alloc(group_len + order_len + task_len, 1, DType::F32)?;
+        self.dispatch(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/omni_group_routes_ordered.loom")
+            ),
+            EXPERTS * 64,
+            &[("routes", routes)],
+            &combined,
+            &[
+                ("tokens", routes.rows.to_string()),
+                ("topk", TOP_K.to_string()),
+            ],
+        )?;
+        let groups = combined
+            .slice_rows(0, group_len)
+            .reshape(EXPERTS, routes.rows + 1);
+        let tasks = combined.slice_rows(group_len + order_len, task_len);
+        self.dispatch(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/omni_expert_tasks.loom")
+            ),
+            EXPERTS,
+            &[("routes", &groups)],
+            &tasks,
+            &[("tokens", routes.rows.to_string())],
+        )?;
+        let order = combined
+            .slice_rows(group_len, order_len)
+            .reshape(routes.rows, TOP_K);
+        let len = combined.len();
+        Ok((combined.reshape(1, len), order))
+    }
     pub(crate) fn omni_route(&mut self, logits: &Tensor, topk: usize) -> Result<Tensor> {
         ensure!(
             topk > 0 && topk <= logits.cols && logits.cols <= 128,
@@ -63,7 +113,7 @@ impl Engine {
                 include_str!("../kernels/common.loom"),
                 include_str!("../kernels/omni_route.loom")
             ),
-            logits.rows,
+            logits.rows * 32,
             &[("x", logits)],
             &out,
             &[
@@ -73,6 +123,95 @@ impl Engine {
         )?;
         Ok(out)
     }
+    /// Stable per-expert route lists; each token selects an expert at most once.
+    pub(crate) fn omni_group_routes(&mut self, routes: &Tensor) -> Result<Tensor> {
+        ensure!(
+            (1..=MAX_EXPERT_CHUNK).contains(&routes.rows) && routes.cols == TOP_K * 2,
+            "unsupported Omni route grouping shape"
+        );
+        let out = self.alloc(EXPERTS, routes.rows + 1, DType::F32)?;
+        self.dispatch(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/omni_group_routes.loom")
+            ),
+            EXPERTS * 64,
+            &[("routes", routes)],
+            &out,
+            &[
+                ("tokens", routes.rows.to_string()),
+                ("topk", TOP_K.to_string()),
+            ],
+        )?;
+        Ok(out)
+    }
+    pub(crate) fn omni_group_routes_ordered(
+        &mut self,
+        routes: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        ensure!(
+            (1..=MAX_EXPERT_CHUNK).contains(&routes.rows)
+                && routes.cols == TOP_K * 2
+                && routes.dtype == DType::F32,
+            "unsupported ordered Omni routes"
+        );
+        let group_len = EXPERTS * (routes.rows + 1);
+        let combined = self.alloc(group_len + routes.rows * TOP_K, 1, DType::F32)?;
+        self.dispatch(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/omni_group_routes_ordered.loom")
+            ),
+            EXPERTS * 64,
+            &[("routes", routes)],
+            &combined,
+            &[
+                ("tokens", routes.rows.to_string()),
+                ("topk", TOP_K.to_string()),
+            ],
+        )?;
+        let groups = combined
+            .slice_rows(0, group_len)
+            .reshape(EXPERTS, routes.rows + 1);
+        let order = combined
+            .slice_rows(group_len, routes.rows * TOP_K)
+            .reshape(routes.rows, TOP_K);
+        Ok((groups, order))
+    }
+    pub(crate) fn omni_combine_ordered(
+        &mut self,
+        values: &Tensor,
+        routes: &Tensor,
+        order: &Tensor,
+    ) -> Result<Tensor> {
+        ensure!(
+            routes.cols == TOP_K * 2
+                && order.rows == routes.rows
+                && order.cols == TOP_K
+                && values.rows == routes.rows * TOP_K
+                && values.cols.is_multiple_of(8)
+                && values.dtype == DType::Bf16
+                && routes.dtype == DType::F32
+                && order.dtype == DType::F32,
+            "unsupported ordered Omni accumulation"
+        );
+        let out = self.alloc(routes.rows, values.cols, DType::Bf16)?;
+        self.dispatch(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/omni_combine_ordered.loom")
+            ),
+            out.len() / 8,
+            &[("x", values), ("routes", routes), ("order", order)],
+            &out,
+            &[
+                ("width", values.cols.to_string()),
+                ("topk", TOP_K.to_string()),
+            ],
+        )?;
+        Ok(out)
+    }
+    #[cfg(feature = "bench-internals")]
     pub(crate) fn omni_expert(
         &mut self,
         x: &Tensor,
@@ -80,7 +219,44 @@ impl Engine {
         name: &str,
         input_routed: bool,
     ) -> Result<Tensor> {
+        self.omni_expert_impl(x, routes, None, name, input_routed)
+    }
+    pub(crate) fn omni_expert_impl(
+        &mut self,
+        x: &Tensor,
+        routes: &Tensor,
+        groups: Option<&Tensor>,
+        name: &str,
+        input_routed: bool,
+    ) -> Result<Tensor> {
+        self.omni_expert_inputs(x, None, routes, groups, name, input_routed)
+    }
+
+    fn omni_expert_inputs(
+        &mut self,
+        x: &Tensor,
+        up: Option<&Tensor>,
+        routes: &Tensor,
+        groups: Option<&Tensor>,
+        name: &str,
+        input_routed: bool,
+    ) -> Result<Tensor> {
         let topk = routes.cols / 2;
+        let compact = groups.is_some_and(|g| g.rows == 1);
+        if let Some(groups) = groups {
+            let compact_len = EXPERTS * (routes.rows + 1)
+                + routes.rows * TOP_K
+                + 1
+                + 2 * ((routes.rows * TOP_K).div_ceil(16) + EXPERTS - 1);
+            ensure!(
+                (1..=MAX_EXPERT_CHUNK).contains(&routes.rows)
+                    && topk == TOP_K
+                    && ((groups.rows == EXPERTS && groups.cols == routes.rows + 1)
+                        || (compact && groups.cols == compact_len))
+                    && groups.dtype == DType::F32,
+                "invalid grouped expert routes"
+            );
+        }
         let weight = format!("{name}.weight");
         let (a, w, xs, ws, rows, stride, bits) =
             if let Some(w) = self.quantized.weights.get(&weight).cloned() {
@@ -88,7 +264,25 @@ impl Engine {
                     w.bits == 4 && w.cols == x.cols,
                     "unsupported Omni expert packing"
                 );
-                let (a, scales) = crate::quantized::prepare(self, x, w.bits, w.stride)?;
+                #[cfg(feature = "bench-internals")]
+                let shared = self.omni_fused_mlp;
+                #[cfg(not(feature = "bench-internals"))]
+                let shared = false;
+                let (a, scales) = if let Some(up) = up {
+                    let packed = crate::quantized::prepare_with_inputs(
+                        self,
+                        &[x, up],
+                        w.bits,
+                        w.stride,
+                        include_str!("../kernels/prepare_integer_register.loom"),
+                    )?;
+                    self.quantized.clear_activation();
+                    packed
+                } else if shared {
+                    self.prepare_quantized_input(x, &w)?
+                } else {
+                    crate::quantized::prepare(self, x, w.bits, w.stride)?
+                };
                 (
                     a,
                     w.codes,
@@ -99,6 +293,7 @@ impl Engine {
                     w.bits,
                 )
             } else {
+                ensure!(up.is_none(), "fused expert packing requires INT4 weights");
                 let w = self.w(&weight)?;
                 ensure!(
                     w.cols == x.cols && w.layout == Layout::Tiled && w.rows.is_multiple_of(EXPERTS),
@@ -112,22 +307,76 @@ impl Engine {
             x.rows == routes.rows * if input_routed { topk } else { 1 },
             "expert input routes mismatch"
         );
+        ensure!(
+            rows.is_multiple_of(256) && x.cols.is_multiple_of(256),
+            "unsupported Omni expert tile shape"
+        );
         let out = self.alloc(routes.rows * topk, rows, DType::Bf16)?;
-        self.dispatch(
+        ensure!(
+            !compact || (bits == 4 && rows <= 2048),
+            "compact expert schedule requires INT4 and at most 2048 output channels"
+        );
+        let source = if groups.is_some() {
+            if compact {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/omni_expert_i4_compact.loom")
+                )
+            } else if bits == 4 {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/omni_expert_i4.loom")
+                )
+            } else {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/omni_expert_bf16.loom")
+                )
+            }
+        } else {
             concat!(
                 include_str!("../kernels/common.loom"),
                 include_str!("../kernels/omni_expert.loom")
-            ),
-            out.len() * 32,
+            )
+        };
+        #[cfg(feature = "bench-internals")]
+        let experimental =
+            if !compact && groups.is_some() && routes.rows >= self.omni_kernel_min_tokens {
+                self.omni_kernel_dir
+                    .as_ref()
+                    .map(|dir| {
+                        let file = if bits == 4 {
+                            "omni_expert_i4.loom"
+                        } else {
+                            "omni_expert_bf16.loom"
+                        };
+                        std::fs::read_to_string(dir.join(file)).map(|source| {
+                            format!("{}\n{source}", include_str!("../kernels/common.loom"))
+                        })
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+        #[cfg(feature = "bench-internals")]
+        let source = experimental.as_deref().unwrap_or(source);
+        self.dispatch(
+            source,
+            if groups.is_some() {
+                EXPERTS * (rows / 64) * 32
+            } else {
+                out.len() * 32
+            },
             &[
                 ("x", &a),
                 ("w", &w),
-                ("routes", routes),
+                ("routes", groups.unwrap_or(routes)),
                 ("xs", &xs),
                 ("ws", &ws),
             ],
             &out,
             &[
+                ("tokens", routes.rows.to_string()),
                 ("k", x.cols.to_string()),
                 ("n", rows.to_string()),
                 ("topk", topk.to_string()),
@@ -186,12 +435,58 @@ pub(crate) fn text_rope(positions: &[[u32; 3]]) -> Vec<half::bf16> {
         .collect()
 }
 
+#[cfg(feature = "bench-internals")]
+pub(crate) fn padded_positions(positions: &[[u32; 3]], padded: usize) -> Result<Vec<[u32; 3]>> {
+    ensure!(padded >= positions.len(), "Omni padded position extent");
+    let last = *positions
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("empty Omni positions"))?;
+    let mut extended = positions.to_vec();
+    for step in 1..=padded - positions.len() {
+        let mut position = last;
+        for value in &mut position {
+            *value = value
+                .checked_add(step as u32)
+                .ok_or_else(|| anyhow::anyhow!("Omni position overflow"))?;
+        }
+        extended.push(position);
+    }
+    Ok(extended)
+}
+
 pub(crate) fn forward(
     e: &mut Engine,
     x: Tensor,
     positions: &[[u32; 3]],
     deepstack: &[Vec<(usize, Tensor)>],
 ) -> Result<Tensor> {
+    #[cfg(feature = "bench-internals")]
+    if e.omni_alignment != 1 {
+        let alignment = e.omni_alignment;
+        ensure!(
+            alignment.is_power_of_two() && alignment <= 256,
+            "Omni padding alignment"
+        );
+        let actual = x.rows;
+        let padded = actual.div_ceil(alignment) * alignment;
+        ensure!(
+            padded <= crate::encoding::MAX_CONTEXT_TOKENS,
+            "Omni padded context limit"
+        );
+        if actual != padded {
+            // Padding follows every real token. Causal attention prevents it
+            // from influencing real queries; remove it before the decision head.
+            let zeros = e.input(
+                padded - actual,
+                x.cols,
+                DType::Bf16,
+                &vec![0u8; (padded - actual) * x.cols * 2],
+            )?;
+            let x = e.cat_rows(&[x, zeros])?;
+            let extended = padded_positions(positions, padded)?;
+            return Ok(forward_layers(e, x, &extended, deepstack, 0..48)?.slice_rows(0, actual));
+        }
+    }
     forward_layers(e, x, positions, deepstack, 0..48)
 }
 fn forward_layers(
@@ -206,6 +501,14 @@ fn forward_layers(
         "Omni text input shape"
     );
     let n = x.rows;
+    #[cfg(feature = "bench-internals")]
+    let chunk = e.omni_chunk;
+    #[cfg(not(feature = "bench-internals"))]
+    let chunk = 256;
+    ensure!(
+        (1..=MAX_EXPERT_CHUNK).contains(&chunk),
+        "Omni expert chunk limit"
+    );
     let cs = e.input(
         n,
         256,
@@ -237,22 +540,73 @@ fn forward_layers(
         x = e.binary(&x, &attn, "addf")?;
         let norm = e.named_norm(&x, &format!("{p}.post_attention_layernorm"), false, 1e-6)?;
         let mut chunks = Vec::new();
-        for start in (0..n).step_by(256) {
-            let norm = norm.slice_rows(start, (n - start).min(256));
+        for start in (0..n).step_by(chunk) {
+            let norm = norm.slice_rows(start, (n - start).min(chunk));
             let logits = e.project(&norm, &format!("{p}.mlp.gate"), false)?;
             let routes = e.omni_route(&logits, TOP_K)?;
-            let gate =
-                e.omni_expert(&norm, &routes, &format!("{p}.mlp.experts.gate_proj"), false)?;
-            let up = e.omni_expert(&norm, &routes, &format!("{p}.mlp.experts.up_proj"), false)?;
-            let gate = e.unary(&gate, "silu")?;
-            let hidden = e.binary(&gate, &up, "mulf")?;
-            let values = e.omni_expert(
-                &hidden,
+            #[cfg(feature = "bench-internals")]
+            let reference = std::env::var_os("CLEF_BENCH_OMNI_REFERENCE").is_some();
+            #[cfg(not(feature = "bench-internals"))]
+            let reference = false;
+            #[cfg(feature = "bench-internals")]
+            let ordered = e.omni_sorted_combine;
+            #[cfg(not(feature = "bench-internals"))]
+            let ordered = false;
+            #[cfg(feature = "bench-internals")]
+            let compact = e.omni_compact_experts && !e.quantized.is_bf16();
+            #[cfg(not(feature = "bench-internals"))]
+            let compact = false;
+            let (groups, order) = if reference {
+                (None, None)
+            } else if compact {
+                let (groups, order) = e.omni_compact_routes(&routes)?;
+                (Some(groups), ordered.then_some(order))
+            } else if ordered {
+                let (groups, order) = e.omni_group_routes_ordered(&routes)?;
+                (Some(groups), Some(order))
+            } else {
+                (Some(e.omni_group_routes(&routes)?), None)
+            };
+            let gate = e.omni_expert_impl(
+                &norm,
                 &routes,
-                &format!("{p}.mlp.experts.down_proj"),
-                true,
+                groups.as_ref(),
+                &format!("{p}.mlp.experts.gate_proj"),
+                false,
             )?;
-            let values = e.omni_combine(&values, &routes)?;
+            let up = e.omni_expert_impl(
+                &norm,
+                &routes,
+                groups.as_ref(),
+                &format!("{p}.mlp.experts.up_proj"),
+                false,
+            )?;
+            #[cfg(feature = "bench-internals")]
+            let fused = e.omni_fused_mlp;
+            #[cfg(not(feature = "bench-internals"))]
+            let fused = false;
+            let down = format!("{p}.mlp.experts.down_proj");
+            #[cfg(feature = "bench-internals")]
+            let pack_swiglu =
+                e.omni_pack_swiglu && e.quantized.weights.contains_key(&format!("{down}.weight"));
+            #[cfg(not(feature = "bench-internals"))]
+            let pack_swiglu = false;
+            let values = if pack_swiglu {
+                e.omni_expert_inputs(&gate, Some(&up), &routes, groups.as_ref(), &down, true)?
+            } else {
+                let hidden = if fused {
+                    e.swiglu(&gate, &up)?
+                } else {
+                    let gate = e.unary(&gate, "silu")?;
+                    e.binary(&gate, &up, "mulf")?
+                };
+                e.omni_expert_impl(&hidden, &routes, groups.as_ref(), &down, true)?
+            };
+            let values = if let Some(order) = &order {
+                e.omni_combine_ordered(&values, &routes, order)?
+            } else {
+                e.omni_combine(&values, &routes)?
+            };
             chunks.push(values);
         }
         let values = e.cat_rows(&chunks)?;
@@ -276,6 +630,44 @@ fn forward_layers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires gfx1151; checks stable parallel route compaction and graph replay"]
+    fn grouped_routes_match_cpu() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        for tokens in [
+            1, 17, 64, 65, 128, 255, 256, 511, 512, 1023, 1024, 2047, 2048,
+        ] {
+            let mut e = Engine::new(&context)?;
+            let mut data = vec![0f32; tokens * TOP_K * 2];
+            let routes = e.input(tokens, TOP_K * 2, DType::F32, bytemuck::cast_slice(&data))?;
+            let groups = e.omni_group_routes(&routes)?;
+            let mut graph = e.finish()?;
+            // Replay with different expert membership, including empty experts and
+            // a completely full expert row. IDs remain distinct within each token.
+            for phase in 0..3 {
+                let mut expected = vec![Vec::new(); EXPERTS];
+                for token in 0..tokens {
+                    for rank in 0..TOP_K {
+                        let expert =
+                            (if phase == 1 { 0 } else { token * 13 } + rank * 7 + phase * 19)
+                                % EXPERTS;
+                        data[token * TOP_K * 2 + rank] = expert as f32;
+                        expected[expert].push((token * TOP_K + rank) as f32);
+                    }
+                }
+                e.upload(&routes, bytemuck::cast_slice(&data))?;
+                e.run(&mut graph)?;
+                let actual = e.read_f32(&groups)?;
+                for (expert, ordinals) in expected.iter().enumerate() {
+                    let base = expert * (tokens + 1);
+                    assert_eq!(actual[base], ordinals.len() as f32);
+                    assert_eq!(&actual[base + 1..base + 1 + ordinals.len()], ordinals);
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     #[ignore = "requires gfx1151; checks routing, selected experts and weighted accumulation"]
     fn routed_experts_match_sparse_cpu_oracle() -> Result<()> {
@@ -308,15 +700,18 @@ mod tests {
             let x = e.input(3, 256, DType::Bf16, bytemuck::cast_slice(&input))?;
             let l = e.input(3, EXPERTS, DType::Bf16, bytemuck::cast_slice(&logits))?;
             let routes = e.omni_route(&l, TOP_K)?;
-            let values = e.omni_expert(
+            let groups = e.omni_group_routes(&routes)?;
+            let values = e.omni_expert_impl(
                 &x,
                 &routes,
+                Some(&groups),
                 "model.language_model.layers.0.mlp.experts.up_proj",
                 false,
             )?;
-            let values = e.omni_expert(
+            let values = e.omni_expert_impl(
                 &values,
                 &routes,
+                Some(&groups),
                 "model.language_model.layers.0.mlp.experts.up_proj",
                 true,
             )?;

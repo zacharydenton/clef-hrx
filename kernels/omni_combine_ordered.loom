@@ -1,0 +1,82 @@
+// Accumulate eight columns per thread in the original ascending expert order.
+// CLEF Omni native operator. Numeric shapes are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.width : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.order_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.order_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.topk : %value: index where [range(%value, 0, 4294967295)]
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %routes_buffer: buffer, %order_buffer: buffer, %out_buffer: buffer) {
+ %c0 = index.constant 0 : index
+ %c1 = index.constant 1 : index
+ %c2 = index.constant 2 : index
+ %c8 = index.constant 8 : index
+ %c64 = index.constant 64 : index
+ %offset = index.constant 0 : offset
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %c64 : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+  %width = config.get @clef.width : index
+  %topk = config.get @clef.topk : index
+  %x_len = config.get @clef.x_len : index
+  %routes_len = config.get @clef.routes_len : index
+  %order_len = config.get @clef.order_len : index
+  %out_len = config.get @clef.out_len : index
+  %out_at0 = index.mul %id, %c8 : index
+  %token = index.div %out_at0, %width : index
+  %col = index.rem %out_at0, %width : index
+  %routebase = index.mul %token, %topk : index
+  %rb = index.mul %routebase, %c2 : index
+  %routes = buffer.view %routes_buffer[%offset] : buffer -> view<[%routes_len]xf32>
+  %order = buffer.view %order_buffer[%offset] : buffer -> view<[%order_len]xf32>
+  %x = buffer.view %x_buffer[%offset] : buffer -> view<[%x_len]xbf16>
+  %out = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xbf16>
+  %zero = vector.constant 0.0 : vector<8xf32>
+  %sum = scf.for %j = [%c0 to %topk step %c1](%acc = %zero : vector<8xf32>) -> (vector<8xf32>) {
+   %order_at = index.add %routebase, %j : index
+   %rf = view.load %order[%order_at] : view<[%order_len]xf32> -> f32
+   %ri = scalar.fptosi %rf : f32 to i32
+   %rank0 = index.cast %ri : i32 to index
+   %rank = index.assume %rank0 [range(%rank0, 0, 7)] : index
+   %route = index.add %routebase, %rank : index
+   %xb = index.mul %route, %width : index
+   %xi0 = index.add %xb, %col : index
+   %xmax = index.sub %x_len, %c8 : index
+   %xi = index.assume %xi0 [range(%xi0, 0, 4294967294), le(%xi0, %xmax), multiple_of(%xi0, 8)] : index
+   %v = vector.load %x[%xi] : view<[%x_len]xbf16> -> vector<8xbf16>
+   %vf = vector.extf %v : vector<8xbf16> to vector<8xf32>
+   %ri0 = index.add %rb, %rank : index
+   %pi = index.add %ri0, %topk : index
+   %p = view.load %routes[%pi] : view<[%routes_len]xf32> -> f32
+   %pv = vector.splat %p : vector<8xf32>
+   %product = vector.mulf %vf, %pv : vector<8xf32>
+   %pb = vector.fptrunc %product : vector<8xf32> to vector<8xbf16>
+   %pf = vector.extf %pb : vector<8xbf16> to vector<8xf32>
+   %s = vector.addf %acc, %pf : vector<8xf32>
+   %sb = vector.fptrunc %s : vector<8xf32> to vector<8xbf16>
+   %sf = vector.extf %sb : vector<8xbf16> to vector<8xf32>
+   scf.yield %sf : vector<8xf32>
+  }
+  %result = vector.fptrunc %sum : vector<8xf32> to vector<8xbf16>
+  %out_max = index.sub %out_len, %c8 : index
+  %out_at = index.assume %out_at0 [range(%out_at0, 0, 4294967294), le(%out_at0, %out_max), multiple_of(%out_at0, 8)] : index
+  vector.store %result, %out[%out_at] : vector<8xbf16>, view<[%out_len]xbf16>
+ }
+ kernel.return
+}

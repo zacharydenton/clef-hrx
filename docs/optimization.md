@@ -1114,3 +1114,9 @@ reference for focused exact probes; filter that group to width 5,120.
 `CLEF_TEST_NORM_PACK_SOURCE` can point the GPU fixture at an experimental source;
 without it the fixture tests the native kernel. See
 [full-model qualification and reproduction](evaluation.md#rmsnorm-and-packing-fusion).
+
+## Omni experts
+
+`cargo bench --features bench-internals --bench omni` compares the original and
+grouped expert kernels across both precisions, projection shapes, routing patterns
+and token counts. See [results, correctness gates and reproduction](omni-kernel-tuning.md).

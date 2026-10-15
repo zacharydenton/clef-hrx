@@ -111,6 +111,10 @@ default in their qualified precision modes. Results and reproduction:
 Original CLEF INT4 also uses optimized long-context attention; see its
 [qualification coverage](docs/attention-kernel-tuning.md#acceptance-with-partial-coverage-october-15).
 
+With opt-in experimental kernels, Omni reaches **1,145 BF16 / 3,031 INT4 input
+tok/s** on full JevBench, with **80.1% / 81.0% accuracy** respectively.
+[Omni results and reproduction](docs/omni-memory-tuning.md).
+
 ## Library
 
 `ClefModel` exposes inference and `load_in` accepts an existing HRX `ModelContext`.

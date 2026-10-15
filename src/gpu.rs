@@ -88,10 +88,21 @@ impl Tensor {
     }
 }
 struct Allocation {
-    buffer: Buffer,
+    buffer: Option<Buffer>,
     lease: Weak<()>,
     permanent: bool,
     host_input: bool,
+}
+impl Allocation {
+    fn bytes(&self) -> usize {
+        self.buffer.as_ref().map_or(0, Buffer::bytes)
+    }
+    fn buffer(&self) -> &Buffer {
+        self.buffer.as_ref().expect("live tensor allocation")
+    }
+    fn idle(&self) -> bool {
+        !self.permanent && self.lease.strong_count() == 0
+    }
 }
 struct Binding {
     slot: usize,
@@ -110,6 +121,8 @@ struct Command {
 struct CompiledKernel {
     kernel: Kernel,
     grids: HashMap<Vec<u64>, [u32; 3]>,
+    #[cfg(feature = "bench-internals")]
+    last_used: u64,
 }
 pub(crate) struct Engine {
     pub architecture: crate::architecture::Architecture,
@@ -126,10 +139,43 @@ pub(crate) struct Engine {
     pub long_vector_delta: Option<bool>,
     #[cfg(feature = "bench-internals")]
     pub bf16_m_group: usize,
+    #[cfg(feature = "bench-internals")]
+    pub omni_kernel_dir: Option<std::path::PathBuf>,
+    #[cfg(feature = "bench-internals")]
+    pub omni_chunk: usize,
+    #[cfg(feature = "bench-internals")]
+    pub omni_alignment: usize,
+    #[cfg(feature = "bench-internals")]
+    pub omni_kernel_min_tokens: usize,
+    #[cfg(feature = "bench-internals")]
+    pub omni_tiled_attention: bool,
+    #[cfg(feature = "bench-internals")]
+    pub omni_prepack_qk: bool,
+    #[cfg(feature = "bench-internals")]
+    pub omni_sorted_combine: bool,
+    #[cfg(feature = "bench-internals")]
+    pub omni_fused_mlp: bool,
+    #[cfg(feature = "bench-internals")]
+    pub omni_pack_swiglu: bool,
+    #[cfg(feature = "bench-internals")]
+    pub omni_compact_experts: bool,
+    #[cfg(feature = "bench-internals")]
+    pub omni_reuse_backbone: bool,
+    #[cfg(feature = "bench-internals")]
+    kernel_lru: bool,
+    #[cfg(feature = "bench-internals")]
+    kernel_cache_capacity: usize,
+    #[cfg(feature = "bench-internals")]
+    kernel_clock: u64,
+    #[cfg(feature = "bench-internals")]
+    kernel_cache_stats: [u64; 3],
+    #[cfg(feature = "bench-internals")]
+    pub(crate) packed_weight_cache: Option<crate::packed_cache::PackedWeightCache>,
     stream: Stream,
     compiler: Compiler,
     compile_reports: Option<std::path::PathBuf>,
     allocations: Vec<Allocation>,
+    scratch_cache_limit: usize,
     kernels: HashMap<KernelKey, CompiledKernel>,
     source_fingerprints: SourceFingerprints,
     commands: Vec<Command>,
@@ -140,6 +186,14 @@ pub(crate) struct Engine {
     traces: Vec<(String, Tensor)>,
 }
 impl Engine {
+    #[cfg(feature = "bench-internals")]
+    pub(crate) fn set_packed_weight_cache(&mut self, directory: std::path::PathBuf) {
+        self.packed_weight_cache = Some(crate::packed_cache::PackedWeightCache::new(
+            directory,
+            self.compiler.identity(),
+            self.compiler.target().as_str(),
+        ));
+    }
     /// Specializes checked-in Loom sources using numeric configuration only.
     pub fn dispatch(
         &mut self,
@@ -204,7 +258,68 @@ impl Engine {
             std::fs::create_dir_all(path)?;
         }
         Ok(Self {
+            #[cfg(feature = "bench-internals")]
+            packed_weight_cache: std::env::var_os("CLEF_BENCH_PACKED_WEIGHT_CACHE").map(|path| {
+                crate::packed_cache::PackedWeightCache::new(
+                    path.into(),
+                    compiler.identity(),
+                    compiler.target().as_str(),
+                )
+            }),
             architecture: crate::ModelVariant::Clef.architecture(),
+            #[cfg(feature = "bench-internals")]
+            omni_kernel_dir: std::env::var_os("CLEF_BENCH_OMNI_KERNEL_DIR").map(Into::into),
+            #[cfg(feature = "bench-internals")]
+            omni_kernel_min_tokens: std::env::var("CLEF_BENCH_OMNI_MIN_TOKENS")
+                .ok()
+                .map(|s| s.parse())
+                .transpose()?
+                .unwrap_or(0),
+            #[cfg(feature = "bench-internals")]
+            omni_chunk: std::env::var("CLEF_BENCH_OMNI_CHUNK")
+                .ok()
+                .map(|s| s.parse())
+                .transpose()?
+                .unwrap_or(256),
+            #[cfg(feature = "bench-internals")]
+            omni_tiled_attention: std::env::var_os("CLEF_BENCH_OMNI_ATTENTION").is_some(),
+            #[cfg(feature = "bench-internals")]
+            omni_prepack_qk: std::env::var_os("CLEF_BENCH_OMNI_PREPACK_QK").is_some(),
+            #[cfg(feature = "bench-internals")]
+            omni_sorted_combine: std::env::var_os("CLEF_BENCH_OMNI_COMBINE").is_some(),
+            #[cfg(feature = "bench-internals")]
+            omni_fused_mlp: std::env::var_os("CLEF_BENCH_OMNI_FUSED_MLP").is_some(),
+            #[cfg(feature = "bench-internals")]
+            omni_pack_swiglu: std::env::var_os("CLEF_BENCH_OMNI_PACK_SWIGLU").is_some(),
+            #[cfg(feature = "bench-internals")]
+            omni_compact_experts: std::env::var_os("CLEF_BENCH_OMNI_COMPACT_EXPERTS").is_some(),
+            #[cfg(feature = "bench-internals")]
+            omni_reuse_backbone: std::env::var_os("CLEF_BENCH_OMNI_REUSE_BACKBONE").is_some(),
+            #[cfg(feature = "bench-internals")]
+            kernel_lru: std::env::var_os("CLEF_BENCH_OMNI_KERNEL_LRU").is_some(),
+            #[cfg(feature = "bench-internals")]
+            kernel_cache_capacity: {
+                let capacity = std::env::var("CLEF_BENCH_OMNI_KERNEL_CACHE_CAPACITY")
+                    .ok()
+                    .map(|value| value.parse::<usize>())
+                    .transpose()?
+                    .unwrap_or(512);
+                ensure!(
+                    (1..=8192).contains(&capacity),
+                    "kernel cache capacity must be 1..=8192"
+                );
+                capacity
+            },
+            #[cfg(feature = "bench-internals")]
+            kernel_clock: 0,
+            #[cfg(feature = "bench-internals")]
+            kernel_cache_stats: [0; 3],
+            #[cfg(feature = "bench-internals")]
+            omni_alignment: std::env::var("CLEF_BENCH_OMNI_ALIGNMENT")
+                .ok()
+                .map(|s| s.parse())
+                .transpose()?
+                .unwrap_or(1),
             #[cfg(feature = "bench-internals")]
             reference_kernels: Default::default(),
             #[cfg(feature = "bench-internals")]
@@ -244,6 +359,7 @@ impl Engine {
             compiler,
             compile_reports,
             allocations: Vec::new(),
+            scratch_cache_limit: usize::MAX,
             kernels: HashMap::new(),
             source_fingerprints: SourceFingerprints::default(),
             commands: Vec::new(),
@@ -253,6 +369,55 @@ impl Engine {
             uploaded: 0,
             traces: Vec::new(),
         })
+    }
+    fn store_allocation(&mut self, allocation: Allocation) -> usize {
+        // Keep live tensor slot indices stable, including weights and graph pins.
+        if let Some(slot) = self.allocations.iter().position(|a| a.buffer.is_none()) {
+            self.allocations[slot] = allocation;
+            slot
+        } else {
+            let slot = self.allocations.len();
+            self.allocations.push(allocation);
+            slot
+        }
+    }
+    /// Configure once after weights are loaded. Retain at most half the remaining
+    /// engine budget as idle scratch, leaving headroom for new request shapes.
+    pub(crate) fn bound_scratch_cache(&mut self, budget_bytes: usize) -> Result<()> {
+        let live_bytes: usize = self
+            .allocations
+            .iter()
+            .filter(|a| !a.idle())
+            .map(Allocation::bytes)
+            .sum();
+        self.scratch_cache_limit = budget_bytes.saturating_sub(live_bytes) / 2;
+        self.reset_plan()
+    }
+    fn trim_idle_scratch(&mut self) {
+        if self.scratch_cache_limit == usize::MAX {
+            return;
+        }
+        let mut idle: Vec<_> = self
+            .allocations
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.idle() && a.buffer.is_some())
+            .map(|(slot, a)| (a.bytes(), slot))
+            .collect();
+        let mut bytes: usize = idle.iter().map(|(size, _)| size).sum();
+        if bytes <= self.scratch_cache_limit {
+            return;
+        }
+        // Larger buffers can serve subsequent smaller requests. Evict small
+        // obsolete capacities first; never alter live/pinned allocations.
+        idle.sort_unstable();
+        for (size, slot) in idle {
+            if bytes <= self.scratch_cache_limit {
+                break;
+            }
+            self.allocations[slot].buffer = None;
+            bytes -= size;
+        }
     }
     pub fn alloc(&mut self, rows: usize, cols: usize, dtype: DType) -> Result<Tensor> {
         let bytes = rows
@@ -268,27 +433,23 @@ impl Engine {
             .iter()
             .enumerate()
             .filter(|(_, a)| {
-                !a.permanent
-                    && !a.host_input
-                    && a.lease.strong_count() == 0
-                    && a.buffer.bytes() >= bytes
+                !a.permanent && !a.host_input && a.lease.strong_count() == 0 && a.bytes() >= bytes
             })
-            .min_by_key(|(_, a)| a.buffer.bytes())
+            .min_by_key(|(_, a)| a.bytes())
             .map(|(i, _)| i);
         let lease = Rc::new(());
         let slot = if let Some(i) = slot {
             self.allocations[i].lease = Rc::downgrade(&lease);
             i
         } else {
-            let i = self.allocations.len();
             crate::memory::before_allocation(bytes)?;
-            self.allocations.push(Allocation {
-                buffer: self.stream.allocate(bytes)?,
+            let allocation = Allocation {
+                buffer: Some(self.stream.allocate(bytes)?),
                 lease: Rc::downgrade(&lease),
                 permanent: false,
                 host_input: false,
-            });
-            i
+            };
+            self.store_allocation(allocation)
         };
         Ok(Tensor {
             slot,
@@ -306,7 +467,7 @@ impl Engine {
             "upload shape mismatch"
         );
         let view = self.allocations[t.slot]
-            .buffer
+            .buffer()
             .binding()
             .slice(t.offset, bytes.len())?;
         // HRX bounds reusable staging and splits large transfers internally.
@@ -332,25 +493,22 @@ impl Engine {
             .allocations
             .iter()
             .enumerate()
-            .filter(|(_, a)| {
-                a.host_input && a.lease.strong_count() == 0 && a.buffer.bytes() >= size
-            })
-            .min_by_key(|(_, a)| a.buffer.bytes())
+            .filter(|(_, a)| a.host_input && a.lease.strong_count() == 0 && a.bytes() >= size)
+            .min_by_key(|(_, a)| a.bytes())
             .map(|(i, _)| i);
         let lease = Rc::new(());
         let slot = if let Some(i) = old {
             self.allocations[i].lease = Rc::downgrade(&lease);
             i
         } else {
-            let i = self.allocations.len();
             crate::memory::before_allocation(size)?;
-            self.allocations.push(Allocation {
-                buffer: self.stream.allocate(size)?,
+            let allocation = Allocation {
+                buffer: Some(self.stream.allocate(size)?),
                 lease: Rc::downgrade(&lease),
                 permanent: false,
                 host_input: true,
-            });
-            i
+            };
+            self.store_allocation(allocation)
         };
         let t = Tensor {
             slot,
@@ -395,7 +553,7 @@ impl Engine {
             _lease: lease.clone(),
         };
         self.allocations.push(Allocation {
-            buffer,
+            buffer: Some(buffer),
             lease: Rc::downgrade(&lease),
             permanent: true,
             host_input: false,
@@ -420,9 +578,19 @@ impl Engine {
         output: &Tensor,
     ) -> Result<()> {
         let key = self.source_fingerprints.key(source, &spec);
+        #[cfg(feature = "bench-internals")]
+        {
+            self.kernel_clock += 1;
+            self.kernel_cache_stats[0] += 1;
+        }
         if !self.kernels.contains_key(&key) {
+            #[cfg(feature = "bench-internals")]
+            {
+                self.kernel_cache_stats[1] += 1;
+            }
             if self.compile_reports.is_some() {
                 spec.set_report(hrx::loom::ReportMode::Details);
+                spec = spec.with_listing(true);
             }
             let artifact = self
                 .compiler
@@ -443,11 +611,36 @@ impl Engine {
                     directory.join(format!("{identity}.json")),
                     serde_json::to_vec_pretty(&report)?,
                 )?;
+                std::fs::write(
+                    directory.join(format!("{identity}.asm")),
+                    artifact
+                        .listing()
+                        .context("compiler omitted requested assembly listing")?,
+                )?;
             }
             // Safety: callers supply trusted kernels matching these binding extents.
             // Production sources are crate-owned; experimental sources are bench-only.
             let k = unsafe { self.stream.load_artifact(&artifact)? };
-            if self.kernels.len() >= 512 {
+            #[cfg(feature = "bench-internals")]
+            let capacity = self.kernel_cache_capacity;
+            #[cfg(not(feature = "bench-internals"))]
+            let capacity = 512;
+            if self.kernels.len() >= capacity {
+                #[cfg(feature = "bench-internals")]
+                if self.kernel_lru {
+                    let oldest = self
+                        .kernels
+                        .iter()
+                        .min_by_key(|(_, k)| k.last_used)
+                        .map(|(key, _)| key.clone())
+                        .unwrap();
+                    self.kernels.remove(&oldest);
+                    self.kernel_cache_stats[2] += 1;
+                } else {
+                    self.kernel_cache_stats[2] += self.kernels.len() as u64;
+                    self.kernels.clear();
+                }
+                #[cfg(not(feature = "bench-internals"))]
                 self.kernels.clear();
             }
             self.kernels.insert(
@@ -455,10 +648,16 @@ impl Engine {
                 CompiledKernel {
                     kernel: k,
                     grids: HashMap::new(),
+                    #[cfg(feature = "bench-internals")]
+                    last_used: 0,
                 },
             );
         }
         let compiled = self.kernels.get_mut(&key).unwrap();
+        #[cfg(feature = "bench-internals")]
+        {
+            compiled.last_used = self.kernel_clock;
+        }
         let grid = if let Some(grid) = compiled.grids.get(workload) {
             *grid
         } else {
@@ -518,7 +717,7 @@ impl Engine {
                 .iter()
                 .map(|b| {
                     Ok(self.allocations[b.slot]
-                        .buffer
+                        .buffer()
                         .binding()
                         .slice(b.offset, b.bytes)?
                         .access(b.access))
@@ -540,6 +739,28 @@ impl Engine {
         self.quantized.clear_activation();
         Ok(executable)
     }
+    /// Keep recorded scratch and host-input slots out of the allocator while
+    /// another graph is built. Call before finish clears the command list.
+    #[cfg(feature = "bench-internals")]
+    pub(crate) fn pin_plan_buffers(&mut self) -> Vec<Rc<()>> {
+        let slots: std::collections::BTreeSet<_> = self
+            .commands
+            .iter()
+            .flat_map(|command| command.bindings.iter().map(|binding| binding.slot))
+            .collect();
+        slots
+            .into_iter()
+            .filter_map(|slot| {
+                let allocation = &mut self.allocations[slot];
+                if allocation.permanent {
+                    return None;
+                }
+                let lease = allocation.lease.upgrade().unwrap_or_default();
+                allocation.lease = Rc::downgrade(&lease);
+                Some(lease)
+            })
+            .collect()
+    }
     #[cfg(feature = "bench-internals")]
     pub fn finish_profiled(&mut self) -> Result<GraphExec> {
         // Profiling serializes every dispatch. It diagnoses kernel cost but
@@ -553,7 +774,7 @@ impl Engine {
                 .iter()
                 .map(|b| {
                     self.allocations[b.slot]
-                        .buffer
+                        .buffer()
                         .binding()
                         .slice(b.offset, b.bytes)
                 })
@@ -586,15 +807,19 @@ impl Engine {
         self.stream.synchronize()?;
         Ok(())
     }
-    pub fn read_f32(&mut self, t: &Tensor) -> Result<Vec<f32>> {
+    pub(crate) fn read_bytes(&mut self, t: &Tensor) -> Result<Vec<u8>> {
         let mut data = vec![0; t.len() * t.dtype.bytes()];
         self.stream.read_blocking(
             self.allocations[t.slot]
-                .buffer
+                .buffer()
                 .binding()
                 .slice(t.offset, data.len())?,
             &mut data,
         )?;
+        Ok(data)
+    }
+    pub fn read_f32(&mut self, t: &Tensor) -> Result<Vec<f32>> {
+        let data = self.read_bytes(t)?;
         Ok(if t.dtype == DType::Bf16 {
             data.as_chunks::<2>()
                 .0
@@ -615,6 +840,7 @@ impl Engine {
         self.commands.clear();
         self.retained.clear();
         self.traces.clear();
+        self.trim_idle_scratch();
         Ok(())
     }
     pub fn trace(&mut self, name: impl Into<String>, tensor: &Tensor) {
@@ -647,12 +873,24 @@ impl Engine {
         self.stream.synchronize()
     }
     pub fn allocated_bytes(&self) -> usize {
-        self.allocations.iter().map(|a| a.buffer.bytes()).sum()
+        self.allocations.iter().map(|a| a.bytes()).sum()
     }
 }
 impl Drop for Engine {
     fn drop(&mut self) {
         let _ = self.stream.synchronize();
+        #[cfg(feature = "bench-internals")]
+        if std::env::var_os("CLEF_BENCH_OMNI_CACHE_STATS").is_some() {
+            eprintln!(
+                "Omni kernel cache: lru={} lookups={} loads={} evicted={} retained={} capacity={}",
+                self.kernel_lru,
+                self.kernel_cache_stats[0],
+                self.kernel_cache_stats[1],
+                self.kernel_cache_stats[2],
+                self.kernels.len(),
+                self.kernel_cache_capacity
+            );
+        }
     }
 }
 
@@ -670,6 +908,105 @@ mod tests {
         let mut g = e.finish()?;
         e.run(&mut g)?;
         e.read_f32(t)
+    }
+    #[cfg(feature = "bench-internals")]
+    #[test]
+    #[ignore = "requires gfx1151; checks scratch isolation between retained and rebuilt graphs"]
+    fn pinned_graph_survives_head_rebuilds() -> Result<()> {
+        let mut e = engine()?;
+        // Evict every idle allocation at reset; retained graph pins must suffice.
+        e.scratch_cache_limit = 0;
+        let x = input(&mut e, 1, 4, &[1., 2., 3., 4.])?;
+        let intermediate = e.binary(&x, &x, "addf")?;
+        let intermediate_slot = intermediate.slot;
+        let hidden = e.binary(&intermediate, &x, "addf")?;
+        drop(intermediate);
+        let pins = e.pin_plan_buffers();
+        let mut backbone = e.finish()?;
+        for phase in 0..4 {
+            e.reset_plan()?;
+            let values: Vec<_> = (0..4)
+                .map(|i| half::bf16::from_f32((i + phase + 1) as f32))
+                .collect();
+            e.upload(&x, bytemuck::cast_slice(&values))?;
+            let temporary = e.binary(&hidden, &hidden, "addf")?;
+            assert_ne!(temporary.slot, intermediate_slot);
+            let output = e.binary(&temporary, &hidden, "subf")?;
+            drop(temporary);
+            let mut head = e.finish()?;
+            e.run(&mut backbone)?;
+            e.run(&mut head)?;
+            assert_eq!(
+                e.read_f32(&output)?,
+                values.iter().map(|v| 3. * v.to_f32()).collect::<Vec<_>>()
+            );
+        }
+        drop(backbone);
+        drop(pins);
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires gfx1151; bounds changing-shape scratch under a shared 16 MiB budget"]
+    fn scratch_cache_bounds_changing_shapes() -> Result<()> {
+        let capacity = 16 << 20;
+        let manager = hrx::residency::ResidencyManager::new(capacity)?;
+        let budget = manager.budget();
+        let context = ModelContext::new(hrx::execution::RuntimeOptions {
+            memory_budget: Some(budget.clone()),
+            ..Default::default()
+        })?;
+        let mut e = Engine::new(&context)?;
+        let weights = [half::bf16::from_f32(7.); 16];
+        e.weight("retained".into(), 1, 16, bytemuck::cast_slice(&weights))?;
+        e.bound_scratch_cache(capacity)?;
+        let mut maximum_slots = 0;
+        let shapes = [8192, 12288, 16384, 20480, 24576, 28672, 32768];
+        // HRX retains an upload staging buffer for each increasing input size.
+        // Those reservations are outside Engine's scratch pool, but still share
+        // the same ceiling. Subsequent sweeps reuse them without further growth.
+        let staging_ceiling: usize = shapes.iter().map(|rows| rows * 16 * 2).sum();
+        for repeat in 0..3 {
+            for rows in shapes {
+                {
+                    let values = vec![half::bf16::from_f32((repeat + 1) as f32); rows * 16];
+                    let input = e.input(rows, 16, DType::Bf16, bytemuck::cast_slice(&values))?;
+                    let temporary = e.binary(&input, &input, "addf")?;
+                    let output = e.binary(&temporary, &input, "addf")?;
+                    drop(temporary);
+                    let mut graph = e.finish()?;
+                    e.run(&mut graph)?;
+                    let expected = vec![3. * (repeat + 1) as f32; rows * 16];
+                    assert_eq!(e.read_f32(&output)?, expected);
+                    e.run(&mut graph)?;
+                    assert_eq!(e.read_f32(&output)?, expected);
+                }
+                e.reset_plan()?;
+                let idle_bytes: usize = e
+                    .allocations
+                    .iter()
+                    .filter(|a| a.idle())
+                    .map(Allocation::bytes)
+                    .sum();
+                assert!(idle_bytes <= e.scratch_cache_limit);
+                assert!(
+                    budget.reserved_bytes() <= e.scratch_cache_limit + 32 + staging_ceiling,
+                    "repeat={repeat} rows={rows} reserved={} engine={} idle={idle_bytes} limit={}",
+                    budget.reserved_bytes(),
+                    e.allocated_bytes(),
+                    e.scratch_cache_limit
+                );
+                assert_eq!(e.read_f32(&e.w("retained")?)?, vec![7.; 16]);
+                maximum_slots = maximum_slots.max(e.allocations.len());
+            }
+        }
+        // Evicted slots are reusable; metadata must not grow with every request.
+        assert!(
+            maximum_slots <= 24,
+            "scratch metadata grew to {maximum_slots} slots"
+        );
+        drop(e);
+        assert_eq!(budget.reserved_bytes(), 0);
+        Ok(())
     }
     #[test]
     #[ignore = "requires gfx1151; checks shared-context accounting for initialized weights"]
@@ -699,11 +1036,11 @@ mod tests {
         let weight = e.w("test")?;
         let mut actual = vec![0; data.len()];
         e.stream
-            .read_blocking(e.allocations[weight.slot].buffer.binding(), &mut actual)?;
+            .read_blocking(e.allocations[weight.slot].buffer().binding(), &mut actual)?;
         assert_eq!(actual, data);
         let host = e.input(1, cols, DType::Bf16, &data)?;
         e.stream
-            .read_blocking(e.allocations[host.slot].buffer.binding(), &mut actual)?;
+            .read_blocking(e.allocations[host.slot].buffer().binding(), &mut actual)?;
         assert_eq!(actual, data);
         assert_eq!(e.uploaded, (data.len() * 2) as u64);
 
@@ -712,7 +1049,7 @@ mod tests {
         e.upload(&row, &[0x77; 8])?;
         let mut actual = [0; 24];
         e.stream
-            .read_blocking(e.allocations[small.slot].buffer.binding(), &mut actual)?;
+            .read_blocking(e.allocations[small.slot].buffer().binding(), &mut actual)?;
         assert_eq!(
             actual,
             [vec![0x33; 8], vec![0x77; 8], vec![0x33; 8]].concat()[..]

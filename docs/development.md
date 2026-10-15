@@ -23,10 +23,10 @@ GPU and checkpoint tests are explicitly ignored by default. Fixtures capture
 Torch 2.14.0 / Transformers 5.10.2 outputs. `CLEF_MODEL_DIR` selects a local
 checkpoint for the full-model test and benchmark.
 
-HRX 0.10.1 initializes immutable weights in their final allocation, avoiding the
+HRX 0.11.0 initializes immutable weights in their final allocation, avoiding the
 zero fill, staging copy and per-chunk wait. Input uploads use HRX's bounded staging
 pool. Graph preparation evaluates compiler-authored launch dimensions using the
-operator's workload arguments and caches them per shape. Kernel arithmetic is unchanged.
+operator's workload arguments and caches them per shape.
 `load_in` uses the shared context's GPU, compute/copy engines and memory budget.
 
 ```sh
@@ -50,9 +50,12 @@ Diagnostic timings include serialization barriers; use the
 inference benchmark for end-to-end latency.
 
 Set `CLEF_COMPILE_REPORT_DIR=target/compiler-reports` to retain Loom resource
-reports, specialization shapes, source hashes and compiler identities. Inspect
+reports, specialization shapes, source hashes, compiler identities and target
+assembly (`.json` / `.asm` pairs). HRX caches and verifies the requested listings;
+normal inference does not request them. Inspect
 register pressure and spills before changing tile sizes; use uninstrumented,
 completed requests to qualify a speedup. Reports and GPU profiling are opt-in.
+See [HRX 0.11 migration](hrx-011.md) for feature selection and validation.
 
 The GEMM benchmark compares the original kernel with automatic selection and
 checks identical outputs. Backbone projection weights are stored tiled on disk

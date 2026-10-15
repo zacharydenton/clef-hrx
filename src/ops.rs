@@ -481,7 +481,15 @@ mod tests {
     #[ignore = "requires gfx1151; checks BF16 rounding, tails, offsets and graph replay"]
     fn swiglu_preserves_materialized_rounding() -> Result<()> {
         let context = hrx::inference::ModelContext::new(Default::default())?;
-        for (rows, width) in [(1, 1), (3, 65), (17, 256), (17, 17408)] {
+        for (rows, width) in [
+            (1, 1),
+            (3, 65),
+            (17, 256),
+            (17, 17408),
+            (8, 768),
+            (136, 768),
+            (16384, 768),
+        ] {
             let mut e = Engine::new(&context)?;
             let values = |factor| {
                 (0..(rows + 1) * width)

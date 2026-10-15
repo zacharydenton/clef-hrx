@@ -178,7 +178,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--benchmark', type=Path, default=Path('artifacts/WorkflowEvals'))
     parser.add_argument('--binary', type=Path, default=Path('target/release/clef'))
-    parser.add_argument('--model', choices=('clef', 'clef-flash'), default='clef')
+    parser.add_argument('--model', choices=('clef', 'clef-flash', 'clef-omni'), default='clef')
     parser.add_argument('--model-dir', type=Path, default=Path('artifacts/model'))
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--workflows', nargs='+', choices=DATASETS, default=list(DATASETS))
@@ -225,7 +225,7 @@ def main():
         def identity(self):
             return ModelIdentity(name='native:' + self.model, lab='other')
 
-    environment = {k: v for k, v in os.environ.items() if k.startswith('CLEF_EXPERIMENT_')}
+    environment = {k: v for k, v in os.environ.items() if k.startswith(('CLEF_EXPERIMENT_', 'CLEF_BENCH_'))}
     inspection = json.loads(subprocess.check_output([str(args.binary.resolve()), '--model', args.model,
         '--model-dir', str(args.model_dir.resolve()), 'inspect'], text=True))
     config = NativeConfig(model=args.model + '-hrx', thinking='off', question_mode='all',

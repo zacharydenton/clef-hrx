@@ -71,6 +71,14 @@ struct Plan {
     graph: GraphExec,
     output: Tensor,
 }
+#[cfg(feature = "bench-internals")]
+struct BackbonePlan {
+    positions: Vec<[u32; 3]>,
+    graph: GraphExec,
+    input: Tensor,
+    hidden: Tensor,
+    _pins: Vec<std::rc::Rc<()>>,
+}
 pub struct ClefModel {
     encoder: Encoder,
     native: hrx::execution::NativeSession<NativeState>,
@@ -80,6 +88,8 @@ pub struct ClefModel {
 }
 struct NativeState {
     plan: Option<Plan>,
+    #[cfg(feature = "bench-internals")]
+    backbone: Option<BackbonePlan>,
     engine: Engine,
 }
 impl NativeState {
@@ -148,12 +158,25 @@ impl ClefModel {
             checkpoint.done_with(name)?;
         }
         engine.quantized.validate_loaded()?;
+        #[cfg(feature = "bench-internals")]
+        if let Some(cache) = &engine.packed_weight_cache {
+            eprintln!(
+                "Packed weight cache: {} hits, {} misses",
+                cache.hits, cache.misses
+            );
+        }
+        engine.bound_scratch_cache(options.memory_budget_bytes)?;
         Ok(Self {
             encoder,
             native: unsafe {
                 hrx::execution::NativeSession::new(
                     context.runtime(),
-                    NativeState { plan: None, engine },
+                    NativeState {
+                        plan: None,
+                        #[cfg(feature = "bench-internals")]
+                        backbone: None,
+                        engine,
+                    },
                     NativeState::fence,
                 )
             },
@@ -231,6 +254,7 @@ impl ClefModel {
         let result = unsafe {
             self.native.run(|state| -> Result<()> {
                 state.plan = None;
+                state.backbone = None;
                 state.engine.reset_plan()?;
                 Ok(())
             })
@@ -257,6 +281,7 @@ impl ClefModel {
             self.native.run(|state| -> Result<()> {
                 if state.engine.reference_kernels != kernels {
                     state.plan = None;
+                    state.backbone = None;
                     state.engine.reset_plan()?;
                     state.engine.reference_kernels = kernels;
                 }
@@ -285,8 +310,63 @@ impl ClefModel {
         let result = unsafe {
             self.native.run(|state| -> Result<()> {
                 state.plan = None;
+                state.backbone = None;
                 state.engine.reset_plan()?;
                 state.engine.experimental_attention = source;
+                Ok(())
+            })
+        }
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+    /// Switches Omni benchmark variants while retaining the checkpoint allocation.
+    #[cfg(feature = "bench-internals")]
+    pub fn set_benchmark_omni_kernels(
+        &mut self,
+        config: crate::benchmarking::OmniKernelConfig,
+    ) -> Result<()> {
+        ensure!(
+            !self.failed,
+            "model execution failed; reload model before reusing it"
+        );
+        ensure!(
+            self.options.source.model == crate::ModelVariant::ClefOmni,
+            "Omni model required"
+        );
+        ensure!(
+            (1..=crate::omni::MAX_EXPERT_CHUNK).contains(&config.chunk),
+            "Omni expert chunk limit"
+        );
+        ensure!(
+            config.alignment.is_power_of_two() && config.alignment <= 256,
+            "Omni padding alignment"
+        );
+        ensure!(
+            config.minimum_tokens <= crate::omni::MAX_EXPERT_CHUNK,
+            "Omni kernel minimum token count"
+        );
+        // Safety: only owned host configuration crosses the session, after the
+        // previous graph is dropped and all temporary allocations are reset.
+        let result = unsafe {
+            self.native.run(|state| -> Result<()> {
+                state.plan = None;
+                state.backbone = None;
+                state.engine.reset_plan()?;
+                state.engine.omni_kernel_dir = config.directory;
+                state.engine.omni_chunk = config.chunk;
+                state.engine.omni_alignment = config.alignment;
+                state.engine.omni_kernel_min_tokens = config.minimum_tokens;
+                state.engine.omni_sorted_combine = config.sorted_combine;
+                state.engine.omni_tiled_attention = config.tiled_attention;
+                state.engine.omni_prepack_qk = config.prepack_qk;
+                state.engine.omni_fused_mlp = config.fused_mlp;
+                state.engine.omni_pack_swiglu = config.pack_swiglu;
+                state.engine.omni_compact_experts = config.compact_experts;
+                state.engine.omni_reuse_backbone = config.reuse_backbone;
                 Ok(())
             })
         }
@@ -438,6 +518,10 @@ pub(crate) fn embed_record(
 impl NativeState {
     fn build(&mut self, record: &EncodedRecord) -> Result<Tensor> {
         self.plan = None;
+        #[cfg(feature = "bench-internals")]
+        {
+            self.backbone = None;
+        }
         self.engine.reset_plan()?;
         let (x, deepstack) = embed_record(&mut self.engine, record)?;
         let hidden = if self.engine.architecture.is_omni() {
@@ -447,6 +531,67 @@ impl NativeState {
         };
         let output = crate::head::forward(&mut self.engine, &hidden, record)?;
         Ok(output)
+    }
+    #[cfg(feature = "bench-internals")]
+    fn build_cached_text(&mut self, record: &EncodedRecord) -> Result<Tensor> {
+        let rows = record.input_ids.len();
+        ensure!(
+            (1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&rows)
+                && self.engine.omni_alignment.is_power_of_two()
+                && self.engine.omni_alignment <= 256,
+            "Omni cached backbone extent/alignment"
+        );
+        ensure!(record.position_ids.len() == rows, "Omni position count");
+        let padded = rows.div_ceil(self.engine.omni_alignment) * self.engine.omni_alignment;
+        ensure!(
+            padded <= crate::encoding::MAX_CONTEXT_TOKENS,
+            "Omni padded context limit"
+        );
+        let positions = crate::omni::padded_positions(&record.position_ids, padded)?;
+        self.plan = None;
+        if self
+            .backbone
+            .as_ref()
+            .is_some_and(|p| p.positions != positions)
+        {
+            self.backbone = None;
+        }
+        self.engine.reset_plan()?;
+        let table = self
+            .engine
+            .embedding_rows
+            .get("model.language_model.embed_tokens.weight")
+            .context("missing Omni embedding table")?;
+        let width = self.engine.architecture.hidden;
+        let mut bytes = table.read(&record.input_ids)?;
+        ensure!(bytes.len() == rows * width * 2, "Omni embedding width");
+        bytes.resize(padded * width * 2, 0);
+        if let Some(backbone) = &self.backbone {
+            self.engine.upload(&backbone.input, &bytes)?;
+        } else {
+            let input = self
+                .engine
+                .input(padded, width, crate::gpu::DType::Bf16, &bytes)?;
+            let hidden = crate::omni::forward(&mut self.engine, input.clone(), &positions, &[])?;
+            let pins = self.engine.pin_plan_buffers();
+            let graph = self.engine.finish()?;
+            self.backbone = Some(BackbonePlan {
+                positions,
+                graph,
+                input,
+                hidden,
+                _pins: pins,
+            });
+            // Pins keep backbone inputs/scratch alive while the head is built.
+            self.engine.reset_plan()?;
+        }
+        let hidden = self
+            .backbone
+            .as_ref()
+            .context("missing backbone plan")?
+            .hidden
+            .slice_rows(0, rows);
+        crate::head::forward(&mut self.engine, &hidden, record)
     }
     fn execute(&mut self, record: &EncodedRecord) -> Result<Prediction> {
         let start = Instant::now();
@@ -478,6 +623,23 @@ impl NativeState {
         }
         let key = format!("{:x}", hash.finalize());
         if self.plan.as_ref().is_none_or(|p| p.key != key) {
+            #[cfg(feature = "bench-internals")]
+            let cached = self.engine.omni_reuse_backbone
+                && self.engine.architecture.is_omni()
+                && record.media.items.is_empty()
+                && record
+                    .media
+                    .omni
+                    .as_ref()
+                    .is_none_or(|m| m.audio.is_empty())
+                && std::env::var_os("CLEF_TRACE_DIR").is_none();
+            #[cfg(feature = "bench-internals")]
+            let output = if cached {
+                self.build_cached_text(record)?
+            } else {
+                self.build(record)?
+            };
+            #[cfg(not(feature = "bench-internals"))]
             let output = self.build(record)?;
             let graph = self.engine.finish()?;
             self.plan = Some(Plan { key, graph, output });
@@ -485,6 +647,10 @@ impl NativeState {
         let prepare_ms = start.elapsed().as_secs_f64() * 1000.;
         let plan = self.plan.as_mut().context("missing execution plan")?;
         let start = Instant::now();
+        #[cfg(feature = "bench-internals")]
+        if let Some(backbone) = &mut self.backbone {
+            self.engine.run(&mut backbone.graph)?;
+        }
         self.engine.run(&mut plan.graph)?;
         let inference_ms = start.elapsed().as_secs_f64() * 1000.;
         let start = Instant::now();

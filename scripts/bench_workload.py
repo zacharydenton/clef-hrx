@@ -59,7 +59,7 @@ def paired_summary(samples):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('name', help='Unique Criterion baseline name and artifact directory')
-    p.add_argument('--suite', choices=['flash', 'workload', 'workload_inference', 'kernels', 'normalization', 'preprocessing'], default='workload')
+    p.add_argument('--suite', choices=['flash', 'omni', 'workload', 'workload_inference', 'kernels', 'normalization', 'preprocessing'], default='workload')
     p.add_argument('--profile', choices=['quick', 'full'], default='full')
     p.add_argument('--filter', default='')
     p.add_argument('--compare', help='Existing Criterion baseline name')
@@ -91,7 +91,7 @@ def main():
         'rustc': subprocess.check_output(['rustc', '-Vv'], text=True),
         'system': list(os.uname()), 'cpu': read('/proc/cpuinfo'),
         'hardware_before': hardware(), 'source_sha256': hashes,
-        'environment': {k: v for k, v in env.items() if k.startswith('CLEF_BENCH_')
+        'environment': {k: v for k, v in env.items() if k.startswith(('CLEF_BENCH_', 'CLEF_EXPERIMENT_'))
                         or k in ('CLEF_MODEL_DIR', 'CLEF_TRACE_DIR', 'CLEF_COMPILE_REPORT_DIR')},
     }
     if 'CLEF_BENCH_REQUESTS' in env:
@@ -101,13 +101,21 @@ def main():
         dest.write_bytes(data)
         metadata['requests_sha256'] = hashlib.sha256(data).hexdigest()
     metadata['candidates'] = {}
-    for key in ('CLEF_BENCH_GEMM_SOURCE', 'CLEF_BENCH_DELTA_SOURCE', 'CLEF_BENCH_DELTA_REFERENCE_SOURCE', 'CLEF_BENCH_DELTA_PREPARE_SOURCE', 'CLEF_BENCH_ATTENTION_SOURCE', 'CLEF_BENCH_INT8_SOURCE', 'CLEF_BENCH_INTEGER_SOURCE', 'CLEF_BENCH_INTEGER_REFERENCE_SOURCE', 'CLEF_BENCH_PACKING_SOURCE', 'CLEF_BENCH_CONV_SOURCE'):
+    for key in ('CLEF_BENCH_GEMM_SOURCE', 'CLEF_BENCH_DELTA_SOURCE', 'CLEF_BENCH_DELTA_REFERENCE_SOURCE', 'CLEF_BENCH_DELTA_PREPARE_SOURCE', 'CLEF_BENCH_ATTENTION_SOURCE', 'CLEF_BENCH_INT8_SOURCE', 'CLEF_BENCH_INTEGER_SOURCE', 'CLEF_BENCH_INTEGER_REFERENCE_SOURCE', 'CLEF_BENCH_PACKING_SOURCE', 'CLEF_BENCH_CONV_SOURCE', 'CLEF_EXPERIMENT_ATTENTION_SOURCE'):
         if key in env:
             data = Path(env[key]).read_bytes()
             dest = root / 'candidates' / f'{key}.loom'
             dest.parent.mkdir(exist_ok=True)
             dest.write_bytes(data)
             metadata['candidates'][key] = hashlib.sha256(data).hexdigest()
+    for key in ('CLEF_BENCH_OMNI_KERNEL_DIR', 'CLEF_BENCH_OMNI_REFERENCE_DIR'):
+        if key in env:
+            for name in ('omni_expert_bf16.loom', 'omni_expert_i4.loom'):
+                data = (Path(env[key]) / name).read_bytes()
+                dest = root / 'candidates' / key / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+                metadata['candidates'][f'{key}/{name}'] = hashlib.sha256(data).hexdigest()
     (root / 'working-tree.diff').write_bytes(subprocess.check_output(['git', 'diff', 'HEAD']))
     build = ['cargo', 'bench', '--locked', '--features', 'bench-internals', '--bench', args.suite, '--no-run', '--message-format=json']
     with (root / 'build.stderr').open('w') as stderr:

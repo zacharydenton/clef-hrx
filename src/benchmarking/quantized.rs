@@ -17,18 +17,30 @@ pub struct PackingBenchmark {
 
 impl PackingBenchmark {
     pub fn new(rows: usize, width: usize, bits: usize) -> Result<Self> {
-        Self::build(rows, width, bits, false)
+        Self::build(rows, width, bits, false, false)
     }
 
     /// Compare the production selector with the independent two-pass baseline.
     pub fn production(rows: usize, width: usize, bits: usize) -> Result<Self> {
-        Self::build(rows, width, bits, true)
+        Self::build(rows, width, bits, true, false)
     }
 
-    fn build(rows: usize, width: usize, bits: usize, production: bool) -> Result<Self> {
+    /// Compare materialized SwiGLU plus production packing with fused packing.
+    pub fn swiglu(rows: usize, width: usize, bits: usize) -> Result<Self> {
+        Self::build(rows, width, bits, false, true)
+    }
+
+    fn build(
+        rows: usize,
+        width: usize,
+        bits: usize,
+        production: bool,
+        swiglu: bool,
+    ) -> Result<Self> {
         ensure!(
-            (1..=8192).contains(&rows)
+            (1..=16384).contains(&rows)
                 && (256..=32768).contains(&width)
+                && rows * width <= 8192 * 32768
                 && width.is_multiple_of(256)
                 && [4, 8].contains(&bits),
             "unsupported packing benchmark shape"
@@ -45,11 +57,15 @@ impl PackingBenchmark {
             } else {
                 0
             };
-        let candidate_source = std::env::var("CLEF_BENCH_PACKING_SOURCE")
-            .ok()
-            .map(std::fs::read_to_string)
-            .transpose()?;
-        let fused = std::env::var("CLEF_BENCH_PACKING_SWIGLU").as_deref() == Ok("1");
+        let candidate_source = if swiglu {
+            Some(include_str!("../../kernels/prepare_integer_register.loom").to_owned())
+        } else {
+            std::env::var("CLEF_BENCH_PACKING_SOURCE")
+                .ok()
+                .map(std::fs::read_to_string)
+                .transpose()?
+        };
+        let fused = swiglu || std::env::var("CLEF_BENCH_PACKING_SWIGLU").as_deref() == Ok("1");
         let attention_gate =
             std::env::var("CLEF_BENCH_PACKING_ATTENTION_GATE").as_deref() == Ok("1");
         let norm = std::env::var("CLEF_BENCH_PACKING_NORM").as_deref() == Ok("1");
@@ -96,19 +112,23 @@ impl PackingBenchmark {
         };
         reference_intermediates.push(activated.clone());
         // Keep the pre-register production baseline reproducible after selection.
-        let reference = crate::quantized::prepare_with_source(
-            &mut engine,
-            &activated,
-            bits,
-            stride,
-            if fused || attention_gate || norm {
-                include_str!("../../kernels/prepare_integer_register.loom")
-            } else if candidate_source.is_some() && width <= 6144 {
-                include_str!("../../kernels/prepare_integer_single.loom")
-            } else {
-                include_str!("../../kernels/prepare_integer.loom")
-            },
-        )?;
+        let reference = if fused {
+            prepare(&mut engine, &activated, bits, stride)?
+        } else {
+            crate::quantized::prepare_with_source(
+                &mut engine,
+                &activated,
+                bits,
+                stride,
+                if attention_gate || norm {
+                    include_str!("../../kernels/prepare_integer_register.loom")
+                } else if candidate_source.is_some() && width <= 6144 {
+                    include_str!("../../kernels/prepare_integer_single.loom")
+                } else {
+                    include_str!("../../kernels/prepare_integer.loom")
+                },
+            )?
+        };
         let reference_graph = engine.finish()?;
         let inputs = if let Some(up) = &up {
             vec![&input, up]

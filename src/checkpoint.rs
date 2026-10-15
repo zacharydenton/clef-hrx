@@ -456,7 +456,48 @@ fn tiled_path(source: &Source, name: &str, path: &Path) -> Result<PathBuf> {
 pub struct Checkpoint {
     files: Vec<FileView>,
     tensors: BTreeMap<String, (usize, String)>,
+    #[cfg(all(feature = "bench-internals", target_os = "linux"))]
+    drop_file_cache: bool,
 }
+
+/// Experimental loading policy: make consumed, unmapped file pages reclaimable
+/// without retaining the whole checkpoint in the host's file cache. The advice
+/// uses the mapping's original descriptor and only complete tensor pages.
+#[cfg(all(feature = "bench-internals", target_os = "linux"))]
+fn discard_consumed_file_pages(file: &FileView, name: &str) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let entry = file
+        .entries()
+        .get(name)
+        .context("missing consumed tensor")?;
+    let (backing, offset) = file.file_range(entry, 0, entry.bytes)?;
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page <= 0 {
+        return Ok(());
+    }
+    let page = page as u64;
+    let end = offset
+        .checked_add(entry.bytes as u64)
+        .context("file range overflow")?;
+    let begin = offset.div_ceil(page) * page;
+    let end = end / page * page;
+    if begin < end {
+        let begin = libc::off_t::try_from(begin)?;
+        let length = libc::off_t::try_from(end - begin as u64)?;
+        // Advisory only: unsupported filesystems must not make loading fail.
+        // The file is read-only; no bytes are modified or removed.
+        let _ = unsafe {
+            libc::posix_fadvise(
+                backing.as_raw_fd(),
+                begin,
+                length,
+                libc::POSIX_FADV_DONTNEED,
+            )
+        };
+    }
+    Ok(())
+}
+
 impl Checkpoint {
     pub(crate) fn embedding_rows(&self, name: &str) -> Result<crate::embedding::EmbeddingRows> {
         let (i, raw) = self.tensors.get(name).context("missing embedding tensor")?;
@@ -475,6 +516,8 @@ impl Checkpoint {
         let mut result = Self {
             files: Vec::new(),
             tensors: BTreeMap::new(),
+            #[cfg(all(feature = "bench-internals", target_os = "linux"))]
+            drop_file_cache: std::env::var_os("CLEF_BENCH_CHECKPOINT_DROP_CACHE").is_some(),
         };
         for name in index
             .weight_map
@@ -537,11 +580,17 @@ impl Checkpoint {
         Ok(result)
     }
     pub fn done_with(&self, name: &str) -> Result<()> {
-        let (i, _) = self
+        let (i, raw) = self
             .tensors
             .get(name)
             .with_context(|| format!("missing {name}"))?;
         self.files[*i].done_with(self.tensor(name)?);
+        #[cfg(all(feature = "bench-internals", target_os = "linux"))]
+        if self.drop_file_cache {
+            discard_consumed_file_pages(&self.files[*i], raw)?;
+        }
+        #[cfg(not(all(feature = "bench-internals", target_os = "linux")))]
+        let _ = raw;
         Ok(())
     }
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -781,6 +830,45 @@ mod tests {
         out.extend_from_slice(&encoded);
         out.extend_from_slice(&data);
         std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    #[cfg(all(feature = "bench-internals", target_os = "linux"))]
+    fn consumed_file_advice_preserves_mapped_bytes_after_rename() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("weights.safetensors");
+        let bytes: Vec<u8> = (0..20000).map(|i| (i % 251) as u8).collect();
+        let neighbor = vec![73; 70];
+        write_safetensors(
+            &path,
+            &[
+                ("weight", vec![10000], bytes.clone()),
+                ("neighbor", vec![35], neighbor.clone()),
+            ],
+        );
+        let file = unsafe { FileView::map(&path)? };
+        let checkpoint = Checkpoint {
+            files: vec![file],
+            tensors: BTreeMap::from([
+                ("alias".into(), (0, "weight".into())),
+                ("neighbor".into(), (0, "neighbor".into())),
+            ]),
+            drop_file_cache: true,
+        };
+        assert_eq!(checkpoint.tensor("alias")?.bytes, bytes);
+        std::fs::rename(&path, dir.path().join("original.safetensors"))?;
+        std::fs::write(&path, b"replacement file must remain untouched")?;
+        for _ in 0..3 {
+            checkpoint.done_with("alias")?;
+            checkpoint.done_with("neighbor")?;
+            assert_eq!(checkpoint.tensor("alias")?.bytes, bytes);
+            assert_eq!(checkpoint.tensor("neighbor")?.bytes, neighbor);
+        }
+        assert_eq!(
+            std::fs::read(path)?,
+            b"replacement file must remain untouched"
+        );
+        Ok(())
     }
 
     /// Converts every shard of `CLEF_MODEL_DIR` without loading the model.

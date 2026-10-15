@@ -11,7 +11,9 @@ pub struct SwiGluBenchmark {
 impl SwiGluBenchmark {
     pub fn new(rows: usize, width: usize) -> Result<Self> {
         anyhow::ensure!(
-            (1..=8192).contains(&rows) && (1..=17408).contains(&width),
+            (1..=16384).contains(&rows)
+                && (1..=17408).contains(&width)
+                && rows * width <= 8192 * 17408,
             "unsupported activation benchmark shape"
         );
         let context = ModelContext::new(Default::default())?;

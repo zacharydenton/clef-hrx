@@ -15,6 +15,8 @@ pub mod model;
 mod omni;
 pub mod omni_media;
 mod ops;
+#[cfg(feature = "bench-internals")]
+mod packed_cache;
 mod quantized;
 pub mod schema;
 mod vision;

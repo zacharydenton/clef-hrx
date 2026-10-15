@@ -98,6 +98,21 @@ impl Engine {
                 && heads.is_multiple_of(kv_heads),
             "attention shape"
         );
+        #[cfg(feature = "bench-internals")]
+        if TILED && d == 128 && self.omni_tiled_attention && (!self.omni_prepack_qk || causal) {
+            let source = self.experimental_attention.clone();
+            return self.attention_tiled_source_dim(
+                q,
+                k,
+                v,
+                causal,
+                source.as_deref().unwrap_or(concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/attention_tiled_128.loom")
+                )),
+                128,
+            );
+        }
         if TILED
             && d == 256
             && (1024..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&q.rows)
@@ -199,13 +214,25 @@ impl Engine {
         causal: bool,
         source: &str,
     ) -> Result<Tensor> {
+        self.attention_tiled_source_dim(q, k, v, causal, source, 256)
+    }
+    pub(crate) fn attention_tiled_source_dim(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        causal: bool,
+        source: &str,
+        dim: usize,
+    ) -> Result<Tensor> {
         ensure!(
-            (1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&q.rows)
+            matches!(dim, 128 | 256)
+                && (1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&q.rows)
                 && (1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&k.rows)
-                && (256..=65536).contains(&q.cols)
-                && (256..=65536).contains(&k.cols)
-                && q.cols.is_multiple_of(256)
-                && k.cols.is_multiple_of(256)
+                && (dim..=65536).contains(&q.cols)
+                && (dim..=65536).contains(&k.cols)
+                && q.cols.is_multiple_of(dim)
+                && k.cols.is_multiple_of(dim)
                 && q.cols.is_multiple_of(k.cols)
                 && k.rows == v.rows
                 && k.cols == v.cols
@@ -215,8 +242,25 @@ impl Engine {
                 && v.dtype == DType::Bf16,
             "tiled attention shape or storage"
         );
-        let heads = q.cols / 256;
-        let kv_heads = k.cols / 256;
+        #[cfg(feature = "bench-internals")]
+        let prepared_qk = if self.omni_prepack_qk {
+            ensure!(
+                dim == 128 && causal,
+                "prepacked INT8 attention requires causal 128-wide heads"
+            );
+            Some((
+                self.prepare_attention_int8(q)?,
+                self.prepare_attention_int8(k)?,
+            ))
+        } else {
+            None
+        };
+        #[cfg(feature = "bench-internals")]
+        let (query, key) = prepared_qk.as_ref().map_or((q, k), |(q, k)| (q, k));
+        #[cfg(not(feature = "bench-internals"))]
+        let (query, key) = (q, k);
+        let heads = q.cols / dim;
+        let kv_heads = k.cols / dim;
         let packed = self.transpose_attention_v(v)?;
         let out = self.alloc(q.rows, q.cols, DType::Bf16)?;
         let mut spec = Specialization::new("clef_op");
@@ -225,7 +269,7 @@ impl Engine {
             ("ratio", (heads / kv_heads).to_string()),
             ("qw", q.cols.to_string()),
             ("kw", k.cols.to_string()),
-            ("scale", "6.25e-2".into()),
+            ("scale", format!("{:e}", 1.0 / (dim as f32).sqrt())),
             ("causal", usize::from(causal).to_string()),
         ] {
             spec.set_config(format!("clef.{key}"), value);
@@ -239,11 +283,36 @@ impl Engine {
             spec,
             constants,
             &[q.rows as u64, k.rows as u64, packed.cols as u64],
-            &[q, k, &packed],
+            &[query, key, &packed],
             &out,
         )?;
         Ok(out)
     }
+    #[cfg(feature = "bench-internals")]
+    pub(crate) fn prepare_attention_int8(&mut self, x: &Tensor) -> Result<Tensor> {
+        ensure!(
+            (1..=65536).contains(&x.rows)
+                && (128..=65536).contains(&x.cols)
+                && x.cols.is_multiple_of(128)
+                && x.dtype == DType::Bf16,
+            "INT8 attention packing shape"
+        );
+        let output = self.alloc(x.rows, x.cols / 128 * 36, DType::U32)?;
+        let mut spec = Specialization::new("clef_prepare_qk_int8");
+        spec.set_config("clef.qk_i8.width", x.cols.to_string());
+        let mut constants = Constants::new();
+        constants.push(x.rows as u32)?;
+        self.emit_special(
+            include_str!("../benches/kernels/omni_prepare_attention_i8.loom"),
+            spec,
+            constants,
+            &[x.rows as u64],
+            &[x],
+            &output,
+        )?;
+        Ok(output)
+    }
+
     pub(crate) fn transpose_attention_v(&mut self, v: &Tensor) -> Result<Tensor> {
         ensure!(
             (1..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&v.rows)
@@ -711,6 +780,90 @@ fn mlp_chunked(e: &mut Engine, x: &Tensor, prefix: &str, chunk: usize) -> Result
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(feature = "bench-internals")]
+    #[test]
+    #[ignore = "requires gfx1151; validates INT8 Q/K codes, row scales, slicing and changed-input replay"]
+    fn int8_attention_packing_oracle() -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        let mut e = Engine::new(&context)?;
+        for rows in [1, 17, 65] {
+            for heads in [1, 4, 32] {
+                let width = heads * 128;
+                let storage = e.input(
+                    rows + 2,
+                    width,
+                    DType::Bf16,
+                    &vec![0; (rows + 2) * width * 2],
+                )?;
+                let input = storage.slice_rows(1, rows);
+                let output = e.prepare_attention_int8(&input)?;
+                let mut graph = e.finish()?;
+                for phase in 0..3 {
+                    let values: Vec<_> = (0..rows * width)
+                        .map(|i| {
+                            let value = if (i / 128 + phase) % 7 == 0 {
+                                0.
+                            } else if i % 128 == 31 && phase == 2 {
+                                64.
+                            } else {
+                                (((i * 31 + phase * 17) % 251) as f32 - 125.) / 64.
+                            };
+                            half::bf16::from_f32(value)
+                        })
+                        .collect();
+                    e.upload(&input, bytemuck::cast_slice(&values))?;
+                    e.run(&mut graph)?;
+                    let actual: Vec<_> =
+                        e.read_f32(&output)?.into_iter().map(f32::to_bits).collect();
+                    for (head, words) in values
+                        .as_chunks::<128>()
+                        .0
+                        .iter()
+                        .zip(actual.as_chunks::<36>().0.iter())
+                    {
+                        let maximum = head
+                            .iter()
+                            .map(|x| x.to_f32().abs())
+                            .fold(1e-30f32, f32::max);
+                        let scale = maximum / 127.;
+                        let inverse = 127. / maximum;
+                        let actual_scale = f32::from_bits(words[32]);
+                        assert!(
+                            (scale - actual_scale).abs() <= scale.abs() * 2. * f32::EPSILON,
+                            "packing scale differs: {scale} vs {actual_scale}"
+                        );
+                        for (values, &actual_word) in
+                            head.as_chunks::<4>().0.iter().zip(&words[..32])
+                        {
+                            let expected_word =
+                                values.iter().enumerate().fold(0u32, |word, (byte, x)| {
+                                    let code =
+                                        (x.to_f32() * inverse).round_ties_even().clamp(-127., 127.)
+                                            as i32;
+                                    word | ((code as u32 & 255) << (byte * 8))
+                                });
+                            assert_eq!(
+                                actual_word, expected_word,
+                                "rows={rows} heads={heads} phase={phase}"
+                            );
+                        }
+                        assert_eq!(&words[33..], &[0, 0, 0]);
+                    }
+                    e.run(&mut graph)?;
+                    assert_eq!(
+                        actual,
+                        e.read_f32(&output)?
+                            .into_iter()
+                            .map(f32::to_bits)
+                            .collect::<Vec<_>>()
+                    );
+                }
+                e.reset_plan()?;
+            }
+        }
+        Ok(())
+    }
     #[test]
     #[ignore = "requires gfx1151; independent FP64 Flash recurrence and replay oracle"]
     fn flash_delta_fp64_oracle() -> crate::Result<()> {

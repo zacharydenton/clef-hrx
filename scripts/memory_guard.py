@@ -28,6 +28,38 @@ def pressure(before, current):
     return current['MemAvailable'] < 24 * GIB or before['SwapFree'] - current['SwapFree'] > GIB
 
 
+def diagnostics(leader, clients):
+    """Best-effort observations only; admission and stop rules do not use them."""
+    owned, pending = set(), [str(leader)]
+    while pending:
+        pid = pending.pop()
+        if pid in owned:
+            continue
+        owned.add(pid)
+        try:
+            pending.extend(Path(f'/proc/{pid}/task/{pid}/children').read_text().split())
+        except OSError:
+            pass  # A short-lived encoder or compiler may have exited.
+    processes = {}
+    for pid in sorted(owned | set(clients)):
+        try:
+            fields = dict(line.split(':', 1) for line in Path(f'/proc/{pid}/status').read_text().splitlines())
+            values = {key: int(fields[key].split()[0]) * 1024
+                      for key in ('VmRSS', 'VmHWM', 'VmSwap', 'RssAnon', 'RssFile') if key in fields}
+            processes[pid] = {'owned': pid in owned, **values}
+        except (OSError, ValueError):
+            pass
+    reclaim = {}
+    try:
+        counters = dict(line.split() for line in Path('/proc/vmstat').read_text().splitlines())
+        reclaim = {key: int(counters[key]) for key in
+                   ('pswpin', 'pswpout', 'pgscan_kswapd', 'pgscan_direct', 'pgsteal_kswapd', 'pgsteal_direct')
+                   if key in counters}
+    except (OSError, ValueError):
+        pass
+    return {'process_memory': processes, 'reclaim_counters': reclaim}
+
+
 def stop_owned(process):
     if process is not None:
         try:
@@ -56,6 +88,7 @@ def main(argv=None):
              'started': time.time(), 'memory_gib': args.memory_gib,
              'admission_gib': args.memory_gib + 32, 'reserve_gib': 24,
              'maximum_additional_swap_gib': 1,
+             'guard_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
              'binary_sha256': hashlib.sha256(Path(executable).read_bytes()).hexdigest(),
              'environment': {k: v for k, v in os.environ.items() if k.startswith('CLEF_')}}
 
@@ -93,12 +126,15 @@ def main(argv=None):
                 while process.poll() is None:
                     current = memory()
                     if pressure(before, current):
-                        state.update(state='held_for_memory', pressure=current)
+                        clients = [p.name for p in Path('/sys/class/kfd/kfd/proc').glob('*')]
+                        state.update(state='held_for_memory', pressure=current,
+                                     pressure_diagnostics=diagnostics(process.pid, clients))
                         stop_owned(process)
                         break
                     if time.monotonic() - last >= 2:
                         clients = [p.name for p in Path('/sys/class/kfd/kfd/proc').glob('*')]
-                        telemetry.write(json.dumps({'time': time.time(), **current, 'kfd_pids': clients}) + '\n')
+                        telemetry.write(json.dumps({'time': time.time(), **current, 'kfd_pids': clients,
+                                                    **diagnostics(process.pid, clients)}) + '\n')
                         telemetry.flush()
                         last = time.monotonic()
                     time.sleep(0.1)

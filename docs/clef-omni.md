@@ -36,39 +36,56 @@ Media that exceed the context budget are rejected.
 
 Omni uses its own attention, expert routing, RoPE and vision feature injection.
 The long-context kernel selections qualified for original CLEF and Flash do not
-apply to Omni. The initial routed kernels prioritize correctness; they have not
-been tuned to the same throughput as the dense models.
+apply to Omni. Expert projections use grouped BF16/INT4 matrix kernels; see
+[operator benchmarks and reproduction](omni-kernel-tuning.md).
 
-## Initial qualification (October 15, 2026)
+## Qualification (October 15, 2026)
 
 Seven short requests cover text, red and blue images, silent video, audio,
 synchronized audio/video, and a spoken-word choice. INT4 agrees with the BF16
 Cloudflare oracle on the highest-probability option for all nine questions;
-repeating every request produces identical logits and probabilities. JevBench
-and WorkflowEvals qualification for Omni remains pending.
+repeating every request produces identical logits and probabilities. The wider-load
+HRX 0.11 INT4 kernels complete full JevBench at **186/231 correct (80.52%)** and
+**619.8 resident input tok/s**. BF16 scores **184/231 (79.65%)** at **414.2 tok/s**.
+WorkflowEvals qualification remains pending. See
+[the current experiments and reproduction](omni-memory-tuning.md).
 
-| Input | Tokens | INT4 warm input tok/s | Maximum probability difference from BF16 oracle |
-| --- | ---: | ---: | ---: |
-| Text, three questions | 258 | 79.6 | 0.0082 |
-| Red image | 216 | 74.7 | 0.0027 |
-| Silent video | 573 | 74.0 | 0.2118 |
-| Audio | 160 | 76.2 | 0.0007 |
-| Video with audio | 306 | 74.5 | 0.0494 |
-| Blue image choice | 226 | 77.6 | 0.0022 |
-| Spoken-word choice | 182 | 76.2 | 0.0022 |
+The current HRX 0.11 build retains all nine INT4 choices. Its compiler changes
+probabilities by up to 0.08994 versus 0.10.1. BF16 text and audio/video oracle
+errors are 0.000622 and 0.005157, with unchanged top choices. See
+[upgrade validation and timings](hrx-011.md#validation-and-performance).
 
-Warm aggregate throughput is 75.7 input tok/s, with 17.71 GiB peak engine
-allocation. Measurements used a shared Strix Halo GPU. The video probability
-shift is material even though the selected answer is unchanged.
-[Raw outputs, timings and comparison](results/omni-20261015.json).
+The following table records the earlier HRX 0.10.1 grouped-kernel qualification:
 
-Native BF16 also passes the text and synchronized audio/video oracle checks,
+| Input | Tokens | Initial INT4 warm input tok/s | Grouped INT4 warm input tok/s | Maximum probability difference from BF16 oracle |
+| --- | ---: | ---: | ---: | ---: |
+| Text, three questions | 258 | 79.6 | 720.1 | 0.0082 |
+| Red image | 216 | 74.7 | 642.3 | 0.0027 |
+| Silent video | 573 | 74.0 | 462.1 | 0.2118 |
+| Audio | 160 | 76.2 | 482.6 | 0.0007 |
+| Video with audio | 306 | 74.5 | 421.0 | 0.0494 |
+| Blue image choice | 226 | 77.6 | 675.2 | 0.0022 |
+| Spoken-word choice | 182 | 76.2 | 500.0 | 0.0022 |
+
+Grouped expert kernels raise warm aggregate throughput from **75.7 to 520.3 input
+tok/s (6.88×)**, with all 14 outputs exactly unchanged from the initial INT4 run.
+These rates include encoding, preparation, GPU execution and readback on the
+second request of each identical pair; model loading is excluded. Including both
+runs of every pair gives 461.8 resident input tok/s, versus 66.4 initially.
+Peak engine allocation remains 17.7 GiB. Measurements used a shared Strix Halo
+GPU. The video probability shift from the BF16 oracle remains material even
+though the selected answer is unchanged.
+[Initial results](results/omni-20261015.json),
+[grouped results](results/omni-grouped-experts-20261015.json), and
+[kernel benchmarks and reproduction](omni-kernel-tuning.md).
+
+That BF16 build also passed the text and synchronized audio/video oracle checks,
 covering all three question types and both media encoders. Maximum probability
-differences are 0.00082 and 0.00276, respectively, with unchanged highest-ranked
+differences are 0.00242 and 0.00901, respectively, with unchanged highest-ranked
 options. This validation loads one layer at a time and peaks at 2.26 GiB of
 engine allocations. A resident BF16 attempt was stopped by the memory guard
-before inference as another workload consumed RAM; BF16 resident throughput
-has not been measured.
+before inference as another workload consumed RAM. The later full JevBench
+measurement above supersedes that attempt.
 
 ## Verification and reproduction
 

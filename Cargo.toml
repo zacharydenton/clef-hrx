@@ -23,7 +23,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 half = { version = "2", features = ["bytemuck"] }
 bytemuck = "1"
-hrx = { package = "hrx-rs", version = "=0.10.1" }
+hrx = { package = "hrx-rs", version = "=0.11.0" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -31,9 +31,10 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 sha2 = "0.10"
 rustfft = "6"
+libc = { version = "0.2", optional = true }
 
 [features]
-bench-internals = []
+bench-internals = ["dep:libc"]
 
 [dev-dependencies]
 libc = "0.2"
@@ -116,4 +117,17 @@ codegen-units = 1
 [[bench]]
 name = "flash"
 harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "omni"
+harness = false
+required-features = ["bench-internals"]
+
+[[example]]
+name = "compare_omni"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "prepack_omni"
 required-features = ["bench-internals"]

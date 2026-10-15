@@ -22,54 +22,109 @@ kernel.def target(@clef_target) export("clef_op") @clef_op() {
  %c16 = index.constant 16 : index
  %offset = index.constant 0 : offset
  %fzero = scalar.constant 0.0 : f32
+ %two = index.constant 2 : index
  %wg = kernel.workgroup.id<x> : index
- %lane = kernel.workitem.id<x> : index
- %base = index.mul %wg, %threads : index
- %id = index.add %base, %lane : index
- %count = config.get @clef.work : index
+ %tid = kernel.workitem.id<x> : index
+ %lane = index.rem %tid, %c32 : index
+ %wave = index.div %tid, %c32 : index
+ %base = index.mul %wg, %two : index
+ %id = index.add %base, %wave : index
+ %work = config.get @clef.work : index
+ %count = index.div %work, %c32 : index
  %x_len = config.get @clef.x_len : index
  %x_dtype = config.get @clef.x_dtype : index
  %out_len = config.get @clef.out_len : index
- %out_dtype = config.get @clef.out_dtype : index
  %experts = config.get @clef.experts : index
  %topk = config.get @clef.topk : index
  %active = index.cmp ult, %id, %count : index
  scf.if %active {
-
  %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
  %xb = index.mul %id, %experts : index
- %stride = index.mul %topk, %c8 : index
- %two = index.constant 2 : index
  %width = index.mul %topk, %two : index
  %ob = index.mul %id, %width : index
+ %leader = index.cmp eq, %lane, %zero : index
  %neg = scalar.constant -3.402823466e38 : f32
- scf.for %rank = [%zero to %topk step %one] {
-  %best, %best_id = scf.for %e = [%zero to %experts step %one](%bv = %neg : f32, %bi = %zero : index) -> (f32, index) {
-   %used = scf.for %j = [%zero to %rank step %one](%u = %zero : index) -> (index) {
-    %at = index.add %ob, %j : index
-    %oldf = view.load %outv[%at] : view<[%out_len]xf32> -> f32
-    %oldi = scalar.fptosi %oldf : f32 to i32
-    %old = index.cast %oldi : i32 to index
-    %same = index.cmp eq, %old, %e : index
-    %next = scf.select %same, %one, %u : index
-    scf.yield %next : index
-   }
-   %at = index.add %xb, %e : index
-   %v = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at) : (index, buffer, index, index) -> (f32)
-   %free = index.cmp eq, %used, %zero : index
-   %better = scalar.cmpf ogt, %v, %bv : f32
-   %take = scalar.andi %free, %better : i1
-   %nv = scf.select %take, %v, %bv : f32
-   %ni = scf.select %take, %e, %bi : index
-   scf.yield %nv, %ni : f32, index
+ %invalid = scalar.constant 2147483647 : i32
+ %off0 = index.constant 0 : index
+ %e0 = index.add %lane, %off0 : index
+ %ei0 = index.cast %e0 : index to i32
+ %valid0 = index.cmp ult, %e0, %experts : index
+ %v0 = scf.if %valid0 -> (f32) {
+  %at = index.add %xb, %e0 : index
+  %v = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at) : (index, buffer, index, index) -> (f32)
+  scf.yield %v : f32
+ } else { scf.yield %neg : f32 }
+ %off1 = index.constant 32 : index
+ %e1 = index.add %lane, %off1 : index
+ %ei1 = index.cast %e1 : index to i32
+ %valid1 = index.cmp ult, %e1, %experts : index
+ %v1 = scf.if %valid1 -> (f32) {
+  %at = index.add %xb, %e1 : index
+  %v = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at) : (index, buffer, index, index) -> (f32)
+  scf.yield %v : f32
+ } else { scf.yield %neg : f32 }
+ %off2 = index.constant 64 : index
+ %e2 = index.add %lane, %off2 : index
+ %ei2 = index.cast %e2 : index to i32
+ %valid2 = index.cmp ult, %e2, %experts : index
+ %v2 = scf.if %valid2 -> (f32) {
+  %at = index.add %xb, %e2 : index
+  %v = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at) : (index, buffer, index, index) -> (f32)
+  scf.yield %v : f32
+ } else { scf.yield %neg : f32 }
+ %off3 = index.constant 96 : index
+ %e3 = index.add %lane, %off3 : index
+ %ei3 = index.cast %e3 : index to i32
+ %valid3 = index.cmp ult, %e3, %experts : index
+ %v3 = scf.if %valid3 -> (f32) {
+  %at = index.add %xb, %e3 : index
+  %v = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at) : (index, buffer, index, index) -> (f32)
+  scf.yield %v : f32
+ } else { scf.yield %neg : f32 }
+ // Each lane retains four logits. Reductions select the largest value and
+ // the lowest expert ID on ties, matching the serial ascending expert scan.
+ %unused0, %unused1, %unused2, %unused3 = scf.for %rank = [%zero to %topk step %one](%a = %v0 : f32, %b = %v1 : f32, %c = %v2 : f32, %d = %v3 : f32) -> (f32, f32, f32, f32) {
+  %ab = scalar.maxnumf %a, %b : f32
+  %cd = scalar.maxnumf %c, %d : f32
+  %local = scalar.maxnumf %ab, %cd : f32
+  %maximum = kernel.subgroup.reduce<maxnumf> %local : f32
+  %best = kernel.subgroup.broadcast.first %maximum : f32
+  %eq0 = scalar.cmpf oeq, %a, %best : f32
+  %take0 = scalar.andi %eq0, %valid0 : i1
+  %idx0 = scf.select %take0, %ei0, %invalid : i32
+  %eq1 = scalar.cmpf oeq, %b, %best : f32
+  %take1 = scalar.andi %eq1, %valid1 : i1
+  %idx1 = scf.select %take1, %ei1, %invalid : i32
+  %eq2 = scalar.cmpf oeq, %c, %best : f32
+  %take2 = scalar.andi %eq2, %valid2 : i1
+  %idx2 = scf.select %take2, %ei2, %invalid : i32
+  %eq3 = scalar.cmpf oeq, %d, %best : f32
+  %take3 = scalar.andi %eq3, %valid3 : i1
+  %idx3 = scf.select %take3, %ei3, %invalid : i32
+  %idx01 = scalar.minui %idx0, %idx1 : i32
+  %idx23 = scalar.minui %idx2, %idx3 : i32
+  %idx = scalar.minui %idx01, %idx23 : i32
+  %reduced_id = kernel.subgroup.reduce<minui> %idx : i32
+  %best_id = kernel.subgroup.broadcast.first %reduced_id : i32
+  scf.if %leader {
+   %at = index.add %ob, %rank : index
+   %ef = scalar.sitofp %best_id : i32 to f32
+   view.store %ef, %outv[%at] : f32, view<[%out_len]xf32>
+   %pa = index.add %at, %topk : index
+   view.store %best, %outv[%pa] : f32, view<[%out_len]xf32>
   }
-  %at = index.add %ob, %rank : index
-  %eid = index.cast %best_id : index to i32
-  %ef = scalar.sitofp %eid : i32 to f32
-  view.store %ef, %outv[%at] : f32, view<[%out_len]xf32>
-  %pa = index.add %at, %topk : index
-  view.store %best, %outv[%pa] : f32, view<[%out_len]xf32>
+  %selected0 = scalar.cmpi eq, %best_id, %ei0 : i32
+  %next0 = scf.select %selected0, %neg, %a : f32
+  %selected1 = scalar.cmpi eq, %best_id, %ei1 : i32
+  %next1 = scf.select %selected1, %neg, %b : f32
+  %selected2 = scalar.cmpi eq, %best_id, %ei2 : i32
+  %next2 = scf.select %selected2, %neg, %c : f32
+  %selected3 = scalar.cmpi eq, %best_id, %ei3 : i32
+  %next3 = scf.select %selected3, %neg, %d : f32
+  scf.yield %next0, %next1, %next2, %next3 : f32, f32, f32, f32
  }
+ // Preserve the serial rank order and BF16 rounding of the selected softmax.
+ scf.if %leader {
  %pb = index.add %ob, %topk : index
  %max = view.load %outv[%pb] : view<[%out_len]xf32> -> f32
  %sum = scf.for %j = [%zero to %topk step %one](%acc = %fzero : f32) -> (f32) {
@@ -89,7 +144,7 @@ kernel.def target(@clef_target) export("clef_op") @clef_op() {
   %pf = scalar.extf %rounded : bf16 to f32
   view.store %pf, %outv[%at] : f32, view<[%out_len]xf32>
  }
-
+ }
  }
  kernel.return
 }

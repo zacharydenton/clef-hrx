@@ -1,0 +1,64 @@
+// Compact the populated 16-row expert tiles with a workgroup prefix scan.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.tokens : %value: index where [range(%value, 1, 2048)]
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 128 : index
+ kernel.launch.config workgroups(%one, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%routes_buffer: buffer, %out_buffer: buffer) {
+ %c0 = index.constant 0 : index
+ %c1 = index.constant 1 : index
+ %c2 = index.constant 2 : index
+ %c8 = index.constant 8 : index
+ %c15 = index.constant 15 : index
+ %c16 = index.constant 16 : index
+ %c127 = index.constant 127 : index
+ %offset = index.constant 0 : offset
+ %tokens = config.get @clef.tokens : index
+ %routes_len = config.get @clef.routes_len : index
+ %out_len = config.get @clef.out_len : index
+ %routes = buffer.view %routes_buffer[%offset] : buffer -> view<[%routes_len]xf32>
+ %out = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %expert = kernel.workitem.id<x> : index
+ %stride = index.add %tokens, %c1 : index
+ %base = index.mul %expert, %stride : index
+ %cf = view.load %routes[%base] : view<[%routes_len]xf32> -> f32
+ %ci = scalar.fptosi %cf : f32 to i32
+ %count0 = index.cast %ci : i32 to index
+ %count = index.assume %count0 [range(%count0, 0, 2048), le(%count0, %tokens)] : index
+ %rounded = index.add %count, %c15 : index
+ %tiles = index.div %rounded, %c16 : index
+ %tiles_i = index.cast %tiles : index to i32
+ %prefix_i = kernel.workgroup.scan<addi> %tiles_i {direction = forward, mode = exclusive} : i32
+ %total_i = kernel.workgroup.reduce<addi> %tiles_i : i32
+ %prefix0 = index.cast %prefix_i : i32 to index
+ %prefix = index.assume %prefix0 [range(%prefix0, 0, 1151)] : index
+ %ei = index.cast %expert : index to i32
+ %ef = scalar.sitofp %ei : i32 to f32
+ scf.for %tile = [%c0 to %tiles step %c1] {
+  %task = index.add %prefix, %tile : index
+  %pair = index.mul %task, %c2 : index
+  %at0 = index.add %pair, %c1 : index
+  %limit = index.sub %out_len, %c2 : index
+  %at = index.assume %at0 [range(%at0, 1, 2303), le(%at0, %limit)] : index
+  %next0 = index.add %at, %c1 : index
+  %next = index.assume %next0 [range(%next0, 2, 2302), lt(%next0, %out_len)] : index
+  %row = index.mul %tile, %c16 : index
+  %ri = index.cast %row : index to i32
+  %rf = scalar.sitofp %ri : i32 to f32
+  view.store %ef, %out[%at] : f32, view<[%out_len]xf32>
+  view.store %rf, %out[%next] : f32, view<[%out_len]xf32>
+ }
+ %leader = index.cmp eq, %expert, %c0 : index
+ scf.if %leader {
+  %total = scalar.sitofp %total_i : i32 to f32
+  view.store %total, %out[%c0] : f32, view<[%out_len]xf32>
+ }
+ kernel.return
+}

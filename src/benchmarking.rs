@@ -5,6 +5,10 @@ use crate::{
 };
 use hrx::{GraphExec, inference::ModelContext};
 mod activation;
+mod omni;
+pub use omni::{
+    OmniCombineBenchmark, OmniExpertBenchmark, OmniRouteBenchmark, OmniRouterBenchmark,
+};
 mod convolution;
 mod normalization_packing;
 pub(crate) mod quantized;
@@ -12,6 +16,96 @@ pub use activation::SwiGluBenchmark;
 pub use convolution::ConvolutionBenchmark;
 pub use normalization_packing::NormPackingBenchmark;
 pub use quantized::PackingBenchmark;
+
+/// Build reusable integer weights while retaining at most one Omni layer.
+/// This is load preparation, not an inference-throughput benchmark.
+pub fn prepack_omni_layers(
+    source: &crate::checkpoint::Source,
+    directory: std::path::PathBuf,
+    first: usize,
+    end: usize,
+) -> Result<Vec<serde_json::Value>> {
+    anyhow::ensure!(
+        source.model == crate::ModelVariant::ClefOmni && first < end && end <= 48,
+        "expected Omni layers within 0..48"
+    );
+    crate::memory::require(4 << 30)?;
+    let manager = hrx::residency::ResidencyManager::new(4 << 30)?;
+    let context = ModelContext::new(hrx::execution::RuntimeOptions {
+        memory_budget: Some(manager.budget()),
+        ..Default::default()
+    })?;
+    let mut engine = Engine::new(&context)?;
+    engine.architecture = source.model.architecture();
+    engine.quantized =
+        crate::quantized::QuantizedProjections::for_precision(crate::Precision::Int4);
+    engine.set_packed_weight_cache(directory);
+    engine.bound_scratch_cache(4 << 30)?;
+    let checkpoint = unsafe { crate::checkpoint::Checkpoint::open(source)? };
+    let mut reports = Vec::new();
+    for layer in first..end {
+        let started = std::time::Instant::now();
+        crate::omni::load_expert_layer(&mut engine, &checkpoint, layer)?;
+        let prefix = format!("model.language_model.layers.{layer}.");
+        for name in checkpoint
+            .names()
+            .filter(|name| name.starts_with(&prefix) && !name.contains(".mlp.experts."))
+        {
+            let tensor = checkpoint.tensor(name)?;
+            let rows = tensor.shape.first().copied().unwrap_or(1);
+            let cols = tensor.shape.iter().skip(1).product();
+            if engine.load_quantized_weight(name, rows, cols, tensor.bytes)? {
+                checkpoint.done_with(name)?;
+            }
+        }
+        let cache = engine.packed_weight_cache.as_ref().unwrap();
+        anyhow::ensure!(
+            engine.quantized.weights.len() == 4,
+            "expected four packed Omni projections per layer"
+        );
+        let report = serde_json::json!({"layer": layer, "seconds": started.elapsed().as_secs_f64(),
+            "cached_weights": engine.quantized.weights.len(), "cache_hits": cache.hits,
+            "cache_misses": cache.misses, "engine_bytes": engine.allocated_bytes()});
+        eprintln!("{report}");
+        reports.push(report);
+        engine.quantized.weights.clear();
+        engine.reset_plan()?;
+    }
+    Ok(reports)
+}
+
+/// Per-model switches for isolated Omni kernel comparisons.
+pub struct OmniKernelConfig {
+    pub directory: Option<std::path::PathBuf>,
+    pub chunk: usize,
+    pub tiled_attention: bool,
+    pub prepack_qk: bool,
+    pub alignment: usize,
+    pub minimum_tokens: usize,
+    pub sorted_combine: bool,
+    pub fused_mlp: bool,
+    pub pack_swiglu: bool,
+    pub compact_experts: bool,
+    pub reuse_backbone: bool,
+}
+
+impl Default for OmniKernelConfig {
+    fn default() -> Self {
+        Self {
+            directory: None,
+            chunk: 256,
+            tiled_attention: false,
+            prepack_qk: false,
+            alignment: 1,
+            minimum_tokens: 0,
+            sorted_combine: false,
+            fused_mlp: false,
+            pack_swiglu: false,
+            compact_experts: false,
+            reuse_backbone: false,
+        }
+    }
+}
 
 #[cfg(test)]
 mod memory_tests {
@@ -461,6 +555,15 @@ pub struct NormBenchmark {
     _context: ModelContext,
 }
 
+/// Deterministic attention inputs for independent numerical comparisons.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum AttentionFixture {
+    #[default]
+    Patterned,
+    Hashed,
+    ZeroQueries,
+}
+
 pub struct AttentionBenchmark {
     graph: GraphExec,
     engine: Engine,
@@ -469,26 +572,63 @@ pub struct AttentionBenchmark {
 }
 impl AttentionBenchmark {
     pub fn new(tokens: usize, source: Option<&str>) -> Result<Self> {
-        Self::build(tokens, source, false, crate::ModelVariant::Clef)
+        Self::case(
+            tokens,
+            source,
+            false,
+            crate::ModelVariant::Clef,
+            AttentionFixture::Patterned,
+        )
     }
     pub fn integrated(tokens: usize) -> Result<Self> {
-        Self::build(tokens, None, true, crate::ModelVariant::Clef)
+        Self::case(
+            tokens,
+            None,
+            true,
+            crate::ModelVariant::Clef,
+            AttentionFixture::Patterned,
+        )
     }
     pub fn for_model(tokens: usize, model: crate::ModelVariant, integrated: bool) -> Result<Self> {
-        Self::build(tokens, None, integrated, model)
+        Self::case(tokens, None, integrated, model, AttentionFixture::Patterned)
     }
     pub fn source_for_model(
         tokens: usize,
         model: crate::ModelVariant,
         source: &str,
     ) -> Result<Self> {
-        Self::build(tokens, Some(source), false, model)
+        Self::case(
+            tokens,
+            Some(source),
+            false,
+            model,
+            AttentionFixture::Patterned,
+        )
     }
-    fn build(
+    pub fn case(
         tokens: usize,
         source: Option<&str>,
         integrated: bool,
         model: crate::ModelVariant,
+        fixture: AttentionFixture,
+    ) -> Result<Self> {
+        Self::build_case(tokens, source, integrated, model, fixture, false)
+    }
+    pub fn prepacked_case(
+        tokens: usize,
+        source: &str,
+        model: crate::ModelVariant,
+        fixture: AttentionFixture,
+    ) -> Result<Self> {
+        Self::build_case(tokens, Some(source), false, model, fixture, true)
+    }
+    fn build_case(
+        tokens: usize,
+        source: Option<&str>,
+        integrated: bool,
+        model: crate::ModelVariant,
+        fixture: AttentionFixture,
+        prepacked: bool,
     ) -> Result<Self> {
         anyhow::ensure!(
             tokens > 0 && tokens <= crate::encoding::MAX_CONTEXT_TOKENS,
@@ -498,35 +638,54 @@ impl AttentionBenchmark {
         let mut engine = Engine::new(&context)?;
         engine.architecture = model.architecture();
         let heads = engine.architecture.attention_heads;
+        let dim = if model == crate::ModelVariant::ClefOmni {
+            128
+        } else {
+            256
+        };
         // Model-level overrides must not replace an operator's production reference.
         // Operator candidates are selected explicitly through `source` above.
         engine.experimental_attention = None;
+        engine.omni_prepack_qk = prepacked;
         let values = |len, factor| {
             (0..len)
-                .map(|i| half::bf16::from_f32(((i * factor % 251) as f32 - 125.) / 64.))
+                .map(|i| {
+                    let value = match fixture {
+                        AttentionFixture::ZeroQueries if factor == 17 => 0.,
+                        AttentionFixture::Hashed => {
+                            let mut bits = (i as u32).wrapping_add(factor as u32 * 7919);
+                            bits = (bits ^ (bits >> 16)).wrapping_mul(0x7feb352d);
+                            bits = (bits ^ (bits >> 15)).wrapping_mul(0x846ca68b);
+                            bits ^= bits >> 16;
+                            ((bits & 65535) as f32 - 32768.) / 16384.
+                        }
+                        _ => ((i * factor % 251) as f32 - 125.) / 64.,
+                    };
+                    half::bf16::from_f32(value)
+                })
                 .collect::<Vec<_>>()
         };
         let q = engine.input(
             tokens,
-            heads * 256,
+            heads * dim,
             DType::Bf16,
-            bytemuck::cast_slice(&values(tokens * (heads * 256), 17)),
+            bytemuck::cast_slice(&values(tokens * (heads * dim), 17)),
         )?;
         let k = engine.input(
             tokens,
-            1024,
+            4 * dim,
             DType::Bf16,
-            bytemuck::cast_slice(&values(tokens * 1024, 31)),
+            bytemuck::cast_slice(&values(tokens * 4 * dim, 31)),
         )?;
         let v = engine.input(
             tokens,
-            1024,
+            4 * dim,
             DType::Bf16,
-            bytemuck::cast_slice(&values(tokens * 1024, 43)),
+            bytemuck::cast_slice(&values(tokens * 4 * dim, 43)),
         )?;
         let output = if let Some(source) = source {
             let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
-            engine.attention_tiled_source(&q, &k, &v, true, &source)?
+            engine.attention_tiled_source_dim(&q, &k, &v, true, &source, dim)?
         } else if integrated {
             engine.attention_impl::<true>(&q, &k, &v, heads, 4, true)?
         } else {

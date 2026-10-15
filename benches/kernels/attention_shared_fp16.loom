@@ -67,7 +67,7 @@ kernel.def target(@clef_target) export("clef_op") @clef_op(%query_rows: index, %
 %stats = buffer.view %lds[%stats_off] : buffer -> view<64xf32>
 %queries = index.assume %query_rows [range(%query_rows, 1, 65536)] : index
 %keys = index.assume %key_rows [range(%key_rows, 1, 65536), le(%key_rows, %v_capacity)] : index
-%vstride = index.assume %v_capacity [range(%v_capacity, 64, 65536), mul(%v_capacity, 64)] : index
+%vstride = index.assume %v_capacity [range(%v_capacity, 64, 65536), multiple_of(%v_capacity, 64)] : index
 %qw = config.get @clef.qw : index
 %kw = config.get @clef.kw : index
 %heads = config.get @clef.heads : index
@@ -114,7 +114,7 @@ kernel.def target(@clef_target) export("clef_op") @clef_op(%query_rows: index, %
 %stcol = index.mul %stcol0, %c16 : index
 %qlim = index.sub %qw, %c16 : index
 %qcol0 = index.add %qc, %stcol : index
-%qcol = index.assume %qcol0 [le(%qcol0, %qlim), mul(%qcol0, 16)] : index
+%qcol = index.assume %qcol0 [le(%qcol0, %qlim), multiple_of(%qcol0, 16)] : index
 %qsrow0 = index.add %strow, %c0 : index
 %qrow0 = index.add %qbase, %qsrow0 : index
 %qok0 = index.cmp ult, %qrow0, %queries : index
@@ -203,7 +203,7 @@ kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
 %kb = index.mul %kt, %c32 : index
 %kcol0 = index.add %kc, %stcol : index
 %klim = index.sub %kw, %c16 : index
-%kcol = index.assume %kcol0 [le(%kcol0, %klim), mul(%kcol0, 16)] : index
+%kcol = index.assume %kcol0 [le(%kcol0, %klim), multiple_of(%kcol0, 16)] : index
 %ksrow0 = index.add %strow, %c0 : index
 %krow0 = index.add %kb, %ksrow0 : index
 %kok0 = index.cmp ult, %krow0, %keys : index
@@ -450,13 +450,13 @@ view.store %a7, %stats[%sr7] : f32, view<64xf32>
 %stagevc = index.assume %stagevc0 [lt(%stagevc0, %kw)] : index
 %stagevlim = index.sub %vstride, %c16 : index
 %stagevk0a = index.add %kb, %c0 : index
-%stagevk0 = index.assume %stagevk0a [le(%stagevk0a, %stagevlim), mul(%stagevk0a, 16)] : index
+%stagevk0 = index.assume %stagevk0a [le(%stagevk0a, %stagevlim), multiple_of(%stagevk0a, 16)] : index
 %stagev0_bf = vector.load %vview[%stagevc, %stagevk0] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %stagev0_wide = vector.extf %stagev0_bf : vector<16xbf16> to vector<16xf32>
 %stagev0 = vector.fptrunc %stagev0_wide : vector<16xf32> to vector<16xf16>
 vector.store %stagev0, %vs[%tid, %c0] : vector<16xf16>, view<256x40xf16>
 %stagevk1a = index.add %kb, %c16 : index
-%stagevk1 = index.assume %stagevk1a [le(%stagevk1a, %stagevlim), mul(%stagevk1a, 16)] : index
+%stagevk1 = index.assume %stagevk1a [le(%stagevk1a, %stagevlim), multiple_of(%stagevk1a, 16)] : index
 %stagev1_bf = vector.load %vview[%stagevc, %stagevk1] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %stagev1_wide = vector.extf %stagev1_bf : vector<16xbf16> to vector<16xf32>
 %stagev1 = vector.fptrunc %stagev1_wide : vector<16xf32> to vector<16xf16>
@@ -481,7 +481,7 @@ kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
 %ph0 = vector.fragment.load<lhs> %phs[%qoff, %c0] shape [%c16, %c16] : view<64x40xf16> -> vector<16xf16>
 %vkb0a = index.add %kb, %c0 : index
 %vklast0 = index.sub %vstride, %c16 : index
-%vkb0 = index.assume %vkb0a [le(%vkb0a, %vklast0), mul(%vkb0a, 16)] : index
+%vkb0 = index.assume %vkb0a [le(%vkb0a, %vklast0), multiple_of(%vkb0a, 16)] : index
 %vcol0_0a = index.add %kc, %voff : index
 %vcol0_0b = index.add %vcol0_0a, %c0 : index
 %vcol0_0c = index.add %vcol0_0b, %lc : index
@@ -557,7 +557,7 @@ kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
 %ph1 = vector.fragment.load<lhs> %phs[%qoff, %c16] shape [%c16, %c16] : view<64x40xf16> -> vector<16xf16>
 %vkb1a = index.add %kb, %c16 : index
 %vklast1 = index.sub %vstride, %c16 : index
-%vkb1 = index.assume %vkb1a [le(%vkb1a, %vklast1), mul(%vkb1a, 16)] : index
+%vkb1 = index.assume %vkb1a [le(%vkb1a, %vklast1), multiple_of(%vkb1a, 16)] : index
 %vcol1_0a = index.add %kc, %voff : index
 %vcol1_0b = index.add %vcol1_0a, %c0 : index
 %vcol1_0c = index.add %vcol1_0b, %lc : index

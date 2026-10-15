@@ -92,16 +92,15 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
   %chunk_last = index.sub %chunk_width, %c1 : index
   %rounded_width = index.add %width, %chunk_last : index
   %chunks = index.div %rounded_width, %chunk_width : index
-  %cache_size = index.mul %chunks, %c8 : index
   %last_col = index.sub %width, %c8 : index
-  %cache_init = vector.constant 0.0 : vector<[%cache_size]xf32>
+  %cache_init = vector.constant 0.0 : vector<[%chunks]x8xf32>
   // Unroll the row chunks so the retained vector lives in registers.
-  %values, %lane_max = scf.for %chunk = [%c0 to %chunks step %c1](%cache = %cache_init : vector<[%cache_size]xf32>, %prev_max = %zero : f32) -> (vector<[%cache_size]xf32>, f32) unroll {
+  %values, %lane_max = scf.for %chunk = [%c0 to %chunks step %c1](%cache = %cache_init : vector<[%chunks]x8xf32>, %prev_max = %zero : f32) -> (vector<[%chunks]x8xf32>, f32) unroll {
     %tile_base = index.mul %chunk, %chunk_width : index
     %tile_col0 = index.add %wg_lane8, %tile_base : index
     %tile_active = index.cmp ult, %tile_col0, %width : index
     %tile_v = scf.if %tile_active -> (vector<8xf32>) {
-      %tile_col = index.assume %tile_col0 [le(%tile_col0, %last_col), mul(%tile_col0, 8)] : index
+      %tile_col = index.assume %tile_col0 [le(%tile_col0, %last_col), multiple_of(%tile_col0, 8)] : index
       %tile_h = vector.load %hv[%row, %tile_col] : view<[%tokens_b]x[%width]xbf16> -> vector<8xbf16>
       %tile_f0 = vector.extf %tile_h : vector<8xbf16> to vector<8xf32>
       %tile_f = scf.if %rmsnorm -> (vector<8xf32>) {
@@ -138,7 +137,7 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
         %gate_base = index.add %head_base_gate, %c256_gate : index
         %gate_col0 = index.add %gate_base, %within_gate : index
         %gate_last = index.sub %up_width, %c8 : index
-        %gate_col = index.assume %gate_col0 [le(%gate_col0, %gate_last), mul(%gate_col0, 8)] : index
+        %gate_col = index.assume %gate_col0 [le(%gate_col0, %gate_last), multiple_of(%gate_col0, 8)] : index
         %gate_h = vector.load %uv[%row, %gate_col] : view<[%tokens_b]x[%up_width]xbf16> -> vector<8xbf16>
         %gate_f = vector.extf %gate_h : vector<8xbf16> to vector<8xf32>
         %attn_neg = vector.negf %gate_f : vector<8xf32>
@@ -253,14 +252,10 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
     %tile_max6 = scalar.maxnumf %tile_max5, %tile_maxval6 : f32
     %tile_maxval7 = vector.extract %tile_checked[%c7] : vector<8xf32> -> f32
     %tile_max7 = scalar.maxnumf %tile_max6, %tile_maxval7 : f32
-    %next_cache = scf.for %part = [%c0 to %c8 step %c1](%partial = %cache : vector<[%cache_size]xf32>) -> (vector<[%cache_size]xf32>) unroll {
-      %value = vector.extract %tile_s8_result[%part] : vector<8xf32> -> f32
-      %slot0 = index.mul %chunk, %c8 : index
-      %slot = index.add %slot0, %part : index
-      %inserted = vector.insert %value into %partial[%slot] : f32, vector<[%cache_size]xf32>
-      scf.yield %inserted : vector<[%cache_size]xf32>
-    }
-    scf.yield %next_cache, %tile_max7 : vector<[%cache_size]xf32>, f32
+    // A bank of 8-element fragments is scalarized by the compiler; one large
+    // vector exceeds the current target carrier limit for wide expert inputs.
+    %next_cache = vector.insert %tile_s8_result into %cache[%chunk] : vector<8xf32>, vector<[%chunks]x8xf32>
+    scf.yield %next_cache, %tile_max7 : vector<[%chunks]x8xf32>, f32
   }
   // Only the row maximum crosses wave boundaries.
   %maximum = kernel.workgroup.reduce<maxnumf> %lane_max : f32
@@ -281,24 +276,7 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
     %tile_base = index.mul %chunk_out, %chunk_width : index
     %tile_col0 = index.add %wg_lane8, %tile_base : index
     %tile_active = index.cmp ult, %tile_col0, %width : index
-    %slot_base = index.mul %chunk_out, %c8 : index
-    %slot0 = index.add %slot_base, %c0 : index
-    %v0 = vector.extract %values[%slot0] : vector<[%cache_size]xf32> -> f32
-    %slot1 = index.add %slot_base, %c1 : index
-    %v1 = vector.extract %values[%slot1] : vector<[%cache_size]xf32> -> f32
-    %slot2 = index.add %slot_base, %c2 : index
-    %v2 = vector.extract %values[%slot2] : vector<[%cache_size]xf32> -> f32
-    %slot3 = index.add %slot_base, %c3 : index
-    %v3 = vector.extract %values[%slot3] : vector<[%cache_size]xf32> -> f32
-    %slot4 = index.add %slot_base, %c4 : index
-    %v4 = vector.extract %values[%slot4] : vector<[%cache_size]xf32> -> f32
-    %slot5 = index.add %slot_base, %c5 : index
-    %v5 = vector.extract %values[%slot5] : vector<[%cache_size]xf32> -> f32
-    %slot6 = index.add %slot_base, %c6 : index
-    %v6 = vector.extract %values[%slot6] : vector<[%cache_size]xf32> -> f32
-    %slot7 = index.add %slot_base, %c7 : index
-    %v7 = vector.extract %values[%slot7] : vector<[%cache_size]xf32> -> f32
-    %tile_s8_result = vector.from_elements %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 : vector<8xf32>
+    %tile_s8_result = vector.extract %values[%chunk_out] : vector<[%chunks]x8xf32> -> vector<8xf32>
     scf.if %tile_active {
       %tile_scaled = vector.mulf %tile_s8_result, %inv8 : vector<8xf32>
       %tile_safe = scf.select %valid_scale, %tile_scaled, %zero8 : vector<8xf32>
@@ -306,8 +284,8 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
       %tile_clo = vector.maxnumf %tile_rounded, %neg8 : vector<8xf32>
       %tile_chi = vector.minnumf %tile_clo, %qmax8 : vector<8xf32>
       %tile_codes = vector.fptosi %tile_chi : vector<8xf32> to vector<8xi32>
-      scf.for %tile_word = [%c0 to %words_per_lane step %c1] {
-        %tile_encoded = scf.for %tile_part = [%c0 to %packed step %c1](%tile_acc = %zero_i : i32) -> (i32) {
+      scf.for %tile_word = [%c0 to %words_per_lane step %c1] unroll {
+        %tile_encoded = scf.for %tile_part = [%c0 to %packed step %c1](%tile_acc = %zero_i : i32) -> (i32) unroll {
           %tile_local0 = index.mul %tile_word, %packed : index
           %tile_local1 = index.add %tile_local0, %tile_part : index
           %tile_local = index.assume %tile_local1 [range(%tile_local1, 0, 7)] : index
@@ -333,9 +311,9 @@ template.def<@clef.register_pack> @register_pack(%tokens: index, %h: buffer, %up
   template.return
 }
 amdgpu.target<gfx11-generic> @pack_target4 {subgroup_size = 32}
-config.decl @h3.prepare_plain_tiled_i4.width : %v: index where [range(%v, 256, 32768), mul(%v, 256)]
+config.decl @h3.prepare_plain_tiled_i4.width : %v: index where [range(%v, 256, 32768), multiple_of(%v, 256)]
 config.decl @h3.prepare_plain_tiled_i4.lanes : %v: index where [eq(%v, 256)]
-config.decl @h3.prepare_plain_tiled_i4.out_stride : %v: index where [range(%v, 256, 65536), mul(%v, 64)]
+config.decl @h3.prepare_plain_tiled_i4.out_stride : %v: index where [range(%v, 256, 65536), multiple_of(%v, 64)]
 kernel.def target(@pack_target4) export("h3_prepare_plain_tiled_i4") @h3_prepare_plain_tiled_i4(%tokens: index) {
   %one = index.constant 1 : index
   %threads = index.constant 256 : index
@@ -352,9 +330,9 @@ kernel.def target(@pack_target4) export("h3_prepare_plain_tiled_i4") @h3_prepare
   kernel.return
 }
 amdgpu.target<gfx11-generic> @pack_target8 {subgroup_size = 32}
-config.decl @h3.prepare_plain_tiled_i8.width : %v: index where [range(%v, 256, 32768), mul(%v, 256)]
+config.decl @h3.prepare_plain_tiled_i8.width : %v: index where [range(%v, 256, 32768), multiple_of(%v, 256)]
 config.decl @h3.prepare_plain_tiled_i8.lanes : %v: index where [eq(%v, 256)]
-config.decl @h3.prepare_plain_tiled_i8.out_stride : %v: index where [range(%v, 256, 65536), mul(%v, 64)]
+config.decl @h3.prepare_plain_tiled_i8.out_stride : %v: index where [range(%v, 256, 65536), multiple_of(%v, 64)]
 kernel.def target(@pack_target8) export("h3_prepare_plain_tiled_i8") @h3_prepare_plain_tiled_i8(%tokens: index) {
   %one = index.constant 1 : index
   %threads = index.constant 256 : index

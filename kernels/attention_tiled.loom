@@ -71,7 +71,7 @@ kernel.def target(@clef_target) export("clef_op") @clef_op(%query_rows: index, %
 %qw = config.get @clef.qw : index
 %kw = config.get @clef.kw : index
 %keys = index.assume %key_rows [range(%key_rows, 1, 65536), le(%key_rows, %v_capacity)] : index
-%vstride = index.assume %v_capacity [range(%v_capacity, 64, 65536), mul(%v_capacity, 64)] : index
+%vstride = index.assume %v_capacity [range(%v_capacity, 64, 65536), multiple_of(%v_capacity, 64)] : index
 %scale = config.get @clef.scale : f32
 %scalev = vector.splat %scale : vector<8xf32>
 %wave = index.add %waveid, %zero : index
@@ -151,8 +151,8 @@ kernel.def target(@clef_target) export("clef_op") @clef_op(%query_rows: index, %
  %kcol0 = index.add %kc, %d : index
  %qlim = index.sub %qw, %c16 : index
  %klim = index.sub %kw, %c16 : index
- %qcol = index.assume %qcol0 [le(%qcol0, %qlim), mul(%qcol0, 16)] : index
- %kcol = index.assume %kcol0 [le(%kcol0, %klim), mul(%kcol0, 16)] : index
+ %qcol = index.assume %qcol0 [le(%qcol0, %qlim), multiple_of(%qcol0, 16)] : index
+ %kcol = index.assume %kcol0 [le(%kcol0, %klim), multiple_of(%kcol0, 16)] : index
  %qd = vector.load %qview[%qr, %qcol] : view<[%queries]x[%qw]xbf16> -> vector<16xbf16>
  %kd = vector.load %kview[%kr, %kcol] : view<[%keys]x[%kw]xbf16> -> vector<16xbf16>
  %lhs = vector.fragment<lhs> %qd shape [%c16, %c16] : vector<16xbf16>
@@ -245,7 +245,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr0b = index.add %vr0a, %lc : index
 %vr0 = index.assume %vr0b [lt(%vr0b, %kw)] : index
 %klast0 = index.sub %vstride, %c16 : index
-%kb0 = index.assume %kb [le(%kb, %klast0), mul(%kb, 16)] : index
+%kb0 = index.assume %kb [le(%kb, %klast0), multiple_of(%kb, 16)] : index
 %vd0 = vector.load %vview[%vr0, %kb0] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf0 = vector.fragment<rhs> %vd0 shape [%c16, %c16] : vector<16xbf16>
 %rescale0 = vector.mulf %acc0, %alpha : vector<8xf32>
@@ -256,7 +256,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr1b = index.add %vr1a, %lc : index
 %vr1 = index.assume %vr1b [lt(%vr1b, %kw)] : index
 %klast1 = index.sub %vstride, %c16 : index
-%kb1 = index.assume %kb [le(%kb, %klast1), mul(%kb, 16)] : index
+%kb1 = index.assume %kb [le(%kb, %klast1), multiple_of(%kb, 16)] : index
 %vd1 = vector.load %vview[%vr1, %kb1] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf1 = vector.fragment<rhs> %vd1 shape [%c16, %c16] : vector<16xbf16>
 %rescale1 = vector.mulf %acc1, %alpha : vector<8xf32>
@@ -267,7 +267,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr2b = index.add %vr2a, %lc : index
 %vr2 = index.assume %vr2b [lt(%vr2b, %kw)] : index
 %klast2 = index.sub %vstride, %c16 : index
-%kb2 = index.assume %kb [le(%kb, %klast2), mul(%kb, 16)] : index
+%kb2 = index.assume %kb [le(%kb, %klast2), multiple_of(%kb, 16)] : index
 %vd2 = vector.load %vview[%vr2, %kb2] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf2 = vector.fragment<rhs> %vd2 shape [%c16, %c16] : vector<16xbf16>
 %rescale2 = vector.mulf %acc2, %alpha : vector<8xf32>
@@ -278,7 +278,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr3b = index.add %vr3a, %lc : index
 %vr3 = index.assume %vr3b [lt(%vr3b, %kw)] : index
 %klast3 = index.sub %vstride, %c16 : index
-%kb3 = index.assume %kb [le(%kb, %klast3), mul(%kb, 16)] : index
+%kb3 = index.assume %kb [le(%kb, %klast3), multiple_of(%kb, 16)] : index
 %vd3 = vector.load %vview[%vr3, %kb3] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf3 = vector.fragment<rhs> %vd3 shape [%c16, %c16] : vector<16xbf16>
 %rescale3 = vector.mulf %acc3, %alpha : vector<8xf32>
@@ -289,7 +289,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr4b = index.add %vr4a, %lc : index
 %vr4 = index.assume %vr4b [lt(%vr4b, %kw)] : index
 %klast4 = index.sub %vstride, %c16 : index
-%kb4 = index.assume %kb [le(%kb, %klast4), mul(%kb, 16)] : index
+%kb4 = index.assume %kb [le(%kb, %klast4), multiple_of(%kb, 16)] : index
 %vd4 = vector.load %vview[%vr4, %kb4] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf4 = vector.fragment<rhs> %vd4 shape [%c16, %c16] : vector<16xbf16>
 %rescale4 = vector.mulf %acc4, %alpha : vector<8xf32>
@@ -300,7 +300,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr5b = index.add %vr5a, %lc : index
 %vr5 = index.assume %vr5b [lt(%vr5b, %kw)] : index
 %klast5 = index.sub %vstride, %c16 : index
-%kb5 = index.assume %kb [le(%kb, %klast5), mul(%kb, 16)] : index
+%kb5 = index.assume %kb [le(%kb, %klast5), multiple_of(%kb, 16)] : index
 %vd5 = vector.load %vview[%vr5, %kb5] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf5 = vector.fragment<rhs> %vd5 shape [%c16, %c16] : vector<16xbf16>
 %rescale5 = vector.mulf %acc5, %alpha : vector<8xf32>
@@ -311,7 +311,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr6b = index.add %vr6a, %lc : index
 %vr6 = index.assume %vr6b [lt(%vr6b, %kw)] : index
 %klast6 = index.sub %vstride, %c16 : index
-%kb6 = index.assume %kb [le(%kb, %klast6), mul(%kb, 16)] : index
+%kb6 = index.assume %kb [le(%kb, %klast6), multiple_of(%kb, 16)] : index
 %vd6 = vector.load %vview[%vr6, %kb6] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf6 = vector.fragment<rhs> %vd6 shape [%c16, %c16] : vector<16xbf16>
 %rescale6 = vector.mulf %acc6, %alpha : vector<8xf32>
@@ -322,7 +322,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr7b = index.add %vr7a, %lc : index
 %vr7 = index.assume %vr7b [lt(%vr7b, %kw)] : index
 %klast7 = index.sub %vstride, %c16 : index
-%kb7 = index.assume %kb [le(%kb, %klast7), mul(%kb, 16)] : index
+%kb7 = index.assume %kb [le(%kb, %klast7), multiple_of(%kb, 16)] : index
 %vd7 = vector.load %vview[%vr7, %kb7] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf7 = vector.fragment<rhs> %vd7 shape [%c16, %c16] : vector<16xbf16>
 %rescale7 = vector.mulf %acc7, %alpha : vector<8xf32>
@@ -333,7 +333,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr8b = index.add %vr8a, %lc : index
 %vr8 = index.assume %vr8b [lt(%vr8b, %kw)] : index
 %klast8 = index.sub %vstride, %c16 : index
-%kb8 = index.assume %kb [le(%kb, %klast8), mul(%kb, 16)] : index
+%kb8 = index.assume %kb [le(%kb, %klast8), multiple_of(%kb, 16)] : index
 %vd8 = vector.load %vview[%vr8, %kb8] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf8 = vector.fragment<rhs> %vd8 shape [%c16, %c16] : vector<16xbf16>
 %rescale8 = vector.mulf %acc8, %alpha : vector<8xf32>
@@ -344,7 +344,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr9b = index.add %vr9a, %lc : index
 %vr9 = index.assume %vr9b [lt(%vr9b, %kw)] : index
 %klast9 = index.sub %vstride, %c16 : index
-%kb9 = index.assume %kb [le(%kb, %klast9), mul(%kb, 16)] : index
+%kb9 = index.assume %kb [le(%kb, %klast9), multiple_of(%kb, 16)] : index
 %vd9 = vector.load %vview[%vr9, %kb9] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf9 = vector.fragment<rhs> %vd9 shape [%c16, %c16] : vector<16xbf16>
 %rescale9 = vector.mulf %acc9, %alpha : vector<8xf32>
@@ -355,7 +355,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr10b = index.add %vr10a, %lc : index
 %vr10 = index.assume %vr10b [lt(%vr10b, %kw)] : index
 %klast10 = index.sub %vstride, %c16 : index
-%kb10 = index.assume %kb [le(%kb, %klast10), mul(%kb, 16)] : index
+%kb10 = index.assume %kb [le(%kb, %klast10), multiple_of(%kb, 16)] : index
 %vd10 = vector.load %vview[%vr10, %kb10] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf10 = vector.fragment<rhs> %vd10 shape [%c16, %c16] : vector<16xbf16>
 %rescale10 = vector.mulf %acc10, %alpha : vector<8xf32>
@@ -366,7 +366,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr11b = index.add %vr11a, %lc : index
 %vr11 = index.assume %vr11b [lt(%vr11b, %kw)] : index
 %klast11 = index.sub %vstride, %c16 : index
-%kb11 = index.assume %kb [le(%kb, %klast11), mul(%kb, 16)] : index
+%kb11 = index.assume %kb [le(%kb, %klast11), multiple_of(%kb, 16)] : index
 %vd11 = vector.load %vview[%vr11, %kb11] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf11 = vector.fragment<rhs> %vd11 shape [%c16, %c16] : vector<16xbf16>
 %rescale11 = vector.mulf %acc11, %alpha : vector<8xf32>
@@ -377,7 +377,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr12b = index.add %vr12a, %lc : index
 %vr12 = index.assume %vr12b [lt(%vr12b, %kw)] : index
 %klast12 = index.sub %vstride, %c16 : index
-%kb12 = index.assume %kb [le(%kb, %klast12), mul(%kb, 16)] : index
+%kb12 = index.assume %kb [le(%kb, %klast12), multiple_of(%kb, 16)] : index
 %vd12 = vector.load %vview[%vr12, %kb12] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf12 = vector.fragment<rhs> %vd12 shape [%c16, %c16] : vector<16xbf16>
 %rescale12 = vector.mulf %acc12, %alpha : vector<8xf32>
@@ -388,7 +388,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr13b = index.add %vr13a, %lc : index
 %vr13 = index.assume %vr13b [lt(%vr13b, %kw)] : index
 %klast13 = index.sub %vstride, %c16 : index
-%kb13 = index.assume %kb [le(%kb, %klast13), mul(%kb, 16)] : index
+%kb13 = index.assume %kb [le(%kb, %klast13), multiple_of(%kb, 16)] : index
 %vd13 = vector.load %vview[%vr13, %kb13] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf13 = vector.fragment<rhs> %vd13 shape [%c16, %c16] : vector<16xbf16>
 %rescale13 = vector.mulf %acc13, %alpha : vector<8xf32>
@@ -399,7 +399,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr14b = index.add %vr14a, %lc : index
 %vr14 = index.assume %vr14b [lt(%vr14b, %kw)] : index
 %klast14 = index.sub %vstride, %c16 : index
-%kb14 = index.assume %kb [le(%kb, %klast14), mul(%kb, 16)] : index
+%kb14 = index.assume %kb [le(%kb, %klast14), multiple_of(%kb, 16)] : index
 %vd14 = vector.load %vview[%vr14, %kb14] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf14 = vector.fragment<rhs> %vd14 shape [%c16, %c16] : vector<16xbf16>
 %rescale14 = vector.mulf %acc14, %alpha : vector<8xf32>
@@ -410,7 +410,7 @@ kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
 %vr15b = index.add %vr15a, %lc : index
 %vr15 = index.assume %vr15b [lt(%vr15b, %kw)] : index
 %klast15 = index.sub %vstride, %c16 : index
-%kb15 = index.assume %kb [le(%kb, %klast15), mul(%kb, 16)] : index
+%kb15 = index.assume %kb [le(%kb, %klast15), multiple_of(%kb, 16)] : index
 %vd15 = vector.load %vview[%vr15, %kb15] : view<[%kw]x[%vstride]xbf16> -> vector<16xbf16>
 %vf15 = vector.fragment<rhs> %vd15 shape [%c16, %c16] : vector<16xbf16>
 %rescale15 = vector.mulf %acc15, %alpha : vector<8xf32>
