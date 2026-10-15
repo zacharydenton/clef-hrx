@@ -30,11 +30,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "arbitrary_precision"] }
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 sha2 = "0.10"
+rustfft = "6"
 
 [features]
 bench-internals = []
 
 [dev-dependencies]
+libc = "0.2"
 tempfile = "3"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 

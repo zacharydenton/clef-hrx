@@ -118,10 +118,19 @@ impl ClefModel {
             engine.quantized =
                 crate::quantized::QuantizedProjections::for_precision(options.precision);
         }
-        let encoder = Encoder::load(options.source.resolve("tokenizer.json")?)?;
+        let encoder = Encoder::load_for_model(
+            options.source.resolve("tokenizer.json")?,
+            options.source.model,
+        )?;
         // Files are only mapped while loading, before this method returns.
         let checkpoint = unsafe { Checkpoint::open(&options.source)? };
+        if engine.architecture.is_omni() {
+            crate::omni::load_experts(&mut engine, &checkpoint)?;
+        }
         for name in checkpoint.names() {
+            if engine.architecture.is_omni() && name.contains(".mlp.experts.") {
+                continue;
+            }
             if crate::embedding::TABLES.contains(&name) {
                 engine
                     .embedding_rows
@@ -182,7 +191,10 @@ impl ClefModel {
         );
         let record = self.encode_record(request)?;
         ensure!(
-            record.input_ids.iter().all(|id| *id < 248320),
+            record
+                .input_ids
+                .iter()
+                .all(|id| (*id as usize) < self.options.source.model.architecture().vocabulary()),
             "token ID outside checkpoint vocabulary"
         );
         // Safety: all device resources stay in NativeState, as in infer_encoded.
@@ -309,7 +321,10 @@ impl ClefModel {
     }
     fn infer_encoded(&mut self, record: EncodedRecord) -> Result<Prediction> {
         ensure!(
-            record.input_ids.iter().all(|id| *id < 248320),
+            record
+                .input_ids
+                .iter()
+                .all(|id| (*id as usize) < self.options.source.model.architecture().vocabulary()),
             "token ID outside checkpoint vocabulary"
         );
         // Safety: NativeState owns every stream, graph and allocation. Stages
@@ -372,27 +387,64 @@ impl ClefModel {
     }
 }
 
+pub(crate) type Deepstack = Vec<Vec<(usize, Tensor)>>;
+pub(crate) fn embed_record(
+    engine: &mut Engine,
+    record: &EncodedRecord,
+) -> Result<(Tensor, Deepstack)> {
+    let x = engine.embedding(
+        "model.language_model.embed_tokens.weight",
+        &record.input_ids,
+    )?;
+    let mut deepstack: Vec<Vec<(usize, Tensor)>> = vec![Vec::new(); 3];
+    for item in &record.media.items {
+        let (features, intermediate) = crate::vision::forward_all(engine, item)?;
+        let mut offset = 0;
+        for [start, end] in &item.token_ranges {
+            let len = end - start;
+            engine.copy_into(
+                &features.slice_rows(offset, len),
+                &x.slice_rows(*start, len),
+            )?;
+            for (layer, features) in intermediate.iter().enumerate() {
+                deepstack[layer].push((*start, features.slice_rows(offset, len)));
+            }
+            offset += len;
+        }
+    }
+    if let Some(omni) = &record.media.omni {
+        let chunk_width = omni
+            .audio
+            .iter()
+            .map(|a| a.frames.min(100))
+            .max()
+            .unwrap_or(0);
+        for audio in &omni.audio {
+            let features = crate::audio::forward(engine, audio, chunk_width)?;
+            let mut offset = 0;
+            for &[start, end] in &audio.token_ranges {
+                engine.copy_into(
+                    &features.slice_rows(offset, end - start),
+                    &x.slice_rows(start, end - start),
+                )?;
+                offset += end - start;
+            }
+            ensure!(offset == features.rows, "audio feature/token mismatch");
+        }
+    }
+    Ok((x, deepstack))
+}
+
 impl NativeState {
     fn build(&mut self, record: &EncodedRecord) -> Result<Tensor> {
         self.plan = None;
         self.engine.reset_plan()?;
-        let x = self.engine.embedding(
-            "model.language_model.embed_tokens.weight",
-            &record.input_ids,
-        )?;
-        for item in &record.media.items {
-            let features = crate::vision::forward(&mut self.engine, item)?;
-            let mut offset = 0;
-            for [start, end] in &item.token_ranges {
-                let len = end - start;
-                self.engine.copy_into(
-                    &features.slice_rows(offset, len),
-                    &x.slice_rows(*start, len),
-                )?;
-                offset += len;
-            }
-        }
-        let hidden = crate::backbone::forward(&mut self.engine, x, &record.position_ids)?;
+        let (x, deepstack) = embed_record(&mut self.engine, record)?;
+        let hidden = if self.engine.architecture.is_omni() {
+            crate::omni::forward(&mut self.engine, x, &record.position_ids, &deepstack)?
+        } else {
+            crate::backbone::forward(&mut self.engine, x, &record.position_ids)?
+        };
         let output = crate::head::forward(&mut self.engine, &hidden, record)?;
         Ok(output)
     }
@@ -412,6 +464,14 @@ impl NativeState {
             hash.update(dimension.to_le_bytes());
         }
         hash.update(serde_json::to_vec(record)?);
+        if let Some(omni) = &record.media.omni {
+            for audio in &omni.audio {
+                hash.update(audio.frames.to_le_bytes());
+                hash.update(bytemuck::cast_slice(&audio.mel));
+                hash.update(serde_json::to_vec(&audio.token_ranges)?);
+            }
+        }
+
         for item in &record.media.items {
             hash.update(bytemuck::cast_slice(&item.patches));
             hash.update(serde_json::to_vec(&item.grid)?);

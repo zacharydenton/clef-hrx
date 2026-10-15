@@ -376,7 +376,12 @@ impl Engine {
         );
         let out = self.alloc(x.rows, width, x.dtype)?;
         self.dispatch(
-            if PARALLEL {
+            if self.architecture.is_omni() && b.is_none() {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/omni_rms_norm.loom")
+                )
+            } else if PARALLEL {
                 concat!(
                     include_str!("../kernels/common.loom"),
                     include_str!("../kernels/norm.loom")
@@ -407,7 +412,13 @@ impl Engine {
         } else {
             None
         };
-        self.norm(x, &w, b.as_ref(), eps, !layer)
+        self.norm(
+            x,
+            &w,
+            b.as_ref(),
+            eps,
+            !layer && !self.architecture.is_omni(),
+        )
     }
     /// Contiguous columns from every row; supports interleaved attention projections.
     pub fn columns(&mut self, x: &Tensor, start: usize, cols: usize) -> Result<Tensor> {

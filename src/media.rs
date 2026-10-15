@@ -35,9 +35,13 @@ pub struct VisualItem {
 pub struct PreparedMedia {
     pub items: Vec<VisualItem>,
     pub prompt: String,
+    pub omni: Option<crate::omni_media::OmniMedia>,
 }
 impl PreparedMedia {
     pub fn bind_tokens(&mut self, ids: &[u32], offset: usize) -> Result<()> {
+        if self.omni.is_some() {
+            return crate::omni_media::bind(self, ids, offset);
+        }
         let mut cursor = 0;
         for item in &mut self.items {
             let expected = if item.video { 248057 } else { 248056 };
@@ -62,6 +66,9 @@ impl PreparedMedia {
         Ok(())
     }
     pub fn position_ids(&self, len: usize) -> Result<Vec<[u32; 3]>> {
+        if let Some(omni) = &self.omni {
+            return omni.position_ids(len);
+        }
         let mut result = Vec::with_capacity(len);
         let mut pos = 0u32;
         for item in &self.items {
@@ -279,6 +286,28 @@ fn item(
     options: &MediaOptions,
     budget: usize,
 ) -> Result<VisualItem> {
+    item_impl(frames, indices, fps, video, options, budget, false)
+}
+
+pub(crate) fn omni_item(
+    frames: &[RgbImage],
+    video: bool,
+    options: &MediaOptions,
+    budget: usize,
+) -> Result<VisualItem> {
+    let indices: Vec<_> = (0..frames.len()).collect();
+    item_impl(frames, &indices, 2., video, options, budget, true)
+}
+#[allow(clippy::too_many_arguments)]
+fn item_impl(
+    frames: &[RgbImage],
+    indices: &[usize],
+    fps: f64,
+    video: bool,
+    options: &MediaOptions,
+    budget: usize,
+    per_frame: bool,
+) -> Result<VisualItem> {
     ensure!(!frames.is_empty(), "empty frame sequence");
     let w = frames[0].width() as usize;
     let h = frames[0].height() as usize;
@@ -289,7 +318,11 @@ fn item(
         "video frame dimensions differ"
     );
     let (min, max) = limits(options, video)?;
-    let (rh, rw) = smart_resize(h, w, frames.len(), min, max, video)?;
+    let (rh, rw) = if per_frame {
+        smart_resize(h, w, 1, min, max, false)?
+    } else {
+        smart_resize(h, w, frames.len(), min, max, video)?
+    };
     let t = if video { frames.len().div_ceil(2) } else { 1 };
     let gh = rh / 16;
     let gw = rw / 16;
@@ -396,6 +429,10 @@ pub fn prepare(
     Ok(out)
 }
 pub fn prepare_paths(request: &Request, budget: usize) -> Result<PreparedMedia> {
+    ensure!(
+        request.audio.is_empty(),
+        "audio input requires --model clef-omni"
+    );
     let mut out = PreparedMedia::default();
     let mut remaining = budget;
     for path in &request.images {

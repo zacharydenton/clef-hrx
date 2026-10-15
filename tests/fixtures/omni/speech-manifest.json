@@ -1,0 +1,15 @@
+{
+  "file": "tests/fixtures/omni/speech.wav",
+  "sha256": "ca4958c491a847c7f657b06fb83da7e019d6419fd3e086eb02b615fe58d9645f",
+  "generator": "eSpeak NG 1.52.0",
+  "command": [
+    "espeak-ng",
+    "-v",
+    "en-us",
+    "-s",
+    "150",
+    "-w",
+    "tests/fixtures/omni/speech.wav",
+    "The secret word is banana."
+  ]
+}

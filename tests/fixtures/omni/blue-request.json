@@ -1,0 +1,18 @@
+{
+  "model": "clef-omni",
+  "state": "Look at the picture.",
+  "images": [
+    "tests/fixtures/corpus/blue.png"
+  ],
+  "questions": {
+    "color": {
+      "type": "choice",
+      "instructions": "What is the dominant color in the image?",
+      "criteria": {
+        "blue": "Blue",
+        "green": "Green",
+        "red": "Red"
+      }
+    }
+  }
+}

@@ -1,0 +1,778 @@
+{
+  "date": "2026-10-15",
+  "device": "AMD Strix Halo / gfx1151",
+  "precision": "int4",
+  "revision": "0db1cd2607d76a7bdb2a382f659e7b313079f84b",
+  "binary_sha256": "acf9e36e5ab2bfec6a1be66eabf6c50e945e47c2740a707cde707d3fe49f07d1",
+  "shared_gpu": true,
+  "memory_budget_gib": 24,
+  "minimum_available_gib": 48.8189811706543,
+  "maximum_additional_swap_gib": 0.0,
+  "reference": "tests/fixtures/omni/decisions-{0..6}.json",
+  "comparison": [
+    {
+      "reference": "tests/fixtures/omni/decisions-0.json",
+      "input_tokens": 258,
+      "questions": 3,
+      "argmax_differences": [],
+      "max_probability_error": 0.00816369081573487,
+      "repeat_exact": true,
+      "runs": [
+        {
+          "resident_tok_s": 74.09902602224014,
+          "gpu_tok_s": 81.92878652005707,
+          "encode_ms": 8.742282000000001,
+          "prepare_ms": 324.001339,
+          "inference_ms": 3149.076301,
+          "readback_ms": 0.007220000000000001,
+          "allocated_bytes": 18957132300,
+          "uploaded_bytes": 1508508
+        },
+        {
+          "resident_tok_s": 79.6188714490835,
+          "gpu_tok_s": 79.6345455881059,
+          "encode_ms": 0.6161129999999999,
+          "prepare_ms": 0.01274,
+          "inference_ms": 3239.79999,
+          "readback_ms": 0.008949,
+          "allocated_bytes": 18957132300,
+          "uploaded_bytes": 0
+        }
+      ]
+    },
+    {
+      "reference": "tests/fixtures/omni/decisions-1.json",
+      "input_tokens": 216,
+      "questions": 1,
+      "argmax_differences": [],
+      "max_probability_error": 0.0027171512831573492,
+      "repeat_exact": true,
+      "runs": [
+        {
+          "resident_tok_s": 68.8211551122756,
+          "gpu_tok_s": 76.96199499783161,
+          "encode_ms": 2.892591,
+          "prepare_ms": 329.08905,
+          "inference_ms": 2806.580053,
+          "readback_ms": 0.00812,
+          "allocated_bytes": 18960920588,
+          "uploaded_bytes": 2173236
+        },
+        {
+          "resident_tok_s": 74.73938661350805,
+          "gpu_tok_s": 74.79132431053382,
+          "encode_ms": 1.2750759999999999,
+          "prepare_ms": 0.72221,
+          "inference_ms": 2888.035504,
+          "readback_ms": 0.00966,
+          "allocated_bytes": 18960920588,
+          "uploaded_bytes": 0
+        }
+      ]
+    },
+    {
+      "reference": "tests/fixtures/omni/decisions-2.json",
+      "input_tokens": 573,
+      "questions": 1,
+      "argmax_differences": [],
+      "max_probability_error": 0.21179620764225005,
+      "repeat_exact": true,
+      "runs": [
+        {
+          "resident_tok_s": 69.45431025278548,
+          "gpu_tok_s": 74.8665707397768,
+          "encode_ms": 164.00411400000002,
+          "prepare_ms": 432.399486,
+          "inference_ms": 7653.616218,
+          "readback_ms": 0.00812,
+          "allocated_bytes": 19010523148,
+          "uploaded_bytes": 8446516
+        },
+        {
+          "resident_tok_s": 73.9783382814072,
+          "gpu_tok_s": 74.92252831111601,
+          "encode_ms": 93.27022,
+          "prepare_ms": 4.3328120000000006,
+          "inference_ms": 7647.899942999999,
+          "readback_ms": 0.00758,
+          "allocated_bytes": 19010523148,
+          "uploaded_bytes": 0
+        }
+      ]
+    },
+    {
+      "reference": "tests/fixtures/omni/decisions-3.json",
+      "input_tokens": 160,
+      "questions": 1,
+      "argmax_differences": [],
+      "max_probability_error": 0.0006624416242980713,
+      "repeat_exact": true,
+      "runs": [
+        {
+          "resident_tok_s": 47.84661842545518,
+          "gpu_tok_s": 78.24281109465046,
+          "encode_ms": 70.615757,
+          "prepare_ms": 1228.479757,
+          "inference_ms": 2044.916303,
+          "readback_ms": 0.00716,
+          "allocated_bytes": 19010523148,
+          "uploaded_bytes": 1002548
+        },
+        {
+          "resident_tok_s": 76.1824249053161,
+          "gpu_tok_s": 78.48025917199145,
+          "encode_ms": 61.452987,
+          "prepare_ms": 0.03073,
+          "inference_ms": 2038.729251,
+          "readback_ms": 0.008969,
+          "allocated_bytes": 19010523148,
+          "uploaded_bytes": 0
+        }
+      ]
+    },
+    {
+      "reference": "tests/fixtures/omni/decisions-4.json",
+      "input_tokens": 306,
+      "questions": 1,
+      "argmax_differences": [],
+      "max_probability_error": 0.04935225474166871,
+      "repeat_exact": true,
+      "runs": [
+        {
+          "resident_tok_s": 66.98876100571928,
+          "gpu_tok_s": 76.84223333037477,
+          "encode_ms": 119.515805,
+          "prepare_ms": 466.220903,
+          "inference_ms": 3982.1851439999996,
+          "readback_ms": 0.008579999999999999,
+          "allocated_bytes": 19010670604,
+          "uploaded_bytes": 3794996
+        },
+        {
+          "resident_tok_s": 74.53202272752904,
+          "gpu_tok_s": 76.56178298545399,
+          "encode_ms": 107.207721,
+          "prepare_ms": 1.629256,
+          "inference_ms": 3996.772124,
+          "readback_ms": 0.008709999999999999,
+          "allocated_bytes": 19010670604,
+          "uploaded_bytes": 0
+        }
+      ]
+    },
+    {
+      "reference": "tests/fixtures/omni/decisions-5.json",
+      "input_tokens": 226,
+      "questions": 1,
+      "argmax_differences": [],
+      "max_probability_error": 0.002241255706880569,
+      "repeat_exact": true,
+      "runs": [
+        {
+          "resident_tok_s": 34.778918378088356,
+          "gpu_tok_s": 77.74435824164911,
+          "encode_ms": 1.8648200000000001,
+          "prepare_ms": 3589.353907,
+          "inference_ms": 2906.9633489999997,
+          "readback_ms": 0.00736,
+          "allocated_bytes": 19010670604,
+          "uploaded_bytes": 2297800
+        },
+        {
+          "resident_tok_s": 77.61856462420032,
+          "gpu_tok_s": 77.67847841908896,
+          "encode_ms": 1.46054,
+          "prepare_ms": 0.777339,
+          "inference_ms": 2909.428771,
+          "readback_ms": 0.00791,
+          "allocated_bytes": 19010670604,
+          "uploaded_bytes": 0
+        }
+      ]
+    },
+    {
+      "reference": "tests/fixtures/omni/decisions-6.json",
+      "input_tokens": 182,
+      "questions": 1,
+      "argmax_differences": [],
+      "max_probability_error": 0.0021923496955871258,
+      "repeat_exact": true,
+      "runs": [
+        {
+          "resident_tok_s": 57.59264700018103,
+          "gpu_tok_s": 78.30440579347675,
+          "encode_ms": 75.40967599999999,
+          "prepare_ms": 760.4448590000001,
+          "inference_ms": 2324.262577,
+          "readback_ms": 0.00852,
+          "allocated_bytes": 19010670604,
+          "uploaded_bytes": 1158728
+        },
+        {
+          "resident_tok_s": 76.16424865083133,
+          "gpu_tok_s": 78.32651985282651,
+          "encode_ms": 65.907625,
+          "prepare_ms": 0.050479,
+          "inference_ms": 2323.6063639999998,
+          "readback_ms": 0.008110000000000001,
+          "allocated_bytes": 19010670604,
+          "uploaded_bytes": 0
+        }
+      ]
+    }
+  ],
+  "native_results": [
+    {
+      "questions": [
+        {
+          "question_id": "status",
+          "option_ids": [
+            "overdue",
+            "paid"
+          ],
+          "logits": [
+            1.3584213,
+            -2.9368565
+          ],
+          "probabilities": [
+            0.98655057,
+            0.013449433
+          ]
+        },
+        {
+          "question_id": "late",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            1.4080616,
+            -2.850493
+          ],
+          "probabilities": [
+            0.9860545,
+            0.013945503
+          ]
+        },
+        {
+          "question_id": "urgency",
+          "option_ids": [
+            "0",
+            "1"
+          ],
+          "logits": [
+            -2.4150116,
+            1.3081244
+          ],
+          "probabilities": [
+            0.023588242,
+            0.9764117
+          ]
+        }
+      ],
+      "input_tokens": 258,
+      "timings": {
+        "encode_ms": 8.742282000000001,
+        "prepare_ms": 324.001339,
+        "inference_ms": 3149.076301,
+        "readback_ms": 0.007220000000000001,
+        "allocated_bytes": 18957132300,
+        "uploaded_bytes": 1508508
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "status",
+          "option_ids": [
+            "overdue",
+            "paid"
+          ],
+          "logits": [
+            1.3584213,
+            -2.9368565
+          ],
+          "probabilities": [
+            0.98655057,
+            0.013449433
+          ]
+        },
+        {
+          "question_id": "late",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            1.4080616,
+            -2.850493
+          ],
+          "probabilities": [
+            0.9860545,
+            0.013945503
+          ]
+        },
+        {
+          "question_id": "urgency",
+          "option_ids": [
+            "0",
+            "1"
+          ],
+          "logits": [
+            -2.4150116,
+            1.3081244
+          ],
+          "probabilities": [
+            0.023588242,
+            0.9764117
+          ]
+        }
+      ],
+      "input_tokens": 258,
+      "timings": {
+        "encode_ms": 0.6161129999999999,
+        "prepare_ms": 0.01274,
+        "inference_ms": 3239.79999,
+        "readback_ms": 0.008949,
+        "allocated_bytes": 18957132300,
+        "uploaded_bytes": 0
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "red",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            1.9732919,
+            -2.1884015
+          ],
+          "probabilities": [
+            0.98465794,
+            0.0153421005
+          ]
+        }
+      ],
+      "input_tokens": 216,
+      "timings": {
+        "encode_ms": 2.892591,
+        "prepare_ms": 329.08905,
+        "inference_ms": 2806.580053,
+        "readback_ms": 0.00812,
+        "allocated_bytes": 18960920588,
+        "uploaded_bytes": 2173236
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "red",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            1.9732919,
+            -2.1884015
+          ],
+          "probabilities": [
+            0.98465794,
+            0.0153421005
+          ]
+        }
+      ],
+      "input_tokens": 216,
+      "timings": {
+        "encode_ms": 1.2750759999999999,
+        "prepare_ms": 0.72221,
+        "inference_ms": 2888.035504,
+        "readback_ms": 0.00966,
+        "allocated_bytes": 18960920588,
+        "uploaded_bytes": 0
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "changes",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            0.6036799,
+            0.8111714
+          ],
+          "probabilities": [
+            0.44831243,
+            0.55168754
+          ]
+        }
+      ],
+      "input_tokens": 573,
+      "timings": {
+        "encode_ms": 164.00411400000002,
+        "prepare_ms": 432.399486,
+        "inference_ms": 7653.616218,
+        "readback_ms": 0.00812,
+        "allocated_bytes": 19010523148,
+        "uploaded_bytes": 8446516
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "changes",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            0.6036799,
+            0.8111714
+          ],
+          "probabilities": [
+            0.44831243,
+            0.55168754
+          ]
+        }
+      ],
+      "input_tokens": 573,
+      "timings": {
+        "encode_ms": 93.27022,
+        "prepare_ms": 4.3328120000000006,
+        "inference_ms": 7647.899942999999,
+        "readback_ms": 0.00758,
+        "allocated_bytes": 19010523148,
+        "uploaded_bytes": 0
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "sound",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            2.2249193,
+            -1.5643048
+          ],
+          "probabilities": [
+            0.97788686,
+            0.022113092
+          ]
+        }
+      ],
+      "input_tokens": 160,
+      "timings": {
+        "encode_ms": 70.615757,
+        "prepare_ms": 1228.479757,
+        "inference_ms": 2044.916303,
+        "readback_ms": 0.00716,
+        "allocated_bytes": 19010523148,
+        "uploaded_bytes": 1002548
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "sound",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            2.2249193,
+            -1.5643048
+          ],
+          "probabilities": [
+            0.97788686,
+            0.022113092
+          ]
+        }
+      ],
+      "input_tokens": 160,
+      "timings": {
+        "encode_ms": 61.452987,
+        "prepare_ms": 0.03073,
+        "inference_ms": 2038.729251,
+        "readback_ms": 0.008969,
+        "allocated_bytes": 19010523148,
+        "uploaded_bytes": 0
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "sound",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            1.7688025,
+            0.1846304
+          ],
+          "probabilities": [
+            0.8297945,
+            0.17020541
+          ]
+        }
+      ],
+      "input_tokens": 306,
+      "timings": {
+        "encode_ms": 119.515805,
+        "prepare_ms": 466.220903,
+        "inference_ms": 3982.1851439999996,
+        "readback_ms": 0.008579999999999999,
+        "allocated_bytes": 19010670604,
+        "uploaded_bytes": 3794996
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "sound",
+          "option_ids": [
+            "true",
+            "false"
+          ],
+          "logits": [
+            1.7688025,
+            0.1846304
+          ],
+          "probabilities": [
+            0.8297945,
+            0.17020541
+          ]
+        }
+      ],
+      "input_tokens": 306,
+      "timings": {
+        "encode_ms": 107.207721,
+        "prepare_ms": 1.629256,
+        "inference_ms": 3996.772124,
+        "readback_ms": 0.008709999999999999,
+        "allocated_bytes": 19010670604,
+        "uploaded_bytes": 0
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "color",
+          "option_ids": [
+            "blue",
+            "green",
+            "red"
+          ],
+          "logits": [
+            1.1727105,
+            -2.5642078,
+            -2.5277362
+          ],
+          "probabilities": [
+            0.95370716,
+            0.022724377,
+            0.023568477
+          ]
+        }
+      ],
+      "input_tokens": 226,
+      "timings": {
+        "encode_ms": 1.8648200000000001,
+        "prepare_ms": 3589.353907,
+        "inference_ms": 2906.9633489999997,
+        "readback_ms": 0.00736,
+        "allocated_bytes": 19010670604,
+        "uploaded_bytes": 2297800
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "color",
+          "option_ids": [
+            "blue",
+            "green",
+            "red"
+          ],
+          "logits": [
+            1.1727105,
+            -2.5642078,
+            -2.5277362
+          ],
+          "probabilities": [
+            0.95370716,
+            0.022724377,
+            0.023568477
+          ]
+        }
+      ],
+      "input_tokens": 226,
+      "timings": {
+        "encode_ms": 1.46054,
+        "prepare_ms": 0.777339,
+        "inference_ms": 2909.428771,
+        "readback_ms": 0.00791,
+        "allocated_bytes": 19010670604,
+        "uploaded_bytes": 0
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "word",
+          "option_ids": [
+            "banana",
+            "cactus",
+            "elephant"
+          ],
+          "logits": [
+            0.79228854,
+            -2.942784,
+            -2.7766252
+          ],
+          "probabilities": [
+            0.9505181,
+            0.022690231,
+            0.026791735
+          ]
+        }
+      ],
+      "input_tokens": 182,
+      "timings": {
+        "encode_ms": 75.40967599999999,
+        "prepare_ms": 760.4448590000001,
+        "inference_ms": 2324.262577,
+        "readback_ms": 0.00852,
+        "allocated_bytes": 19010670604,
+        "uploaded_bytes": 1158728
+      }
+    },
+    {
+      "questions": [
+        {
+          "question_id": "word",
+          "option_ids": [
+            "banana",
+            "cactus",
+            "elephant"
+          ],
+          "logits": [
+            0.79228854,
+            -2.942784,
+            -2.7766252
+          ],
+          "probabilities": [
+            0.9505181,
+            0.022690231,
+            0.026791735
+          ]
+        }
+      ],
+      "input_tokens": 182,
+      "timings": {
+        "encode_ms": 65.907625,
+        "prepare_ms": 0.050479,
+        "inference_ms": 2323.6063639999998,
+        "readback_ms": 0.008110000000000001,
+        "allocated_bytes": 19010670604,
+        "uploaded_bytes": 0
+      }
+    }
+  ],
+  "bf16_streaming_validation": {
+    "binary_sha256": "fdf7be2a571cc51609fdbb61ac576241ca59d0380173122a9f44d24c1f1b371b",
+    "shared_gpu": true,
+    "memory_budget_gib": 8,
+    "minimum_available_gib": 76.83646011352539,
+    "maximum_additional_swap_gib": 0.0,
+    "cases": {
+      "0": {
+        "input_tokens": 258,
+        "questions": [
+          {
+            "question_id": "status",
+            "option_ids": [
+              "overdue",
+              "paid"
+            ],
+            "logits": [
+              1.2033038,
+              -2.9052231
+            ],
+            "probabilities": [
+              0.98383373,
+              0.016166314
+            ]
+          },
+          {
+            "question_id": "late",
+            "option_ids": [
+              "true",
+              "false"
+            ],
+            "logits": [
+              1.3862786,
+              -2.7777367
+            ],
+            "probabilities": [
+              0.98469293,
+              0.015307066
+            ]
+          },
+          {
+            "question_id": "urgency",
+            "option_ids": [
+              "0",
+              "1"
+            ],
+            "logits": [
+              -2.8468833,
+              1.3644944
+            ],
+            "probabilities": [
+              0.014609333,
+              0.98539066
+            ]
+          }
+        ],
+        "max_probability_error": 0.000815272331237793,
+        "argmax_differences": [],
+        "peak_engine_bytes": 1283282432,
+        "elapsed_seconds_including_streaming": 108.300662519
+      },
+      "4": {
+        "input_tokens": 306,
+        "questions": [
+          {
+            "question_id": "sound",
+            "option_ids": [
+              "true",
+              "false"
+            ],
+            "logits": [
+              1.9582388,
+              -0.052416205
+            ],
+            "probabilities": [
+              0.8819112,
+              0.11808875
+            ]
+          }
+        ],
+        "max_probability_error": 0.002764478325843811,
+        "argmax_differences": [],
+        "peak_engine_bytes": 2422337760,
+        "elapsed_seconds_including_streaming": 106.542148264
+      }
+    }
+  },
+  "resident_bf16_status": "Stopped by memory guard before inference; no throughput result."
+}

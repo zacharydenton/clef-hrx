@@ -316,6 +316,9 @@ fn paired_attention(c: &mut Criterion) {
     let shape = match model {
         clef_hrx::ModelVariant::Clef => "causal_24q_4kv_d256",
         clef_hrx::ModelVariant::ClefFlash => "causal_16q_4kv_d256",
+        clef_hrx::ModelVariant::ClefOmni => {
+            panic!("paired_attention requires a 256-wide attention head")
+        }
     };
     let reference_source = std::env::var_os("CLEF_BENCH_ATTENTION_REFERENCE_SOURCE")
         .map(|path| std::fs::read_to_string(path).unwrap());

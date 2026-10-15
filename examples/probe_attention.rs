@@ -33,6 +33,9 @@ fn main() -> Result<()> {
         let heads = match a.model {
             clef_hrx::ModelVariant::Clef => 24,
             clef_hrx::ModelVariant::ClefFlash => 16,
+            clef_hrx::ModelVariant::ClefOmni => {
+                anyhow::bail!("this probe requires a 256-wide CLEF attention head")
+            }
         };
         let heads_text = heads.to_string();
         let ratio = (heads / 4).to_string();

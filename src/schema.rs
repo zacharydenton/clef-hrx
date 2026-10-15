@@ -86,6 +86,8 @@ pub struct Request {
     #[serde(default)]
     pub videos: Vec<String>,
     #[serde(default)]
+    pub audio: Vec<String>,
+    #[serde(default)]
     pub media_kwargs: crate::media::MediaOptions,
 }
 impl Request {

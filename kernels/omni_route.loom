@@ -1,0 +1,95 @@
+// CLEF Omni native operator. Numeric shapes are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.experts : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.topk : %value: index where [range(%value, 0, 4294967295)]
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %c32 = index.constant 32 : index
+ %c8 = index.constant 8 : index
+ %c16 = index.constant 16 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %x_len = config.get @clef.x_len : index
+ %x_dtype = config.get @clef.x_dtype : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %experts = config.get @clef.experts : index
+ %topk = config.get @clef.topk : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+ %outv = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xf32>
+ %xb = index.mul %id, %experts : index
+ %stride = index.mul %topk, %c8 : index
+ %two = index.constant 2 : index
+ %width = index.mul %topk, %two : index
+ %ob = index.mul %id, %width : index
+ %neg = scalar.constant -3.402823466e38 : f32
+ scf.for %rank = [%zero to %topk step %one] {
+  %best, %best_id = scf.for %e = [%zero to %experts step %one](%bv = %neg : f32, %bi = %zero : index) -> (f32, index) {
+   %used = scf.for %j = [%zero to %rank step %one](%u = %zero : index) -> (index) {
+    %at = index.add %ob, %j : index
+    %oldf = view.load %outv[%at] : view<[%out_len]xf32> -> f32
+    %oldi = scalar.fptosi %oldf : f32 to i32
+    %old = index.cast %oldi : i32 to index
+    %same = index.cmp eq, %old, %e : index
+    %next = scf.select %same, %one, %u : index
+    scf.yield %next : index
+   }
+   %at = index.add %xb, %e : index
+   %v = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at) : (index, buffer, index, index) -> (f32)
+   %free = index.cmp eq, %used, %zero : index
+   %better = scalar.cmpf ogt, %v, %bv : f32
+   %take = scalar.andi %free, %better : i1
+   %nv = scf.select %take, %v, %bv : f32
+   %ni = scf.select %take, %e, %bi : index
+   scf.yield %nv, %ni : f32, index
+  }
+  %at = index.add %ob, %rank : index
+  %eid = index.cast %best_id : index to i32
+  %ef = scalar.sitofp %eid : i32 to f32
+  view.store %ef, %outv[%at] : f32, view<[%out_len]xf32>
+  %pa = index.add %at, %topk : index
+  view.store %best, %outv[%pa] : f32, view<[%out_len]xf32>
+ }
+ %pb = index.add %ob, %topk : index
+ %max = view.load %outv[%pb] : view<[%out_len]xf32> -> f32
+ %sum = scf.for %j = [%zero to %topk step %one](%acc = %fzero : f32) -> (f32) {
+  %at = index.add %pb, %j : index
+  %v = view.load %outv[%at] : view<[%out_len]xf32> -> f32
+  %d = scalar.subf %v, %max : f32
+  %p = scalar.expf<afn> %d : f32
+  view.store %p, %outv[%at] : f32, view<[%out_len]xf32>
+  %next = scalar.addf %acc, %p : f32
+  scf.yield %next : f32
+ }
+ scf.for %j = [%zero to %topk step %one] {
+  %at = index.add %pb, %j : index
+  %v = view.load %outv[%at] : view<[%out_len]xf32> -> f32
+  %p = scalar.divf %v, %sum : f32
+  %rounded = scalar.fptrunc %p : f32 to bf16
+  %pf = scalar.extf %rounded : bf16 to f32
+  view.store %pf, %outv[%at] : f32, view<[%out_len]xf32>
+ }
+
+ }
+ kernel.return
+}

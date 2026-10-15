@@ -1,12 +1,14 @@
 # clef-hrx
 
-[Cloudflare CLEF](https://huggingface.co/Cloudflare/clef) and
-[CLEF Flash](https://huggingface.co/Cloudflare/clef-flash) inference in Rust for
-AMD Strix Halo. The text backbone, vision encoder and decision head run as
+[Cloudflare CLEF](https://huggingface.co/Cloudflare/clef),
+[CLEF Flash](https://huggingface.co/Cloudflare/clef-flash), and
+[CLEF Omni](https://huggingface.co/Cloudflare/clef-omni) inference in Rust for
+AMD Strix Halo. The text backbone, media encoders and decision head run as
 [Loom](https://github.com/ROCm/hrx-system) kernels through
 [HRX](https://github.com/zacharydenton/hrx-rs).
 
-CLEF answers structured questions about text, images and video:
+CLEF answers structured questions about text, images and video. Omni also handles
+audio and video soundtracks:
 
 | Question type | Output |
 | --- | --- |
@@ -17,7 +19,7 @@ CLEF answers structured questions about text, images and video:
 ## Build and run
 
 Requires Rust 1.91+, Linux and a `gfx1151` GPU. Original CLEF BF16 needs at least 50 GiB of
-available RAM for short requests. Video input needs ffmpeg and ffprobe.
+available RAM for short requests. Audio and video input need ffmpeg and ffprobe.
 
 ```sh
 git clone https://github.com/zacharydenton/clef-hrx.git
@@ -48,7 +50,8 @@ requests, keep the model loaded and pass newline-delimited JSON:
 ./target/release/clef --max-length 1536 decide requests.jsonl --jsonl
 ```
 
-Select Flash with `--model clef-flash`; original CLEF remains the default.
+Select Flash with `--model clef-flash` or Omni with `--model clef-omni`;
+original CLEF remains the default. [Omni usage and verification](docs/clef-omni.md).
 Use `--model-dir PATH` for a local snapshot or `--offline` for cached files.
 First use downloads weights and creates a tiled projection cache alongside them.
 Existing converted checkpoints remain readable.

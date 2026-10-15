@@ -1,0 +1,18 @@
+{
+  "model": "clef-omni",
+  "state": "Listen to the recording.",
+  "audio": [
+    "tests/fixtures/omni/speech.wav"
+  ],
+  "questions": {
+    "word": {
+      "type": "choice",
+      "instructions": "What is the secret word spoken in the recording?",
+      "criteria": {
+        "banana": "Banana",
+        "cactus": "Cactus",
+        "elephant": "Elephant"
+      }
+    }
+  }
+}

@@ -1,0 +1,154 @@
+// CLEF Omni native operator. Numeric shapes are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.xs_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.xs_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ws_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ws_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.k : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.topk : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.input_routed : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.bits : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.stride : %value: index where [range(%value, 0, 4294967295)]
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %w_buffer: buffer, %routes_buffer: buffer, %xs_buffer: buffer, %ws_buffer: buffer, %out_buffer: buffer) {
+ %zero = index.constant 0 : index
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %c32 = index.constant 32 : index
+ %c8 = index.constant 8 : index
+ %c16 = index.constant 16 : index
+ %offset = index.constant 0 : offset
+ %fzero = scalar.constant 0.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %lane = kernel.workitem.id<x> : index
+ %base = index.mul %wg, %threads : index
+ %id = index.add %base, %lane : index
+ %count = config.get @clef.work : index
+ %x_len = config.get @clef.x_len : index
+ %x_dtype = config.get @clef.x_dtype : index
+ %w_len = config.get @clef.w_len : index
+ %w_dtype = config.get @clef.w_dtype : index
+ %routes_len = config.get @clef.routes_len : index
+ %routes_dtype = config.get @clef.routes_dtype : index
+ %xs_len = config.get @clef.xs_len : index
+ %xs_dtype = config.get @clef.xs_dtype : index
+ %ws_len = config.get @clef.ws_len : index
+ %ws_dtype = config.get @clef.ws_dtype : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %k = config.get @clef.k : index
+ %n = config.get @clef.n : index
+ %topk = config.get @clef.topk : index
+ %input_routed = config.get @clef.input_routed : index
+ %bits = config.get @clef.bits : index
+ %stride = config.get @clef.stride : index
+ %active = index.cmp ult, %id, %count : index
+ scf.if %active {
+
+ %wave = index.div %id, %c32 : index
+ %ll = index.rem %id, %c32 : index
+ %route = index.div %wave, %n : index
+ %col = index.rem %wave, %n : index
+ %token = index.div %route, %topk : index
+ %rank = index.rem %route, %topk : index
+ %two = index.constant 2 : index
+ %rw = index.mul %topk, %two : index
+ %rb = index.mul %token, %rw : index
+ %ri = index.add %rb, %rank : index
+ %ef = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %ri) : (index, buffer, index, index) -> (f32)
+ %ei = scalar.fptosi %ef : f32 to i32
+ %expert0 = index.cast %ei : i32 to index
+ %expert = index.assume %expert0 [range(%expert0, 0, 127)] : index
+ %er = index.mul %expert, %n : index
+ %wr = index.add %er, %col : index
+ %expanded = index.cmp ne, %input_routed, %zero : index
+ %xr = scf.select %expanded, %route, %token : index
+ %quant = index.cmp ne, %bits, %zero : index
+ %c64 = index.constant 64 : index
+ %c128 = index.constant 128 : index
+ %c256 = index.constant 256 : index
+ %c4096 = index.constant 4096 : index
+ %dot = scf.for %j = [%ll to %k step %c32](%acc = %fzero : f32) -> (f32) {
+  %a, %b = scf.if %quant -> (f32, f32) {
+   %xbase = index.mul %xr, %stride : index
+   %xelement = index.add %xbase, %j : index
+   %xword = index.div %xelement, %c8 : index
+   %wordcol = index.div %j, %c8 : index
+   %blocks = index.div %k, %c256 : index
+   %blockrow = index.div %wr, %c128 : index
+   %blockcol = index.div %wordcol, %c32 : index
+   %blockbase = index.mul %blockrow, %blocks : index
+   %block = index.add %blockbase, %blockcol : index
+   %start = index.mul %block, %c4096 : index
+   %rowlocal = index.rem %wr, %c128 : index
+   %rowoffset = index.mul %rowlocal, %c32 : index
+   %wordlocal = index.rem %wordcol, %c32 : index
+   %at0 = index.add %start, %rowoffset : index
+   %wword = index.add %at0, %wordlocal : index
+   %av = template.apply<@clef.load_u32>(%x_buffer, %x_len, %xword) : (buffer, index, index) -> (i32)
+   %wv = template.apply<@clef.load_u32>(%w_buffer, %w_len, %wword) : (buffer, index, index) -> (i32)
+   %part = index.rem %j, %c8 : index
+   %c4 = index.constant 4 : index
+   %sh = index.mul %part, %c4 : index
+   %shi = index.cast %sh : index to i32
+   %i28 = scalar.constant 28 : i32
+   %left = scalar.subi %i28, %shi : i32
+   %al = scalar.shli %av, %left : i32
+   %wl = scalar.shli %wv, %left : i32
+   %ai = scalar.shrsi %al, %i28 : i32
+   %wi = scalar.shrsi %wl, %i28 : i32
+   %af = scalar.sitofp %ai : i32 to f32
+   %wf = scalar.sitofp %wi : i32 to f32
+   scf.yield %af, %wf : f32, f32
+  } else {
+   %xb = index.mul %xr, %k : index
+   %xa = index.add %xb, %j : index
+   %tr = index.div %wr, %c256 : index
+   %tk = index.div %j, %c64 : index
+   %ks = index.div %k, %c64 : index
+   %tile0 = index.mul %tr, %ks : index
+   %tile = index.add %tile0, %tk : index
+   %tl = index.mul %tile, %c256 : index
+   %rr = index.rem %wr, %c256 : index
+   %r0 = index.add %tl, %rr : index
+   %r1 = index.mul %r0, %c64 : index
+   %kc = index.rem %j, %c64 : index
+   %wa = index.add %r1, %kc : index
+   %af = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %xa) : (index, buffer, index, index) -> (f32)
+   %wf = template.apply<@clef.load>(%w_dtype, %w_buffer, %w_len, %wa) : (index, buffer, index, index) -> (f32)
+   scf.yield %af, %wf : f32, f32
+  }
+  %next = scalar.fmaf %a, %b, %acc : f32
+  scf.yield %next : f32
+ }
+ %sum = kernel.subgroup.reduce<addf> %dot : f32
+ %value = scf.if %quant -> (f32) {
+  %as = template.apply<@clef.load>(%xs_dtype, %xs_buffer, %xs_len, %xr) : (index, buffer, index, index) -> (f32)
+  %ws = template.apply<@clef.load>(%ws_dtype, %ws_buffer, %ws_len, %wr) : (index, buffer, index, index) -> (f32)
+  %s = scalar.mulf %as, %ws : f32
+  %v = scalar.mulf %sum, %s : f32
+  scf.yield %v : f32
+ } else { scf.yield %sum : f32 }
+ %leader = index.cmp eq, %ll, %zero : index
+ scf.if %leader {
+  template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %wave, %value) : (index, buffer, index, index, f32) -> ()
+ }
+
+ }
+ kernel.return
+}

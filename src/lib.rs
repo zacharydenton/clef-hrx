@@ -1,5 +1,6 @@
 //! Native CLEF inference. The model release is pinned; requests use the
 //! release's schema encoding and SystemOne answer contract.
+pub mod audio;
 mod backbone;
 pub mod checkpoint;
 mod chunk;
@@ -11,6 +12,8 @@ mod kernel_cache;
 pub mod media;
 mod memory;
 pub mod model;
+mod omni;
+pub mod omni_media;
 mod ops;
 mod quantized;
 pub mod schema;

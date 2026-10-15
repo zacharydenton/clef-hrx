@@ -83,7 +83,7 @@ impl Engine {
             anchors.rows == fields.rows
                 && lexical.rows == fields.rows
                 && anchors.cols == lexical.cols
-                && [4096, 5120].contains(&anchors.cols),
+                && [2048, 4096, 5120].contains(&anchors.cols),
             "decision prior shape"
         );
         let ps = self.w("head.prior_logit_scale")?;

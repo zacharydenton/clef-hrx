@@ -1,0 +1,11 @@
+{
+  "model": "Cloudflare/clef-omni",
+  "revision": "0db1cd2607d76a7bdb2a382f659e7b313079f84b",
+  "release_code_sha256": "21d05ebb8cbea26a26af65eca3d16cf4b69bf80a320e2d5b203e86f0d632a670",
+  "torch": "2.14.0",
+  "transformers": "5.10.2",
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "attention": "sdpa",
+  "loading": "one block at a time; unchanged release forward"
+}

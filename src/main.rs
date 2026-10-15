@@ -107,7 +107,7 @@ fn main() -> Result<()> {
             let request = request(&input)?;
             request.validate()?;
             source.validate_config()?;
-            let encoder = Encoder::load(source.resolve("tokenizer.json")?)?;
+            let encoder = Encoder::load_for_model(source.resolve("tokenizer.json")?, source.model)?;
             println!(
                 "{}",
                 serde_json::to_string(&encoder.encode_record(&request, encoding)?)?

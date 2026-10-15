@@ -78,12 +78,13 @@ fn position_embedding(e: &mut Engine, h: usize, w: usize) -> Result<Tensor> {
     )?;
     Ok(out)
 }
-pub(crate) fn forward(e: &mut Engine, item: &VisualItem) -> Result<Tensor> {
+pub(crate) fn forward_all(e: &mut Engine, item: &VisualItem) -> Result<(Tensor, Vec<Tensor>)> {
     let [t, h, w] = item.grid;
     let n = h * w;
     let pos = position_embedding(e, h, w)?;
     let cs = e.input(n, 144, DType::F32, bytemuck::cast_slice(&rope(h, w)))?;
     let mut outputs = Vec::new();
+    let mut intermediate: Vec<Vec<Tensor>> = vec![Vec::new(); 3];
     for frame in 0..t {
         let pixels: Vec<_> = item.patches[frame * n * 1536..(frame + 1) * n * 1536]
             .iter()
@@ -109,6 +110,20 @@ pub(crate) fn forward(e: &mut Engine, item: &VisualItem) -> Result<Tensor> {
             let f = e.unary(&f, "gelu_tanh")?;
             let f = e.project(&f, &format!("{p}.mlp.linear_fc2"), true)?;
             x = e.binary(&x, &f, "addf")?;
+            if e.architecture.is_omni()
+                && let Some(j) = [8, 16, 24].iter().position(|&layer| layer == i)
+            {
+                intermediate[j].push(omni_merger(
+                    e,
+                    &x,
+                    &format!("model.visual.merger_list.{j}"),
+                    true,
+                )?);
+            }
+        }
+        if e.architecture.is_omni() {
+            outputs.push(omni_merger(e, &x, "model.visual.merger", false)?);
+            continue;
         }
         let x = e
             .named_norm(&x, "model.visual.merger.norm", true, 1e-6)?
@@ -117,7 +132,25 @@ pub(crate) fn forward(e: &mut Engine, item: &VisualItem) -> Result<Tensor> {
         let x = e.unary(&x, "gelu")?;
         outputs.push(e.project(&x, "model.visual.merger.linear_fc2", true)?);
     }
-    e.cat_rows(&outputs)
+    let outputs = e.cat_rows(&outputs)?;
+    let intermediate = intermediate
+        .into_iter()
+        .filter(|items| !items.is_empty())
+        .map(|items| e.cat_rows(&items))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((outputs, intermediate))
+}
+fn omni_merger(e: &mut Engine, x: &Tensor, prefix: &str, postshuffle: bool) -> Result<Tensor> {
+    let x = if postshuffle {
+        x.reshape(x.rows / 4, 4608)
+    } else {
+        x.clone()
+    };
+    let x = e.named_norm(&x, &format!("{prefix}.ln_q"), true, 1e-6)?;
+    let x = x.reshape(x.len() / 4608, 4608);
+    let x = e.project(&x, &format!("{prefix}.mlp.0"), true)?;
+    let x = e.unary(&x, "gelu")?;
+    e.project(&x, &format!("{prefix}.mlp.2"), true)
 }
 
 #[cfg(test)]

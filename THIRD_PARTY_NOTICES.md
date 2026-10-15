@@ -6,6 +6,9 @@
 - Cloudflare CLEF Flash release (`8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3`), Apache-2.0.
   Configurations, tensor metadata and shard index under `reference/clef-flash/`
   come from https://huggingface.co/Cloudflare/clef-flash/tree/8b2e5fd17c09fd49bc2880b805d5323ec7ff4ff3.
+- Cloudflare CLEF Omni release (`0db1cd2607d76a7bdb2a382f659e7b313079f84b`), Apache-2.0.
+  Configurations, tensor metadata and shard index under `reference/clef-omni/`
+  come from https://huggingface.co/Cloudflare/clef-omni/tree/0db1cd2607d76a7bdb2a382f659e7b313079f84b.
 - The architecture and processor behavior follow Hugging Face Transformers
   v5.10.2 (Apache-2.0), https://github.com/huggingface/transformers/tree/v5.10.2/src/transformers.
   Captured numerical fixtures record the reference versions used; no Python

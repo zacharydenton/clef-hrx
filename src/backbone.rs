@@ -119,6 +119,10 @@ impl Engine {
                 include_str!("../kernels/common.loom"),
                 include_str!("../kernels/attention_72.loom")
             ),
+            128 => concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/attention_128.loom")
+            ),
             256 => concat!(
                 include_str!("../kernels/common.loom"),
                 include_str!("../kernels/attention_256.loom")
@@ -273,10 +277,17 @@ impl Engine {
         );
         let out = self.alloc(x.rows, x.cols, x.dtype)?;
         self.dispatch(
-            concat!(
-                include_str!("../kernels/common.loom"),
-                include_str!("../kernels/rope.loom")
-            ),
+            if self.architecture.is_omni() && rotary == 128 {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/omni_rope.loom")
+                )
+            } else {
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/rope.loom")
+                )
+            },
             out.len(),
             &[("x", x), ("cs", cs)],
             &out,
@@ -772,7 +783,11 @@ mod tests {
     #[test]
     fn shared_attention_stays_within_qualified_model_precision_and_context() {
         use crate::{ModelVariant, Precision, quantized::QuantizedProjections};
-        for model in [ModelVariant::Clef, ModelVariant::ClefFlash] {
+        for model in [
+            ModelVariant::Clef,
+            ModelVariant::ClefFlash,
+            ModelVariant::ClefOmni,
+        ] {
             for precision in [Precision::Bf16, Precision::Int4Mlp, Precision::Int4] {
                 let quantized = QuantizedProjections::for_precision(precision);
                 let heads = model.architecture().attention_heads;
@@ -785,25 +800,27 @@ mod tests {
                         4,
                         true,
                     );
-                    let expected = if !(8192..=65536).contains(&tokens) {
-                        None
-                    } else {
-                        match (model, precision) {
-                            (_, Precision::Bf16) => Some(concat!(
-                                include_str!("../kernels/common.loom"),
-                                include_str!("../kernels/attention_shared_bf16.loom")
-                            )),
-                            (ModelVariant::ClefFlash, Precision::Int4) => Some(concat!(
-                                include_str!("../kernels/common.loom"),
-                                include_str!("../kernels/attention_shared_k16.loom")
-                            )),
-                            (ModelVariant::Clef, Precision::Int4) => Some(concat!(
-                                include_str!("../kernels/common.loom"),
-                                include_str!("../kernels/attention_shared_k16_scheduled.loom")
-                            )),
-                            (_, Precision::Int4Mlp) => None,
-                        }
-                    };
+                    let expected =
+                        if model == ModelVariant::ClefOmni || !(8192..=65536).contains(&tokens) {
+                            None
+                        } else {
+                            match (model, precision) {
+                                (_, Precision::Bf16) => Some(concat!(
+                                    include_str!("../kernels/common.loom"),
+                                    include_str!("../kernels/attention_shared_bf16.loom")
+                                )),
+                                (ModelVariant::ClefFlash, Precision::Int4) => Some(concat!(
+                                    include_str!("../kernels/common.loom"),
+                                    include_str!("../kernels/attention_shared_k16.loom")
+                                )),
+                                (ModelVariant::Clef, Precision::Int4) => Some(concat!(
+                                    include_str!("../kernels/common.loom"),
+                                    include_str!("../kernels/attention_shared_k16_scheduled.loom")
+                                )),
+                                (_, Precision::Int4Mlp)
+                                | (ModelVariant::ClefOmni, Precision::Int4) => None,
+                            }
+                        };
                     assert_eq!(selected, expected);
                 }
                 for (heads, kv_heads, causal) in
@@ -828,7 +845,11 @@ mod tests {
     #[test]
     fn long_vector_delta_stays_within_qualified_model_precision_and_context() {
         use crate::{ModelVariant, Precision, quantized::QuantizedProjections};
-        for model in [ModelVariant::Clef, ModelVariant::ClefFlash] {
+        for model in [
+            ModelVariant::Clef,
+            ModelVariant::ClefFlash,
+            ModelVariant::ClefOmni,
+        ] {
             for precision in [Precision::Bf16, Precision::Int4Mlp, Precision::Int4] {
                 let quantized = QuantizedProjections::for_precision(precision);
                 for tokens in [4032, 4033, 8192, 65536, 65537] {

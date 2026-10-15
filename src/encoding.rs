@@ -55,16 +55,20 @@ pub struct EncodedRecord {
 }
 pub struct Encoder {
     tokenizer: tokenizers::Tokenizer,
+    model: crate::ModelVariant,
 }
 impl Encoder {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        Self::load_for_model(path, crate::ModelVariant::Clef)
+    }
+    pub fn load_for_model(path: impl AsRef<Path>, model: crate::ModelVariant) -> Result<Self> {
         let mut tokenizer = tokenizers::Tokenizer::from_file(path)
             .map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
         tokenizer
             .with_truncation(None)
             .map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
         tokenizer.with_padding(None);
-        Ok(Self { tokenizer })
+        Ok(Self { tokenizer, model })
     }
     pub fn tokens(&self, text: &str) -> Result<Vec<u32>> {
         Ok(self
@@ -81,7 +85,11 @@ impl Encoder {
     ) -> Result<EncodedRecord> {
         options.validate()?;
         request.validate()?;
-        let media = crate::media::prepare_paths(request, options.max_length)?;
+        let media = if self.model == crate::ModelVariant::ClefOmni {
+            crate::omni_media::prepare(request, options.max_length)?
+        } else {
+            crate::media::prepare_paths(request, options.max_length)?
+        };
         self.encode_with_media(request, options, media)
     }
     pub fn encode_with_media(
@@ -121,6 +129,23 @@ impl Encoder {
             visual_tokens = visual_tokens
                 .checked_add(patches / 4)
                 .context("media token count overflow")?;
+        }
+        if let Some(omni) = &media.omni {
+            ensure!(
+                self.model == crate::ModelVariant::ClefOmni,
+                "Omni media requires CLEF Omni"
+            );
+            for audio in &omni.audio {
+                ensure!(
+                    audio.frames > 0
+                        && audio.frames.checked_mul(128) == Some(audio.mel.len())
+                        && audio.mel.iter().all(|x| x.is_finite()),
+                    "invalid audio mel tensor"
+                );
+                visual_tokens = visual_tokens
+                    .checked_add(audio.tokens())
+                    .context("media token count overflow")?;
+            }
         }
         ensure!(
             visual_tokens <= options.max_length,
@@ -173,7 +198,7 @@ impl Encoder {
             "<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\nSTATE:\n"
         ))?;
         let media_offset = prefix.len();
-        if !media.items.is_empty() {
+        if !media.prompt.is_empty() {
             let media_tokens = self.tokens(&media.prompt)?;
             media.bind_tokens(&media_tokens, media_offset)?;
             prefix.extend(media_tokens);

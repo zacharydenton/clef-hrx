@@ -1,0 +1,20 @@
+{
+  "model": "clef-omni",
+  "state": "Review this recording.",
+  "audio": ["recording.wav"],
+  "questions": {
+    "speech": {
+      "type": "noul",
+      "instructions": "Is someone speaking in the recording?"
+    },
+    "background": {
+      "type": "choice",
+      "instructions": "Which best describes the background sound?",
+      "criteria": {
+        "quiet": "Mostly quiet",
+        "music": "Music is audible",
+        "noise": "Other background noise is audible"
+      }
+    }
+  }
+}

@@ -48,6 +48,7 @@ pub fn tiled_projection(name: &str, rows: usize, cols: usize) -> bool {
         && cols.is_multiple_of(TILE_COLS)
         && name
             .strip_prefix("model.language_model.layers.")
+            .or_else(|| name.strip_prefix("thinker.model.layers."))
             .and_then(|rest| rest.strip_suffix(".weight"))
             .and_then(|rest| rest.rsplit('.').next())
             .is_some_and(|projection| PROJECTIONS.contains(&projection))
@@ -132,7 +133,10 @@ fn read_header(file: &mut std::fs::File) -> Result<(u64, serde_json::Map<String,
 /// way can only be loaded by binaries that understand the marker.
 pub fn ensure_tiled_shard(path: &Path) -> Result<bool> {
     let target = std::fs::canonicalize(path)?;
-    let mut file = std::fs::File::open(&target)?;
+    write_tiled_shard(&target, &target)
+}
+fn write_tiled_shard(source: &Path, target: &Path) -> Result<bool> {
+    let mut file = std::fs::File::open(source)?;
     let (header_len, mut header) = read_header(&mut file)?;
     let data_start = 8 + header_len;
     let metadata = header
@@ -214,7 +218,7 @@ pub fn ensure_tiled_shard(path: &Path) -> Result<bool> {
         let _ = std::fs::remove_file(&temporary);
         return Err(error).with_context(|| format!("converting {}", target.display()));
     }
-    std::fs::rename(&temporary, &target)
+    std::fs::rename(&temporary, target)
         .with_context(|| format!("replacing {}", target.display()))?;
     Ok(true)
 }
@@ -281,8 +285,9 @@ impl Source {
         validate_index(&index, self.model)?;
         let mut files: Vec<_> = index
             .weight_map
-            .values()
-            .cloned()
+            .iter()
+            .filter(|(name, _)| self.model.runtime_name(name).is_some())
+            .map(|(_, file)| file.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -306,12 +311,16 @@ impl Source {
         Ok(Inspection {
             model: self.model,
             revision: self.model.revision().into(),
-            architecture: "Qwen3_5 + JointSchemaHead".into(),
+            architecture: if self.model == ModelVariant::ClefOmni {
+                "Qwen3OmniMoe thinker + JointSchemaHead"
+            } else {
+                "Qwen3_5 + JointSchemaHead"
+            }
+            .into(),
             backbone_layers: self.model.architecture().layers,
             vision_layers: 27,
             weight_bytes: index.metadata.total_size + head_bytes as u64,
-            resident_weight_bytes: index.metadata.total_size + head_bytes as u64
-                - self.model.architecture().embedding_bytes(),
+            resident_weight_bytes: resident_weight_bytes(self.model, crate::Precision::Bf16)?,
             files,
             workspace_estimate_bytes: self
                 .model
@@ -345,6 +354,14 @@ pub(crate) fn resident_weight_bytes(
     for metadata in ["backbone_metadata.json", "joint_head_metadata.json"] {
         let tensors: BTreeMap<String, Meta> = serde_json::from_str(model.reference(metadata))?;
         for (name, tensor) in tensors {
+            let name = if metadata == "backbone_metadata.json" {
+                let Some(name) = model.runtime_name(&name) else {
+                    continue;
+                };
+                name
+            } else {
+                format!("head.{name}")
+            };
             if crate::embedding::TABLES.contains(&name.as_str()) {
                 continue;
             }
@@ -427,21 +444,23 @@ fn tiled_path(source: &Source, name: &str, path: &Path) -> Result<PathBuf> {
     if target.is_file() && std::fs::read_to_string(&receipt).ok().as_deref() == Some(&digest) {
         return Ok(target);
     }
-    let temporary = target.with_extension(format!("copy.{}", std::process::id()));
-    std::fs::copy(path, &temporary)?;
-    ensure_tiled_shard(&temporary)?;
-    std::fs::rename(&temporary, &target)?;
+    // Stream directly into the atomic derived output. Copying the entire raw
+    // shard first doubles disk writes and page-cache pressure for large models.
+    ensure!(
+        write_tiled_shard(path, &target)?,
+        "expected an untiled shard"
+    );
     std::fs::write(receipt, digest)?;
     Ok(target)
 }
 pub struct Checkpoint {
     files: Vec<FileView>,
-    tensors: BTreeMap<String, usize>,
+    tensors: BTreeMap<String, (usize, String)>,
 }
 impl Checkpoint {
     pub(crate) fn embedding_rows(&self, name: &str) -> Result<crate::embedding::EmbeddingRows> {
-        let i = *self.tensors.get(name).context("missing embedding tensor")?;
-        crate::embedding::EmbeddingRows::open(&self.files[i], name)
+        let (i, raw) = self.tensors.get(name).context("missing embedding tensor")?;
+        crate::embedding::EmbeddingRows::open(&self.files[*i], raw)
     }
     /// # Safety
     /// Checkpoint files must remain unchanged while this mapping is alive.
@@ -459,8 +478,9 @@ impl Checkpoint {
         };
         for name in index
             .weight_map
-            .values()
-            .cloned()
+            .iter()
+            .filter(|(name, _)| source.model.runtime_name(name).is_some())
+            .map(|(_, file)| file.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .chain(std::iter::once("joint_head.safetensors".into()))
@@ -486,41 +506,53 @@ impl Checkpoint {
                         "{key} in wrong shard"
                     );
                 }
+                let raw_name = key.clone();
                 let key = if is_head {
                     format!("head.{key}")
                 } else {
-                    key.clone()
+                    let Some(name) = source.model.runtime_name(key) else {
+                        continue;
+                    };
+                    name
                 };
                 ensure!(
-                    result.tensors.insert(key, result.files.len()).is_none(),
+                    result
+                        .tensors
+                        .insert(key, (result.files.len(), raw_name))
+                        .is_none(),
                     "duplicate tensor"
                 );
             }
             result.files.push(file);
         }
         ensure!(
-            result.tensors.len() == backbone.len() + head.len(),
+            result.tensors.len()
+                == backbone
+                    .keys()
+                    .filter(|name| source.model.runtime_name(name).is_some())
+                    .count()
+                    + head.len(),
             "missing checkpoint tensors"
         );
         Ok(result)
     }
     pub fn done_with(&self, name: &str) -> Result<()> {
-        let i = *self
+        let (i, _) = self
             .tensors
             .get(name)
             .with_context(|| format!("missing {name}"))?;
-        self.files[i].done_with(self.tensor(name)?);
+        self.files[*i].done_with(self.tensor(name)?);
         Ok(())
     }
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.tensors.keys().map(String::as_str)
     }
     pub fn tensor(&self, name: &str) -> Result<Tensor<'_>> {
-        let i = *self
+        let (i, raw) = self
             .tensors
             .get(name)
             .with_context(|| format!("missing {name}"))?;
-        Ok(self.files[i].get(name.strip_prefix("head.").unwrap_or(name))?)
+        Ok(self.files[*i].get(raw)?)
     }
 }
 

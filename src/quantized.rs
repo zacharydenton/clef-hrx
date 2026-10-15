@@ -11,12 +11,12 @@ use hrx::{Constants, loom::Specialization};
 
 #[derive(Clone)]
 pub(crate) struct QuantizedWeight {
-    codes: Tensor,
-    scales: Tensor,
-    rows: usize,
-    cols: usize,
-    stride: usize,
-    bits: usize,
+    pub(crate) codes: Tensor,
+    pub(crate) scales: Tensor,
+    pub(crate) rows: usize,
+    pub(crate) cols: usize,
+    pub(crate) stride: usize,
+    pub(crate) bits: usize,
 }
 
 #[derive(Default)]
@@ -109,7 +109,7 @@ impl QuantizedProjections {
             return self
                 .projections
                 .iter()
-                .any(|p| name.ends_with(&format!(".mlp.{p}_proj.weight")))
+                .any(|p| name.ends_with(&format!(".{p}_proj.weight")))
                 .then_some(self.bits.or(self.backbone_bits))
                 .flatten();
         }
