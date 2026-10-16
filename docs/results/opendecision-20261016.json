@@ -1,0 +1,6123 @@
+{
+  "provenance": {
+    "source_revision": "cbd0b50db42bba6975f342de1789fb3c8f2dc670",
+    "cases": 38,
+    "questions": 91,
+    "method": "One warmup then one measured call per example; sequential guarded runs; no truncation.",
+    "precision": "int4",
+    "models": {
+      "clef": {
+        "text": {
+          "correct": 2,
+          "scored": 2,
+          "tokens": 1429,
+          "resident_ms": 2827.909365,
+          "requests": 7,
+          "tok_s": 505.3202969254285
+        },
+        "images": {
+          "correct": 26,
+          "scored": 26,
+          "tokens": 8058,
+          "resident_ms": 21960.397902,
+          "requests": 11,
+          "tok_s": 366.9332421005966
+        },
+        "image_api": {
+          "correct": 0,
+          "scored": 0,
+          "tokens": 1368,
+          "resident_ms": 7114.646076999999,
+          "requests": 1,
+          "tok_s": 192.2794170215194
+        },
+        "gdpr": {
+          "correct": 10,
+          "scored": 10,
+          "tokens": 12358,
+          "resident_ms": 20562.958430000002,
+          "requests": 1,
+          "tok_s": 600.9835618774822
+        },
+        "insurance_oracle": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 4721,
+          "resident_ms": 10241.908588999999,
+          "requests": 17,
+          "tok_s": 460.949241928447
+        },
+        "insurance_document": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 6300,
+          "resident_ms": 10571.101665,
+          "requests": 1,
+          "tok_s": 595.9643752986269
+        }
+      },
+      "clef-flash": {
+        "text": {
+          "correct": 2,
+          "scored": 2,
+          "tokens": 1429,
+          "resident_ms": 910.7411079999999,
+          "requests": 7,
+          "tok_s": 1569.0518276243222
+        },
+        "images": {
+          "correct": 26,
+          "scored": 26,
+          "tokens": 8058,
+          "resident_ms": 15061.590208,
+          "requests": 11,
+          "tok_s": 535.0032691581248
+        },
+        "image_api": {
+          "correct": 0,
+          "scored": 0,
+          "tokens": 1368,
+          "resident_ms": 6965.3025880000005,
+          "requests": 1,
+          "tok_s": 196.40209204361415
+        },
+        "gdpr": {
+          "correct": 10,
+          "scored": 10,
+          "tokens": 12358,
+          "resident_ms": 6049.124428,
+          "requests": 1,
+          "tok_s": 2042.9402878204442
+        },
+        "insurance_oracle": {
+          "correct": 16,
+          "scored": 17,
+          "tokens": 4721,
+          "resident_ms": 3087.351413000001,
+          "requests": 17,
+          "tok_s": 1529.142416415944
+        },
+        "insurance_document": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 6300,
+          "resident_ms": 3493.3803070000004,
+          "requests": 1,
+          "tok_s": 1803.4108646505288
+        }
+      },
+      "clef-omni": {
+        "text": {
+          "correct": 2,
+          "scored": 2,
+          "tokens": 1405,
+          "resident_ms": 979.238703,
+          "requests": 7,
+          "tok_s": 1434.7880610678844
+        },
+        "images": {
+          "correct": 26,
+          "scored": 26,
+          "tokens": 7913,
+          "resident_ms": 14350.931238,
+          "requests": 11,
+          "tok_s": 551.3927889952587
+        },
+        "image_api": {
+          "correct": 0,
+          "scored": 0,
+          "tokens": 1271,
+          "resident_ms": 4357.008225,
+          "requests": 1,
+          "tok_s": 291.71393175416836
+        },
+        "gdpr": {
+          "correct": 10,
+          "scored": 10,
+          "tokens": 12357,
+          "resident_ms": 4412.170224,
+          "requests": 1,
+          "tok_s": 2800.6625702662373
+        },
+        "insurance_oracle": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 4636,
+          "resident_ms": 2154.8573509999997,
+          "requests": 17,
+          "tok_s": 2151.4185140137383
+        },
+        "insurance_document": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 6087,
+          "resident_ms": 1707.8431970000001,
+          "requests": 1,
+          "tok_s": 3564.1445366251614
+        }
+      }
+    },
+    "started": 1792121099.30401,
+    "source_files_sha256": {
+      "benchmarks/cases.jsonl": "84956ac51e83dc862d7f8ff80db4a3cff897b30a98eb8a8cd4cfc05f1becbf75",
+      "benchmarks/experiments/adjudicator_dev_ablation.py": "eb952a4d40354c646bc885915908bb4ca14949c6eb00d6361b7eb969842a2524",
+      "benchmarks/experiments/adjudicator_holdout_eval.py": "7f0cc31958fea507d826d9019c76e0a85891e25d64226d5e4344cb2b7090b0c8",
+      "benchmarks/experiments/analyze_ab_complementarity.py": "f6e7a92ba91eb7a853fcd1e04f4f0c4b0fb07dd87462dcc71c111d7e79daecf0",
+      "benchmarks/experiments/choice_factorial_ablation.py": "4e59e079e9e6b4e06c4be47ad084b1d6bc2939413ff5d54ece52d2386e28a591",
+      "benchmarks/experiments/holdout_universal_ab_eval.py": "28ce126d7252d1e54b0be64dd5af08a90d46950754018607c843a652ac01d915",
+      "benchmarks/gdpr_wiki/questions.py": "e53f3dfef40faa4f6daefa5cb941ef3fb5e4e7db6e0c5d9258634ebdcdb8139d",
+      "benchmarks/gdpr_wiki/run_retrieved.py": "9dc0656050ac82635e6db55da82120754965402153defa629cb87cf8fd685f27",
+      "benchmarks/gdpr_wiki/run_whole_document.py": "9227c4dcc6eedf277cebe2ad408834d6d33f86b5b05adc187560f10dd91e1f92",
+      "benchmarks/insurance_claim/atomic_cases.jsonl": "520ea475eb01dd0e4bc35290c195fbbbc530b7c81756c047d4e7f0b975b9abce",
+      "benchmarks/insurance_claim/decisions.json": "873579f056bb9805451af57ccfe462163874af5d1788e421c2aaeea044702bf8",
+      "benchmarks/insurance_claim/fact_cases.jsonl": "2385bf6af33c1bf879473ca539f5d44dccc454f4909ed9236e359df947833948",
+      "benchmarks/insurance_claim/run_atomic.py": "ff3fef0a6be3d96cbe6effff0864db7cf9fdd67ee2ffefc6064041c0207f6844",
+      "benchmarks/insurance_claim/run_decisions.py": "de08f0fad7f3111c515ed940c7158038b5722216768aa7387bde035f5b42ca20",
+      "benchmarks/insurance_claim/run_retrieval.py": "12fc2a5b09cf8cbe9d61e12ba6e8853c948771e6d406b01c698e88412d0d91ac",
+      "benchmarks/opendecision_original/cases.jsonl": "cd7372e594fce7a5464c3eb3edc73db45c309c8a67e7eef7daf78ec97288edeb",
+      "benchmarks/opendecision_original/dev.jsonl": "de92fc6bcb8a1e51bcfab479a4feb1a7300c82c292c6b27895f16ff1123b69cb",
+      "benchmarks/opendecision_original/holdout.jsonl": "5addda660a55f611216f46c971fbc64f50e1eb7a16b2dd62079550b0f8e51ad3",
+      "benchmarks/opendecision_original/manifest.json": "09af6443790582cf87d5fdb17c3b6f6e35eebb41c5aedf929ef8c310b8da7b20",
+      "benchmarks/results/gdpr_wiki_retrieved.json": "d542537fd43194839ca477d176649b1517942258a831aac9e66c8c043debad9f",
+      "benchmarks/results/gdpr_wiki_whole_document.json": "e8c488a1e37742cd39bb8b3b07efc210f689d325d535f8b38691577eb5440a70",
+      "benchmarks/results/insurance_claim_end_to_end_decisions.json": "307b4eb286015513678395af7b747bcb9ab28262fd5a2f1b62e071af7226e393",
+      "benchmarks/results/insurance_claim_facts_tasksource_nli.json": "f54a0309dc1baefd28f04328220cb51efc062ec558e35149db156b10a252f6ab",
+      "benchmarks/results/insurance_claim_retrieval.json": "ab7de98a6ef8dfad94b8c94d6239778be5374afb587c2328ee97bd1b561cc710",
+      "benchmarks/results/model_selection_2026-09-25.json": "5e3a813210a6431b766bb500717546ffd9d25359cb43415c44748e6f59021d64",
+      "benchmarks/results/modernbert_baseline_m4.txt": "0b2f3ee7226119bb9f247c30ff3c70fbe1fa78940910ba1266417f389745e555",
+      "benchmarks/results/modernbert_v0.1_typesafe_public_80.json": "f3eba6dab428786eb14995df3b07542efb7b2b848b9b7c56e98fdf7060601689",
+      "benchmarks/results/opendecision_adjudicator_dev_ablation.json": "7dd8e7fe28258a206d455089afc4d7589bc2d416adaed9c8dd9d2bc779b645fc",
+      "benchmarks/results/opendecision_adjudicator_holdout.json": "e7e598a2d72c3018f5d700296e74d7d06beae1ced4395b0d8ab2cc8a76792b1f",
+      "benchmarks/results/opendecision_original_dev_factorial.json": "2c68d03ca2cc468957b62b2e0e80883265bcfd52a4953e3e3b7fc040c26baf39",
+      "benchmarks/results/opendecision_original_holdout_universal_ab.json": "1055aa428d765213a7f95eb6c9a46cc098abcec11566a32d41ec141f4edc7ac8",
+      "benchmarks/results/opendecision_v0.1_production_holdout.json": "1060a6a80dd47b0488076985c70f3684542d62eb1914c39ac45c2072bee50541",
+      "benchmarks/results/opendecision_v0.1_typesafe_public.json": "74c9d06b6b969e2f0ee51c0e62fb4c43d64f302b2048f607eb5d085d03cb66d4",
+      "benchmarks/results/structured_claim_document_api.json": "06601fd792e949c0fd2088df933e87dc351389419627acb6c80ebafa0af35a87",
+      "benchmarks/results/template_ablation.json": "727b427eefed8b06c61c60eac4d8b0b85ee64dae6a9f5d11ad50c260e33d535c",
+      "benchmarks/run_eval.py": "5549a75ffd7be323793319152b2cfec7cc4984d899a9c96220f3fa4f262aa965",
+      "benchmarks/structured_claim/expected.json": "eaff4914fab73dcdea59c0937ce7bf21e404047444672e6a638c052bc172b9f1",
+      "benchmarks/structured_claim/request.json": "2af2dd38a25ef01d9014aadc2c6161115d97fa6a36e5f993c103052dcc0d664e",
+      "benchmarks/structured_claim/run_api.py": "c9546bf478b15f98880e9c264813c3c980a56fe819dd9c1b0946b21cbc929450",
+      "benchmarks/template_ablation.py": "0057620036133cc14fa01a3d28095d2e989233a907f8b67438de9bf74a55e103",
+      "benchmarks/typesafe_public/cases.jsonl": "e0c0c5959cdbb0575bbcdaf23d25b59ab47a4c69b817fff9582cadce3b5516db",
+      "demos/doom/__init__.py": "0fa2da4de165fbaf9d02a161259e1f3565326a7a28235e05af2b3863600e73ab",
+      "demos/doom/doom_demo.py": "90fb69d5847e32dc80fb11b64746b00a4a6a9ad542eb50dad996e94629ac0ae3",
+      "demos/doom/requirements.txt": "d4eaaa8ab712a02f266db7026dd055a261e00d4303ea90c2a8d6fae784377e64",
+      "demos/images/measure_latency.py": "b5b4f6664e39eb7908ea09f9cd776897d8d2fc93d97b399c18b265b69eb4fcee",
+      "demos/images/questions-baseline.json": "09fcf7445a971728694347e199d8149148d68de6a4d73caa6b1e664a46b13976",
+      "demos/images/questions.json": "39cc60438cc240bcf640c6a2a64f532bb3a0fd23feaf4096a4b57cdd783ae5a3",
+      "demos/images/render_report.py": "721f3f0702ef8dada4285381b18653c9cf7eea14fdd46d851b40681f06465a7f",
+      "demos/images/run.py": "3ab912a98f6fdedb28641eb995ee8808eb395486f5ce58f3a88cccca6aab9e40",
+      "docs/assets/images/bear.jpg": "88687dea4f57cf6a67e042ea8b9fc9acbe61771da861b3b2a6b186a8748c05d9",
+      "docs/assets/images/bird.jpg": "a842f9437aa1812d9e66d64850ba514b1cb4621a7d1dd238aa7613ab342e9950",
+      "docs/assets/images/bread.jpg": "87416bd1f0962230298dabe2f59b4437f388e7d722fcc25004d0be2cfa18ccf4",
+      "docs/assets/images/cat-patio.jpg": "da06330fa204ecf3db8f8c0beee24cace3bedd7573e0510de94d27220690a1ab",
+      "docs/assets/images/cat-window.jpg": "3bd42907b4b7827f94e638b64c5671161c7357eead04a2f4f453b0be9e6af5c0",
+      "docs/assets/images/damaged-fence.jpg": "8b9008e2738435120cc73026bbd2cf16e348138c9fee071f38782fd63016a2e7",
+      "docs/assets/images/moon.jpg": "f6a251d586e0e077ff55667d240eaec46773e4fd9424211e9fdd3dd27e8f4cc7",
+      "docs/assets/images/overflowing-bin.jpg": "4461f51cd13768a0b715a1d87f06baa5357996cade75c911113e09c4a44e767c",
+      "docs/assets/images/parked-cars.jpg": "981a6eb2604e4b16830f0b6999bc36ce3b71a6f28f87fdea027217eeb8b3a971",
+      "docs/assets/images/patio-animals.jpg": "3c667c9daea1d711dfb71ca0088b8b1daf4de7eb2549fba3dfad42b7d97361dc",
+      "docs/assets/images/wooded-stream.jpg": "346cb7927abac2b2e2777d1080ec6c7485fee012e3afd2ddd30db647f7f92ce8",
+      "examples/image_decisions.py": "6e0afcccfa65eba80b5a969b8114887d8ca992ef8e10ecac05d374771948c1d0",
+      "examples/m1_smoke_test.py": "165b16df40b5448aae6a283ed7899fd61b9e8d695a4677789aec783b3598f50b",
+      "examples/m1_smoke_test1.py": "58f55de8e83ac90de68a400be1808783a6dc959f2f41f058b0ade48574bb0ccf",
+      "examples/m3_typesafe_sdk_demo.py": "542510b0be74d3850850f8be22ac20e7d1a2e410a62f6c95465b73f97dec16c1",
+      "experiments/modernbert_baseline.py": "3aa43bbd680a921177fbf92725ded3a2ed59428bf56cd39fc76eb951391018f8",
+      "main.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/opendecision/__init__.py": "dd69f72f5cbb52d4ce20b88e62e686d6c74e644829e0cfe4cfc5b823522a905b",
+      "src/opendecision/__main__.py": "221f28043a69c5274b3c4e93a2bb606190e6f400dd007b57dbdda4157007c5d9",
+      "src/opendecision/api/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/opendecision/api/app.py": "1556eaa984e5c6c1b8cd1b1157e2f651a05c6ccae103b13e44e1a51fab0c7fcb",
+      "src/opendecision/api/schemas.py": "da19a483fe6a7bd5c39bcb52d68499464ed8f72e9d4f91fe93a8102f1726b0ee",
+      "src/opendecision/cli.py": "6edafe5a2ebca5668184bd179bf3608c8a4f65779c24ec71e18bcebc504ec871",
+      "src/opendecision/documents.py": "9c2fb93b68f3280b6b45d2f0e76c84d5f7b40e9e09d24cec848f3572f63205eb",
+      "src/opendecision/engine.py": "a3126c6929a038270716331884ea91fbc0889e2e7a06e56c000598d1c11d4d68",
+      "src/opendecision/evidence.py": "d49fb1091c0424d43d9dbd25bcd6d454ffc48b2c019dfc1a181e75d38ba54adc",
+      "src/opendecision/images.py": "d17ba0da9f4cb96a0f40fa20050ca92d22da306fe88a1157d01840aec26fd172",
+      "src/opendecision/rules.py": "c59c01a189fa6ff6cbca30d1b4bb45c2864728c66c273bb4f30bf61ff084b144",
+      "tests/GDPR_wiki_test.txt": "59533bef8a063a5dc70f4d862dffe5a4348f2ab45c1683c2a668404a2c028794",
+      "tests/sample_claim.txt": "4deaea2861871d120d71cae810f64b3e0456c28404fcec7f992e8a37cea9df54",
+      "tests/test_api.py": "ae4e20c797172007754e7a4c17db54dd8bd5db6afef66d4e8a022f9324c166c5",
+      "tests/test_claim_demo.py": "6d543650ab271b574f6e26f2a55a6edf6a820192a343c24beac8c343c2148d59",
+      "tests/test_cli.py": "196124e32dbe844275d47d209d887f035bf93207a66bf8bef9d9982274b36764",
+      "tests/test_documents.py": "ec70c1159dda4c268a2f40683d14412b1deaad973750c5e1d1ea93a56f463679",
+      "tests/test_doom_demo.py": "aeebb13cda83778536b879989096961cd8654dd251e93d968404bc53183a3c4b",
+      "tests/test_evidence_backend.py": "4d9fbb65fdcec9125c155d0ce47556a59780efbe19c743dac7f8d70db715facb",
+      "tests/test_image_demo.py": "d58133aab376d6f9db628de90ea3253896902e71e233e7f395cda22ebff793f4",
+      "tests/test_images.py": "2db85efe1376f10f6ead4a167803ad82a81c28a6f2a8e3c5570afa39bcf5ab18",
+      "tests/test_primitives.py": "97478f7091b2a8fc5a5ddf753e064744fc8725c5621de08e3bf5492d7e2cffa6",
+      "tests/test_rules.py": "f0671802f4114e35bb97a19d46ef7bb2625fd61dad7aa584db4499499460a440"
+    },
+    "implementation_revision": "a4c8345808b05e9fbf81c5477071a62df052b9b4",
+    "runner_sha256": "21fd1cfefd0fe1570430d9c340f7fd2565653fcb19359611aa29cf0e3022c59c",
+    "binary_sha256": "46bd5666c38576d6e02cf0a99ad95c402e1eb60b53d4c41c36f8615363d83de1",
+    "current_model": "clef-omni",
+    "command": [
+      "python3",
+      "scripts/memory_guard.py",
+      "--output",
+      "tests/results/opendecision-20261016/clef-omni-guard",
+      "--memory-gib",
+      "28",
+      "--",
+      "/home/zach/code/clef-hrx/tests/results/opendecision-20261016/clef-cache-loader",
+      "--model",
+      "clef-omni",
+      "--precision",
+      "int4",
+      "--memory-gib",
+      "28",
+      "--max-length",
+      "65536",
+      "--strict-context",
+      "--model-dir",
+      "artifacts/model-omni-tiled",
+      "decide",
+      "tests/results/opendecision-20261016/clef-omni-requests.jsonl",
+      "--jsonl",
+      "--raw"
+    ],
+    "state": "complete",
+    "finished": 1792121329.318811
+  },
+  "guards": {
+    "clef": {
+      "status": {
+        "state": "complete",
+        "pid": 3448633,
+        "command": [
+          "/home/zach/code/clef-hrx/tests/results/opendecision-20261016/clef-cache-loader",
+          "--model",
+          "clef",
+          "--precision",
+          "bf16",
+          "--memory-gib",
+          "70",
+          "--max-length",
+          "65536",
+          "--strict-context",
+          "--model-dir",
+          "artifacts/model",
+          "decide",
+          "tests/results/opendecision-20261016/clef-requests.jsonl",
+          "--jsonl",
+          "--raw"
+        ],
+        "started": 1792120715.2766228,
+        "memory_gib": 70,
+        "admission_gib": 102,
+        "reserve_gib": 24,
+        "maximum_additional_swap_gib": 1,
+        "guard_sha256": "21fe74fa58c70e8e45e77c01d4a6613cb696d7f489e04cf0a238f79ffa7a63a0",
+        "binary_sha256": "46bd5666c38576d6e02cf0a99ad95c402e1eb60b53d4c41c36f8615363d83de1",
+        "environment": {
+          "CLEF_BENCH_CHECKPOINT_DROP_CACHE": "1"
+        },
+        "before": {
+          "MemAvailable": 117851381760,
+          "SwapFree": 54946443264
+        },
+        "child": 3448651,
+        "returncode": 0,
+        "finished": 1792120969.5219123
+      },
+      "other_gpu_clients": [
+        "3447221",
+        "3455260",
+        "3455387"
+      ]
+    },
+    "clef-flash": {
+      "status": {
+        "state": "complete",
+        "pid": 3438275,
+        "command": [
+          "/home/zach/code/clef-hrx/tests/results/opendecision-20261016/clef",
+          "--model",
+          "clef-flash",
+          "--precision",
+          "bf16",
+          "--memory-gib",
+          "40",
+          "--max-length",
+          "65536",
+          "--strict-context",
+          "decide",
+          "tests/results/opendecision-20261016/clef-flash-requests.jsonl",
+          "--jsonl",
+          "--raw"
+        ],
+        "started": 1792120254.5322084,
+        "memory_gib": 40,
+        "admission_gib": 72,
+        "reserve_gib": 24,
+        "maximum_additional_swap_gib": 1,
+        "guard_sha256": "21fe74fa58c70e8e45e77c01d4a6613cb696d7f489e04cf0a238f79ffa7a63a0",
+        "binary_sha256": "458381d97715673afb38ac0967d2de8de0d5b0ec8aceea65059147f1cf5c4774",
+        "environment": {},
+        "before": {
+          "MemAvailable": 122703724544,
+          "SwapFree": 57085714432
+        },
+        "child": 3438282,
+        "returncode": 0,
+        "finished": 1792120386.7991216
+      },
+      "other_gpu_clients": [
+        "3439828"
+      ]
+    },
+    "clef-omni": {
+      "status": {
+        "state": "complete",
+        "pid": 3461844,
+        "command": [
+          "/home/zach/code/clef-hrx/tests/results/opendecision-20261016/clef-cache-loader",
+          "--model",
+          "clef-omni",
+          "--precision",
+          "int4",
+          "--memory-gib",
+          "28",
+          "--max-length",
+          "65536",
+          "--strict-context",
+          "--model-dir",
+          "artifacts/model-omni-tiled",
+          "decide",
+          "tests/results/opendecision-20261016/clef-omni-requests.jsonl",
+          "--jsonl",
+          "--raw"
+        ],
+        "started": 1792121099.4369192,
+        "memory_gib": 28,
+        "admission_gib": 60,
+        "reserve_gib": 24,
+        "maximum_additional_swap_gib": 1,
+        "guard_sha256": "21fe74fa58c70e8e45e77c01d4a6613cb696d7f489e04cf0a238f79ffa7a63a0",
+        "binary_sha256": "46bd5666c38576d6e02cf0a99ad95c402e1eb60b53d4c41c36f8615363d83de1",
+        "environment": {
+          "CLEF_BENCH_CHECKPOINT_DROP_CACHE": "1"
+        },
+        "before": {
+          "MemAvailable": 114353795072,
+          "SwapFree": 53181288448
+        },
+        "child": 3461862,
+        "returncode": 0,
+        "finished": 1792121329.2771559
+      },
+      "other_gpu_clients": [
+        "3455387",
+        "3461358",
+        "3471217",
+        "3473037"
+      ]
+    }
+  },
+  "models": {
+    "clef": {
+      "groups": {
+        "text": {
+          "correct": 2,
+          "scored": 2,
+          "tokens": 1429,
+          "resident_ms": 2827.909365,
+          "requests": 7,
+          "tok_s": 505.3202969254285
+        },
+        "images": {
+          "correct": 26,
+          "scored": 26,
+          "tokens": 8058,
+          "resident_ms": 21960.397902,
+          "requests": 11,
+          "tok_s": 366.9332421005966
+        },
+        "image_api": {
+          "correct": 0,
+          "scored": 0,
+          "tokens": 1368,
+          "resident_ms": 7114.646076999999,
+          "requests": 1,
+          "tok_s": 192.2794170215194
+        },
+        "gdpr": {
+          "correct": 10,
+          "scored": 10,
+          "tokens": 12358,
+          "resident_ms": 20562.958430000002,
+          "requests": 1,
+          "tok_s": 600.9835618774822
+        },
+        "insurance_oracle": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 4721,
+          "resident_ms": 10241.908588999999,
+          "requests": 17,
+          "tok_s": 460.949241928447
+        },
+        "insurance_document": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 6300,
+          "resident_ms": 10571.101665,
+          "requests": 1,
+          "tok_s": 595.9643752986269
+        }
+      },
+      "cases": [
+        {
+          "id": "m1_smoke_test.py:0",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "isp",
+              "probabilities": {
+                "isp": 0.89299333,
+                "power_utility": 0.069609314,
+                "router_manufacturer": 0.037397455
+              },
+              "answer": "isp",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 169,
+          "resident_ms": 361.564646,
+          "tok_s": 467.4129560775696,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.401149,
+            "prepare_ms": 0.009519,
+            "inference_ms": 361.145058,
+            "readback_ms": 0.008919999999999999,
+            "allocated_bytes": 49935487472,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:1",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.99152714,
+                "false": 0.008472864
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 166,
+          "resident_ms": 365.66040399999997,
+          "tok_s": 453.9731351387995,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.392909,
+            "prepare_ms": 0.009089999999999999,
+            "inference_ms": 365.249306,
+            "readback_ms": 0.009099000000000001,
+            "allocated_bytes": 49935487472,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:2",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9458666,
+                "false": 0.054133456
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 161,
+          "resident_ms": 388.938209,
+          "tok_s": 413.94750187683417,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.411089,
+            "prepare_ms": 0.009269000000000001,
+            "inference_ms": 388.508601,
+            "readback_ms": 0.00925,
+            "allocated_bytes": 49935487472,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:3",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "2",
+              "probabilities": {
+                "0": 0.0040654647,
+                "1": 0.00622208,
+                "2": 0.9897125
+              },
+              "answer": 1.98564708,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 175,
+          "resident_ms": 369.18611799999996,
+          "tok_s": 474.0156562441495,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.403789,
+            "prepare_ms": 0.009629,
+            "inference_ms": 368.76365,
+            "readback_ms": 0.009049999999999999,
+            "allocated_bytes": 49955557872,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:4",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "sales",
+              "probabilities": {
+                "billing": 0.004882379,
+                "sales": 0.9909355,
+                "technical": 0.0041820803
+              },
+              "answer": "sales",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 189,
+          "resident_ms": 370.727236,
+          "tok_s": 509.8087802753181,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.436168,
+            "prepare_ms": 0.0097,
+            "inference_ms": 370.273688,
+            "readback_ms": 0.007679999999999999,
+            "allocated_bytes": 49977233904,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "sdk_customer",
+          "group": "text",
+          "answers": {
+            "department": {
+              "winner": "billing",
+              "probabilities": {
+                "billing": 0.97670186,
+                "sales": 0.005325389,
+                "technical": 0.017972825
+              },
+              "answer": "billing",
+              "expected": null,
+              "correct": null
+            },
+            "urgent": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.96609616,
+                "false": 0.033903874
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "frustration": {
+              "winner": "1",
+              "probabilities": {
+                "0": 0.14816767,
+                "1": 0.78095764,
+                "2": 0.07087468
+              },
+              "answer": 0.9227069999999999,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 326,
+          "resident_ms": 576.484537,
+          "tok_s": 565.4965208546434,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.5623940000000001,
+            "prepare_ms": 0.01362,
+            "inference_ms": 575.899893,
+            "readback_ms": 0.00863,
+            "allocated_bytes": 50027975152,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "customer_routing",
+          "group": "text",
+          "answers": {
+            "department": {
+              "winner": "billing",
+              "probabilities": {
+                "billing": 0.9743484,
+                "sales": 0.0064195874,
+                "technical": 0.019231997
+              },
+              "answer": "billing",
+              "expected": "billing",
+              "correct": true
+            },
+            "urgent": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9908937,
+                "false": 0.0091062505
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 243,
+          "resident_ms": 395.348215,
+          "tok_s": 614.6480261710553,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.505307,
+            "prepare_ms": 0.011349999999999999,
+            "inference_ms": 394.822228,
+            "readback_ms": 0.00933,
+            "allocated_bytes": 50027975152,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bird",
+          "group": "images",
+          "answers": {
+            "bird_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.95783424,
+                "false": 0.04216574
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "eagle_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.6067535,
+                "false": 0.3932464
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "human_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.033551987,
+                "false": 0.96644795
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "bird_kind": {
+              "winner": "hawk",
+              "probabilities": {
+                "eagle": 0.29330316,
+                "hawk": 0.5264044,
+                "no_bird": 0.017088896,
+                "other_bird": 0.10475134,
+                "owl": 0.05845218
+              },
+              "answer": "hawk",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 739,
+          "resident_ms": 1446.394961,
+          "tok_s": 510.92545253965386,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 4.2085550000000005,
+            "prepare_ms": 3.039717,
+            "inference_ms": 1439.13755,
+            "readback_ms": 0.009139,
+            "allocated_bytes": 50190772852,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "moon",
+          "group": "images",
+          "answers": {
+            "sky_object": {
+              "winner": "moon",
+              "probabilities": {
+                "moon": 0.9811921,
+                "neither": 0.009079434,
+                "sun": 0.009728427
+              },
+              "answer": "moon",
+              "expected": "moon",
+              "correct": true
+            },
+            "plane_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.42235735,
+                "false": 0.5776426
+              },
+              "answer": false,
+              "expected": null,
+              "correct": null
+            },
+            "tree_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9900413,
+                "false": 0.009958678
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 622,
+          "resident_ms": 1284.7909439999999,
+          "tok_s": 484.125454732346,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 3.400097,
+            "prepare_ms": 3.049106,
+            "inference_ms": 1278.332311,
+            "readback_ms": 0.00943,
+            "allocated_bytes": 50190772852,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "cat-patio",
+          "group": "images",
+          "answers": {
+            "cat_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.98601055,
+                "false": 0.013989492
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "cat_count": {
+              "winner": "one",
+              "probabilities": {
+                "multiple": 0.0051876027,
+                "one": 0.9903439,
+                "zero": 0.004468506
+              },
+              "answer": "one",
+              "expected": "one",
+              "correct": true
+            },
+            "cat_napping": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.0089508435,
+                "false": 0.9910492
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            }
+          },
+          "tokens": 621,
+          "resident_ms": 1288.060846,
+          "tok_s": 482.12008146081007,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 11.143116,
+            "prepare_ms": 9.941809,
+            "inference_ms": 1266.963901,
+            "readback_ms": 0.01202,
+            "allocated_bytes": 50190772852,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bread",
+          "group": "images",
+          "answers": {
+            "bread_count": {
+              "winner": "one",
+              "probabilities": {
+                "multiple": 0.006455048,
+                "one": 0.98931074,
+                "zero": 0.0042342306
+              },
+              "answer": "one",
+              "expected": "one",
+              "correct": true
+            }
+          },
+          "tokens": 468,
+          "resident_ms": 1054.929582,
+          "tok_s": 443.6315067710368,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 8.132897999999999,
+            "prepare_ms": 3.9140629999999996,
+            "inference_ms": 1042.870011,
+            "readback_ms": 0.01261,
+            "allocated_bytes": 50190772852,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "wooded-stream",
+          "group": "images",
+          "answers": {
+            "backyard_flooded": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.29627922,
+                "false": 0.7037208
+              },
+              "answer": false,
+              "expected": null,
+              "correct": null
+            },
+            "water_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9899714,
+                "false": 0.010028576
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "water_scene": {
+              "winner": "wooded_creek",
+              "probabilities": {
+                "dry_yard": 0.0023572878,
+                "flooded_yard": 0.003285479,
+                "wooded_creek": 0.99435717
+              },
+              "answer": "wooded_creek",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 650,
+          "resident_ms": 1406.900729,
+          "tok_s": 462.0084321528559,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 12.109468999999999,
+            "prepare_ms": 9.920269000000001,
+            "inference_ms": 1384.861991,
+            "readback_ms": 0.009000000000000001,
+            "allocated_bytes": 50190772852,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "patio-animals",
+          "group": "images",
+          "answers": {
+            "animal_count": {
+              "winner": "multiple",
+              "probabilities": {
+                "multiple": 0.9505705,
+                "one": 0.035667256,
+                "zero": 0.013762214
+              },
+              "answer": "multiple",
+              "expected": "multiple",
+              "correct": true
+            },
+            "bear_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.012914569,
+                "false": 0.9870854
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "coyote_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.017537847,
+                "false": 0.98246217
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "animal_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9847045,
+                "false": 0.015295535
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "animal_type": {
+              "winner": "cat",
+              "probabilities": {
+                "bear": 0.0037484295,
+                "cat": 0.9610564,
+                "coyote": 0.006793192,
+                "dog": 0.0073368256,
+                "no_animal": 0.007874455,
+                "other_animal": 0.013190698
+              },
+              "answer": "cat",
+              "expected": "cat",
+              "correct": true
+            }
+          },
+          "tokens": 1196,
+          "resident_ms": 3421.532673,
+          "tok_s": 349.5509510804546,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 17.637818,
+            "prepare_ms": 6.500223,
+            "inference_ms": 3397.3831520000003,
+            "readback_ms": 0.01148,
+            "allocated_bytes": 50389764724,
+            "uploaded_bytes": 0
+          },
+          "action": "no_alarm"
+        },
+        {
+          "id": "parked-cars",
+          "group": "images",
+          "answers": {
+            "weather": {
+              "winner": "sunny",
+              "probabilities": {
+                "cloudy": 0.0026774209,
+                "night": 0.0014060587,
+                "rainy": 0.0020855027,
+                "sunny": 0.99383104
+              },
+              "answer": "sunny",
+              "expected": "sunny",
+              "correct": true
+            },
+            "parked_car_count": {
+              "winner": "two",
+              "probabilities": {
+                "one": 0.011129336,
+                "three_or_more": 0.01179234,
+                "two": 0.96983755,
+                "zero": 0.0072407746
+              },
+              "answer": "two",
+              "expected": "two",
+              "correct": true
+            }
+          },
+          "tokens": 606,
+          "resident_ms": 1289.924354,
+          "tok_s": 469.79499078439756,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 13.104872,
+            "prepare_ms": 7.875135,
+            "inference_ms": 1268.931867,
+            "readback_ms": 0.012480000000000002,
+            "allocated_bytes": 50389764724,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "cat-window",
+          "group": "images",
+          "answers": {
+            "cat_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.989641,
+                "false": 0.010358967
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "cat_gaze": {
+              "winner": "window",
+              "probabilities": {
+                "camera": 0.0033440695,
+                "elsewhere": 0.009212159,
+                "window": 0.98744375
+              },
+              "answer": "window",
+              "expected": "window",
+              "correct": true
+            }
+          },
+          "tokens": 549,
+          "resident_ms": 1255.990781,
+          "tok_s": 437.10511916567964,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 10.760486,
+            "prepare_ms": 9.86403,
+            "inference_ms": 1235.355005,
+            "readback_ms": 0.011260000000000001,
+            "allocated_bytes": 50389764724,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bear",
+          "group": "images",
+          "answers": {
+            "animal_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.99015254,
+                "false": 0.009847405
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "animal_type": {
+              "winner": "bear",
+              "probabilities": {
+                "bear": 0.9840015,
+                "cat": 0.0030601155,
+                "coyote": 0.0034438698,
+                "dog": 0.0029025704,
+                "no_animal": 0.0028432459,
+                "other_animal": 0.0037487384
+              },
+              "answer": "bear",
+              "expected": "bear",
+              "correct": true
+            }
+          },
+          "tokens": 1369,
+          "resident_ms": 6939.126200999999,
+          "tok_s": 197.28708778962877,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 41.637483,
+            "prepare_ms": 10.692638,
+            "inference_ms": 6886.782510999999,
+            "readback_ms": 0.013569,
+            "allocated_bytes": 50579458676,
+            "uploaded_bytes": 0
+          },
+          "action": "sound_alarm"
+        },
+        {
+          "id": "overflowing-bin",
+          "group": "images",
+          "answers": {
+            "bin_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9696443,
+                "false": 0.030355679
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "bin_condition": {
+              "winner": "overflowing",
+              "probabilities": {
+                "contained": 0.004032932,
+                "empty": 0.0028372353,
+                "overflowing": 0.9931298
+              },
+              "answer": "overflowing",
+              "expected": "overflowing",
+              "correct": true
+            },
+            "ground_litter": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.98264587,
+                "false": 0.017354118
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 527,
+          "resident_ms": 1056.966476,
+          "tok_s": 498.59670289107635,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 4.546616,
+            "prepare_ms": 1.9671060000000002,
+            "inference_ms": 1050.447564,
+            "readback_ms": 0.00519,
+            "allocated_bytes": 50579458676,
+            "uploaded_bytes": 0
+          },
+          "action": "request_collection"
+        },
+        {
+          "id": "damaged-fence",
+          "group": "images",
+          "answers": {
+            "fence_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9784968,
+                "false": 0.02150326
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "fence_condition": {
+              "winner": "damaged",
+              "probabilities": {
+                "damaged": 0.9879901,
+                "intact": 0.006154021,
+                "unclear": 0.00585592
+              },
+              "answer": "damaged",
+              "expected": "damaged",
+              "correct": true
+            },
+            "fence_material": {
+              "winner": "metal",
+              "probabilities": {
+                "metal": 0.9670583,
+                "other": 0.010357028,
+                "wire_mesh": 0.017330077,
+                "wood": 0.005254516
+              },
+              "answer": "metal",
+              "expected": "metal",
+              "correct": true
+            }
+          },
+          "tokens": 711,
+          "resident_ms": 1515.7803550000003,
+          "tok_s": 469.06532180251133,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 10.522252,
+            "prepare_ms": 3.576602,
+            "inference_ms": 1501.6741310000002,
+            "readback_ms": 0.00737,
+            "allocated_bytes": 50579458676,
+            "uploaded_bytes": 0
+          },
+          "action": "create_repair_task"
+        },
+        {
+          "id": "image_api_bear",
+          "group": "image_api",
+          "answers": {
+            "scene": {
+              "winner": "outdoors",
+              "probabilities": {
+                "indoors": 0.0071333367,
+                "outdoors": 0.99286664
+              },
+              "answer": "outdoors",
+              "expected": null,
+              "correct": null
+            },
+            "animal": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.978119,
+                "false": 0.021880975
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "brightness": {
+              "winner": "1",
+              "probabilities": {
+                "0": 0.013419005,
+                "1": 0.52958894,
+                "2": 0.45699203
+              },
+              "answer": 1.443573,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 1368,
+          "resident_ms": 7114.646076999999,
+          "tok_s": 192.2794170215194,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 41.213715,
+            "prepare_ms": 10.754306,
+            "inference_ms": 7062.667586,
+            "readback_ms": 0.01047,
+            "allocated_bytes": 50579458676,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "gdpr",
+          "group": "gdpr",
+          "answers": {
+            "breach_72h": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.971981,
+                "false": 0.02801897
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "applies_non_eu": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.96673757,
+                "false": 0.033262465
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "dpo_all_orgs": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.020880083,
+                "false": 0.9791199
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "pre_ticked_consent": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.024958406,
+                "false": 0.9750415
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "right_erasure": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9594868,
+                "false": 0.040513188
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "data_portability": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.96116513,
+                "false": 0.038834877
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "us_federal_law": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.014109122,
+                "false": 0.98589087
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "criminal_penalties": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.052932255,
+                "false": 0.94706774
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "instrument_type": {
+              "winner": "Regulation",
+              "probabilities": {
+                "Directive": 0.010501171,
+                "Recommendation": 0.0030445058,
+                "Regulation": 0.9811173,
+                "Treaty": 0.0053370455
+              },
+              "answer": "Regulation",
+              "expected": "Regulation",
+              "correct": true
+            },
+            "max_fine": {
+              "winner": "TwentyM_or_4pct",
+              "probabilities": {
+                "FixedCap": 0.006816338,
+                "NoFines": 0.003207037,
+                "TenM_or_2pct": 0.008987254,
+                "TwentyM_or_4pct": 0.9809894
+              },
+              "answer": "TwentyM_or_4pct",
+              "expected": "TwentyM_or_4pct",
+              "correct": true
+            },
+            "individual_rights": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.008422006,
+                "1": 0.01710212,
+                "2": 0.04194288,
+                "3": 0.93253297
+              },
+              "answer": 2.89858679,
+              "expected": null,
+              "correct": null
+            },
+            "penalty_severity": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.006323566,
+                "1": 0.0069759055,
+                "2": 0.10411873,
+                "3": 0.8825818
+              },
+              "answer": 2.8629587654999997,
+              "expected": null,
+              "correct": null
+            },
+            "compliance_burden": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.0057335705,
+                "1": 0.0077420403,
+                "2": 0.10685779,
+                "3": 0.86044663,
+                "4": 0.019219924
+              },
+              "answer": 2.8796772063,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 12358,
+          "resident_ms": 20562.958430000002,
+          "tok_s": 600.9835618774822,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 27.015472,
+            "prepare_ms": 0.37759000000000004,
+            "inference_ms": 20535.550908,
+            "readback_ms": 0.01446,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:police_rear_impact",
+          "group": "insurance_oracle",
+          "answers": {
+            "police_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0070255552,
+                "contradicts": 0.008918623,
+                "supports": 0.9788124,
+                "unknown": 0.005243351
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 298,
+          "resident_ms": 583.222694,
+          "tok_s": 510.9540541987208,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 1.165819,
+            "prepare_ms": 0.023479999999999997,
+            "inference_ms": 582.021965,
+            "readback_ms": 0.011430000000000001,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:witness_rear_impact",
+          "group": "insurance_oracle",
+          "answers": {
+            "witness_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0071782568,
+                "contradicts": 0.009074051,
+                "supports": 0.97881407,
+                "unknown": 0.0049336283
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 283,
+          "resident_ms": 562.6477150000001,
+          "tok_s": 502.97902658326797,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 1.044902,
+            "prepare_ms": 0.022619,
+            "inference_ms": 561.5666540000001,
+            "readback_ms": 0.01354,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_acute_fracture",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_acute_fracture": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.007512128,
+                "contradicts": 0.009481239,
+                "supports": 0.9773595,
+                "unknown": 0.0056471545
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 273,
+          "resident_ms": 545.267659,
+          "tok_s": 500.67154267075284,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 1.0167030000000001,
+            "prepare_ms": 0.022539,
+            "inference_ms": 544.221637,
+            "readback_ms": 0.0067800000000000004,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_neurological_deficit",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_neurological_deficit": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.008377414,
+                "contradicts": 0.009557773,
+                "supports": 0.9763499,
+                "unknown": 0.0057148403
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 259,
+          "resident_ms": 532.875948,
+          "tok_s": 486.04182825680846,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.809788,
+            "prepare_ms": 0.021119,
+            "inference_ms": 532.039641,
+            "readback_ms": 0.0054,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:discharged_home",
+          "group": "insurance_oracle",
+          "answers": {
+            "discharged_home": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.008909132,
+                "contradicts": 0.010906779,
+                "supports": 0.9747546,
+                "unknown": 0.0054296087
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 267,
+          "resident_ms": 696.710904,
+          "tok_s": 383.22925400920667,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.815588,
+            "prepare_ms": 0.01648,
+            "inference_ms": 695.870226,
+            "readback_ms": 0.008610000000000001,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_hospitalization",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_hospitalization": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.007999505,
+                "contradicts": 0.010629906,
+                "supports": 0.97405696,
+                "unknown": 0.0073136105
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 263,
+          "resident_ms": 756.984557,
+          "tok_s": 347.43112995896956,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.74378,
+            "prepare_ms": 0.016989,
+            "inference_ms": 756.213848,
+            "readback_ms": 0.00994,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_neck_stiffness",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_neck_stiffness": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.007136688,
+                "contradicts": 0.008312354,
+                "supports": 0.9796341,
+                "unknown": 0.0049168114
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 285,
+          "resident_ms": 762.577554,
+          "tok_s": 373.73247941153016,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.959964,
+            "prepare_ms": 0.019739,
+            "inference_ms": 761.588261,
+            "readback_ms": 0.00959,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_imaging",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_imaging": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0071731918,
+                "contradicts": 0.009204932,
+                "supports": 0.9761618,
+                "unknown": 0.0074600913
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 264,
+          "resident_ms": 741.2150379999999,
+          "tok_s": 356.17194264210275,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.682241,
+            "prepare_ms": 0.01344,
+            "inference_ms": 740.509517,
+            "readback_ms": 0.009840000000000002,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_prescription",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_prescription": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.007466761,
+                "contradicts": 0.009590071,
+                "supports": 0.9763717,
+                "unknown": 0.0065714545
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 267,
+          "resident_ms": 627.644499,
+          "tok_s": 425.40004799755286,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.645242,
+            "prepare_ms": 0.013519999999999999,
+            "inference_ms": 626.977147,
+            "readback_ms": 0.00859,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_active_treatment",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_active_treatment": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.009031291,
+                "contradicts": 0.012901238,
+                "supports": 0.96731615,
+                "unknown": 0.010751375
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 272,
+          "resident_ms": 551.43714,
+          "tok_s": 493.2565840596083,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.74281,
+            "prepare_ms": 0.015629,
+            "inference_ms": 550.667902,
+            "readback_ms": 0.010799,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:employer_two_absences",
+          "group": "insurance_oracle",
+          "answers": {
+            "employer_two_absences": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.013530753,
+                "contradicts": 0.018512199,
+                "supports": 0.95718056,
+                "unknown": 0.010776536
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 302,
+          "resident_ms": 574.6116480000001,
+          "tok_s": 525.5723601342658,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.72341,
+            "prepare_ms": 0.0132,
+            "inference_ms": 573.863678,
+            "readback_ms": 0.01136,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:employer_no_wage_calculation",
+          "group": "insurance_oracle",
+          "answers": {
+            "employer_no_wage_calculation": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.013210716,
+                "contradicts": 0.01519986,
+                "supports": 0.9568475,
+                "unknown": 0.014742033
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 268,
+          "resident_ms": 574.2006180000001,
+          "tok_s": 466.73582646683946,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.7476689999999999,
+            "prepare_ms": 0.013139999999999999,
+            "inference_ms": 573.42884,
+            "readback_ms": 0.010969,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:pickup_confirmation_outstanding",
+          "group": "insurance_oracle",
+          "answers": {
+            "pickup_confirmation_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0074929744,
+                "contradicts": 0.008392886,
+                "supports": 0.9785962,
+                "unknown": 0.005517875
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 263,
+          "resident_ms": 540.626396,
+          "tok_s": 486.4727322711043,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.823437,
+            "prepare_ms": 0.02181,
+            "inference_ms": 539.773979,
+            "readback_ms": 0.00717,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:payroll_statement_outstanding",
+          "group": "insurance_oracle",
+          "answers": {
+            "payroll_statement_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.010615807,
+                "contradicts": 0.010035821,
+                "supports": 0.9720176,
+                "unknown": 0.007330718
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 264,
+          "resident_ms": 540.2503960000001,
+          "tok_s": 488.66229799117065,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.9293250000000001,
+            "prepare_ms": 0.022619,
+            "inference_ms": 539.2907620000001,
+            "readback_ms": 0.007689999999999999,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:emergency_bill_matches_demand",
+          "group": "insurance_oracle",
+          "answers": {
+            "emergency_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0081017185,
+                "contradicts": 0.009641291,
+                "supports": 0.9763391,
+                "unknown": 0.005917914
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 304,
+          "resident_ms": 550.5036359999999,
+          "tok_s": 552.2216024019141,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.9773430000000001,
+            "prepare_ms": 0.02507,
+            "inference_ms": 549.495513,
+            "readback_ms": 0.005710000000000001,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:therapy_bill_matches_demand",
+          "group": "insurance_oracle",
+          "answers": {
+            "therapy_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.008478149,
+                "contradicts": 0.009597446,
+                "supports": 0.9758537,
+                "unknown": 0.006070694
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 310,
+          "resident_ms": 558.8863160000001,
+          "tok_s": 554.6745216785732,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.929894,
+            "prepare_ms": 0.037459,
+            "inference_ms": 557.909474,
+            "readback_ms": 0.009489000000000001,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:claimant_collision_mechanism",
+          "group": "insurance_oracle",
+          "answers": {
+            "claimant_collision_mechanism": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.010884891,
+                "contradicts": 0.013632539,
+                "supports": 0.96905017,
+                "unknown": 0.006432334
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 279,
+          "resident_ms": 542.2458710000001,
+          "tok_s": 514.5267394760853,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.895855,
+            "prepare_ms": 0.02265,
+            "inference_ms": 541.3174160000001,
+            "readback_ms": 0.009949999999999999,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_document",
+          "group": "insurance_document",
+          "answers": {
+            "police_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.008896191,
+                "contradicts": 0.009852191,
+                "supports": 0.97202367,
+                "unknown": 0.009227968
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "witness_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.008105769,
+                "contradicts": 0.0109660495,
+                "supports": 0.97153306,
+                "unknown": 0.009395072
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_acute_fracture": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0086538335,
+                "contradicts": 0.012091724,
+                "supports": 0.9703696,
+                "unknown": 0.008884894
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_neurological_deficit": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.014542423,
+                "contradicts": 0.018479247,
+                "supports": 0.9525974,
+                "unknown": 0.014380951
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "discharged_home": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.010604834,
+                "contradicts": 0.017421648,
+                "supports": 0.96164113,
+                "unknown": 0.0103324
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_hospitalization": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.020415988,
+                "contradicts": 0.026472213,
+                "supports": 0.93480766,
+                "unknown": 0.018304095
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_neck_stiffness": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.011187463,
+                "contradicts": 0.012043927,
+                "supports": 0.9677383,
+                "unknown": 0.009030352
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_imaging": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.014488945,
+                "contradicts": 0.016753068,
+                "supports": 0.9535207,
+                "unknown": 0.015237223
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_prescription": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.01600478,
+                "contradicts": 0.02231319,
+                "supports": 0.946472,
+                "unknown": 0.01521
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_active_treatment": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.030236382,
+                "contradicts": 0.03448088,
+                "supports": 0.90909195,
+                "unknown": 0.026190713
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "employer_two_absences": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.014115646,
+                "contradicts": 0.016375232,
+                "supports": 0.95567966,
+                "unknown": 0.013829449
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "employer_no_wage_calculation": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.012783839,
+                "contradicts": 0.015959155,
+                "supports": 0.95922613,
+                "unknown": 0.012030862
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "pickup_confirmation_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.01189551,
+                "contradicts": 0.014010389,
+                "supports": 0.9636159,
+                "unknown": 0.010478128
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "payroll_statement_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.015947077,
+                "contradicts": 0.0174846,
+                "supports": 0.9554802,
+                "unknown": 0.011088109
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "emergency_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.013814382,
+                "contradicts": 0.015664326,
+                "supports": 0.9557233,
+                "unknown": 0.014797944
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "therapy_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.017930653,
+                "contradicts": 0.022159172,
+                "supports": 0.9431527,
+                "unknown": 0.016757399
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "claimant_collision_mechanism": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.017240692,
+                "contradicts": 0.024682099,
+                "supports": 0.93964654,
+                "unknown": 0.01843067
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 6300,
+          "resident_ms": 10571.101665,
+          "tok_s": 595.9643752986269,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 17.263868000000002,
+            "prepare_ms": 0.433848,
+            "inference_ms": 10553.39013,
+            "readback_ms": 0.013819,
+            "allocated_bytes": 53363468916,
+            "uploaded_bytes": 0
+          },
+          "composed": [
+            {
+              "id": "independent_liability_support",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "prompt_medical_treatment",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "serious_injury_documented",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "preexisting_neck_condition",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "prior_active_treatment",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "lost_wages_fully_supported",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "rental_fully_supported",
+              "answer": "unknown",
+              "expected": "unknown",
+              "correct": true
+            },
+            {
+              "id": "documents_outstanding",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "medical_expenses_documented",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "collision_accounts_consistent",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            }
+          ]
+        }
+      ],
+      "precision": "bf16"
+    },
+    "clef-flash": {
+      "groups": {
+        "text": {
+          "correct": 2,
+          "scored": 2,
+          "tokens": 1429,
+          "resident_ms": 910.7411079999999,
+          "requests": 7,
+          "tok_s": 1569.0518276243222
+        },
+        "images": {
+          "correct": 26,
+          "scored": 26,
+          "tokens": 8058,
+          "resident_ms": 15061.590208,
+          "requests": 11,
+          "tok_s": 535.0032691581248
+        },
+        "image_api": {
+          "correct": 0,
+          "scored": 0,
+          "tokens": 1368,
+          "resident_ms": 6965.3025880000005,
+          "requests": 1,
+          "tok_s": 196.40209204361415
+        },
+        "gdpr": {
+          "correct": 10,
+          "scored": 10,
+          "tokens": 12358,
+          "resident_ms": 6049.124428,
+          "requests": 1,
+          "tok_s": 2042.9402878204442
+        },
+        "insurance_oracle": {
+          "correct": 16,
+          "scored": 17,
+          "tokens": 4721,
+          "resident_ms": 3087.351413000001,
+          "requests": 17,
+          "tok_s": 1529.142416415944
+        },
+        "insurance_document": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 6300,
+          "resident_ms": 3493.3803070000004,
+          "requests": 1,
+          "tok_s": 1803.4108646505288
+        }
+      },
+      "cases": [
+        {
+          "id": "m1_smoke_test.py:0",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "isp",
+              "probabilities": {
+                "isp": 0.7171077,
+                "power_utility": 0.22581615,
+                "router_manufacturer": 0.05707611
+              },
+              "answer": "isp",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 169,
+          "resident_ms": 117.719636,
+          "tok_s": 1435.6143608870827,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.406938,
+            "prepare_ms": 0.00954,
+            "inference_ms": 117.301248,
+            "readback_ms": 0.00191,
+            "allocated_bytes": 15031887792,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:1",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9626996,
+                "false": 0.037300423
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 166,
+          "resident_ms": 117.372546,
+          "tok_s": 1414.3000697965604,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.33519099999999996,
+            "prepare_ms": 0.00834,
+            "inference_ms": 117.028165,
+            "readback_ms": 0.0008500000000000001,
+            "allocated_bytes": 15031887792,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:2",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.6649525,
+                "false": 0.33504748
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 161,
+          "resident_ms": 116.81665100000001,
+          "tok_s": 1378.2281774196726,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.31022200000000005,
+            "prepare_ms": 0.008159,
+            "inference_ms": 116.49083,
+            "readback_ms": 0.0074399999999999996,
+            "allocated_bytes": 15031887792,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:3",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "2",
+              "probabilities": {
+                "0": 0.0068658623,
+                "1": 0.0070967874,
+                "2": 0.9860373
+              },
+              "answer": 1.9791713874,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 175,
+          "resident_ms": 117.96553999999999,
+          "tok_s": 1483.4840750951507,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.348551,
+            "prepare_ms": 0.00874,
+            "inference_ms": 117.60642899999999,
+            "readback_ms": 0.00182,
+            "allocated_bytes": 15051958192,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:4",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "sales",
+              "probabilities": {
+                "billing": 0.015231247,
+                "sales": 0.9816834,
+                "technical": 0.003085416
+              },
+              "answer": "sales",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 189,
+          "resident_ms": 121.04481600000001,
+          "tok_s": 1561.4051575740343,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.40248900000000004,
+            "prepare_ms": 0.0111,
+            "inference_ms": 120.630097,
+            "readback_ms": 0.00113,
+            "allocated_bytes": 15072085936,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "sdk_customer",
+          "group": "text",
+          "answers": {
+            "department": {
+              "winner": "billing",
+              "probabilities": {
+                "billing": 0.8235252,
+                "sales": 0.050587863,
+                "technical": 0.12588696
+              },
+              "answer": "billing",
+              "expected": null,
+              "correct": null
+            },
+            "urgent": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9449753,
+                "false": 0.055024672
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "frustration": {
+              "winner": "2",
+              "probabilities": {
+                "0": 0.032549623,
+                "1": 0.24159296,
+                "2": 0.72585744
+              },
+              "answer": 1.69330784,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 326,
+          "resident_ms": 191.21154,
+          "tok_s": 1704.918019069351,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.5373249999999999,
+            "prepare_ms": 0.01385,
+            "inference_ms": 190.659285,
+            "readback_ms": 0.00108,
+            "allocated_bytes": 15109474224,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "customer_routing",
+          "group": "text",
+          "answers": {
+            "department": {
+              "winner": "billing",
+              "probabilities": {
+                "billing": 0.8585691,
+                "sales": 0.04941044,
+                "technical": 0.09202056
+              },
+              "answer": "billing",
+              "expected": "billing",
+              "correct": true
+            },
+            "urgent": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9766997,
+                "false": 0.023300257
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 243,
+          "resident_ms": 128.610379,
+          "tok_s": 1889.4276021066698,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.448197,
+            "prepare_ms": 0.011250000000000001,
+            "inference_ms": 128.149802,
+            "readback_ms": 0.00113,
+            "allocated_bytes": 15109474224,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bird",
+          "group": "images",
+          "answers": {
+            "bird_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9672948,
+                "false": 0.03270519
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "eagle_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.5702105,
+                "false": 0.42978948
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "human_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.011409499,
+                "false": 0.98859054
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "bird_kind": {
+              "winner": "hawk",
+              "probabilities": {
+                "eagle": 0.13863173,
+                "hawk": 0.7789874,
+                "no_bird": 0.0066778925,
+                "other_bird": 0.04428706,
+                "owl": 0.03141585
+              },
+              "answer": "hawk",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 739,
+          "resident_ms": 717.676129,
+          "tok_s": 1029.712387159529,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 3.9884910000000002,
+            "prepare_ms": 3.027368,
+            "inference_ms": 710.65319,
+            "readback_ms": 0.00708,
+            "allocated_bytes": 15254692916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "moon",
+          "group": "images",
+          "answers": {
+            "sky_object": {
+              "winner": "moon",
+              "probabilities": {
+                "moon": 0.9428909,
+                "neither": 0.019300235,
+                "sun": 0.037808843
+              },
+              "answer": "moon",
+              "expected": "moon",
+              "correct": true
+            },
+            "plane_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.32077405,
+                "false": 0.6792259
+              },
+              "answer": false,
+              "expected": null,
+              "correct": null
+            },
+            "tree_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9653562,
+                "false": 0.034643836
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 622,
+          "resident_ms": 638.6657250000001,
+          "tok_s": 973.9054025484144,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 3.329059,
+            "prepare_ms": 3.030897,
+            "inference_ms": 632.297309,
+            "readback_ms": 0.00846,
+            "allocated_bytes": 15254692916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "cat-patio",
+          "group": "images",
+          "answers": {
+            "cat_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9560166,
+                "false": 0.043983366
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "cat_count": {
+              "winner": "one",
+              "probabilities": {
+                "multiple": 0.020685313,
+                "one": 0.96190006,
+                "zero": 0.017414602
+              },
+              "answer": "one",
+              "expected": "one",
+              "correct": true
+            },
+            "cat_napping": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.023406561,
+                "false": 0.9765935
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            }
+          },
+          "tokens": 621,
+          "resident_ms": 648.3216820000001,
+          "tok_s": 957.8578308291097,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 3.838716,
+            "prepare_ms": 3.044026,
+            "inference_ms": 641.4323400000001,
+            "readback_ms": 0.0066,
+            "allocated_bytes": 15254692916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bread",
+          "group": "images",
+          "answers": {
+            "bread_count": {
+              "winner": "one",
+              "probabilities": {
+                "multiple": 0.012427249,
+                "one": 0.98128545,
+                "zero": 0.0062873363
+              },
+              "answer": "one",
+              "expected": "one",
+              "correct": true
+            }
+          },
+          "tokens": 468,
+          "resident_ms": 595.64481,
+          "tok_s": 785.7031441271183,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 3.559383,
+            "prepare_ms": 3.032597,
+            "inference_ms": 589.04502,
+            "readback_ms": 0.00781,
+            "allocated_bytes": 15254692916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "wooded-stream",
+          "group": "images",
+          "answers": {
+            "backyard_flooded": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.31724307,
+                "false": 0.6827569
+              },
+              "answer": false,
+              "expected": null,
+              "correct": null
+            },
+            "water_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9901932,
+                "false": 0.009806807
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "water_scene": {
+              "winner": "wooded_creek",
+              "probabilities": {
+                "dry_yard": 0.003803961,
+                "flooded_yard": 0.010081364,
+                "wooded_creek": 0.9861146
+              },
+              "answer": "wooded_creek",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 650,
+          "resident_ms": 703.578444,
+          "tok_s": 923.8486561705976,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 4.144547,
+            "prepare_ms": 3.061607,
+            "inference_ms": 696.36661,
+            "readback_ms": 0.00568,
+            "allocated_bytes": 15254692916,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "patio-animals",
+          "group": "images",
+          "answers": {
+            "animal_count": {
+              "winner": "multiple",
+              "probabilities": {
+                "multiple": 0.92119026,
+                "one": 0.05459912,
+                "zero": 0.024210682
+              },
+              "answer": "multiple",
+              "expected": "multiple",
+              "correct": true
+            },
+            "bear_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.004718022,
+                "false": 0.995282
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "coyote_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.0051042982,
+                "false": 0.99489564
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "animal_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.95408225,
+                "false": 0.045917764
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "animal_type": {
+              "winner": "cat",
+              "probabilities": {
+                "bear": 0.006076116,
+                "cat": 0.96413946,
+                "coyote": 0.0069137774,
+                "dog": 0.007075722,
+                "no_animal": 0.00697678,
+                "other_animal": 0.0088182315
+              },
+              "answer": "cat",
+              "expected": "cat",
+              "correct": true
+            }
+          },
+          "tokens": 1196,
+          "resident_ms": 2286.175521,
+          "tok_s": 523.1444344556954,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 13.5592,
+            "prepare_ms": 6.636319,
+            "inference_ms": 2265.967802,
+            "readback_ms": 0.0122,
+            "allocated_bytes": 15440439860,
+            "uploaded_bytes": 0
+          },
+          "action": "no_alarm"
+        },
+        {
+          "id": "parked-cars",
+          "group": "images",
+          "answers": {
+            "weather": {
+              "winner": "sunny",
+              "probabilities": {
+                "cloudy": 0.0068446803,
+                "night": 0.0073058014,
+                "rainy": 0.010614198,
+                "sunny": 0.9752354
+              },
+              "answer": "sunny",
+              "expected": "sunny",
+              "correct": true
+            },
+            "parked_car_count": {
+              "winner": "two",
+              "probabilities": {
+                "one": 0.026630776,
+                "three_or_more": 0.030718558,
+                "two": 0.92066646,
+                "zero": 0.021984255
+              },
+              "answer": "two",
+              "expected": "two",
+              "correct": true
+            }
+          },
+          "tokens": 606,
+          "resident_ms": 630.76457,
+          "tok_s": 960.738806239545,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 3.542563,
+            "prepare_ms": 3.052846,
+            "inference_ms": 624.158501,
+            "readback_ms": 0.01066,
+            "allocated_bytes": 15440439860,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "cat-window",
+          "group": "images",
+          "answers": {
+            "cat_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9557654,
+                "false": 0.044234507
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "cat_gaze": {
+              "winner": "window",
+              "probabilities": {
+                "camera": 0.0043130885,
+                "elsewhere": 0.0046244673,
+                "window": 0.9910624
+              },
+              "answer": "window",
+              "expected": "window",
+              "correct": true
+            }
+          },
+          "tokens": 549,
+          "resident_ms": 629.451668,
+          "tok_s": 872.1876959105937,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 3.69117,
+            "prepare_ms": 3.0893159999999997,
+            "inference_ms": 622.667092,
+            "readback_ms": 0.00409,
+            "allocated_bytes": 15440439860,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bear",
+          "group": "images",
+          "answers": {
+            "animal_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.96875495,
+                "false": 0.031245038
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "animal_type": {
+              "winner": "bear",
+              "probabilities": {
+                "bear": 0.9454127,
+                "cat": 0.01068379,
+                "coyote": 0.009283308,
+                "dog": 0.011166594,
+                "no_animal": 0.008173017,
+                "other_animal": 0.0152805755
+              },
+              "answer": "bear",
+              "expected": "bear",
+              "correct": true
+            }
+          },
+          "tokens": 1369,
+          "resident_ms": 6975.64939,
+          "tok_s": 196.2541296818245,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 22.7196,
+            "prepare_ms": 10.832964,
+            "inference_ms": 6942.090566,
+            "readback_ms": 0.00626,
+            "allocated_bytes": 15630479924,
+            "uploaded_bytes": 0
+          },
+          "action": "sound_alarm"
+        },
+        {
+          "id": "overflowing-bin",
+          "group": "images",
+          "answers": {
+            "bin_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9154588,
+                "false": 0.08454116
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "bin_condition": {
+              "winner": "overflowing",
+              "probabilities": {
+                "contained": 0.009460813,
+                "empty": 0.009497466,
+                "overflowing": 0.9810417
+              },
+              "answer": "overflowing",
+              "expected": "overflowing",
+              "correct": true
+            },
+            "ground_litter": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9385751,
+                "false": 0.06142485
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 527,
+          "resident_ms": 431.615029,
+          "tok_s": 1220.9954811374282,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 4.507388000000001,
+            "prepare_ms": 1.953057,
+            "inference_ms": 425.14892399999997,
+            "readback_ms": 0.00566,
+            "allocated_bytes": 15630479924,
+            "uploaded_bytes": 0
+          },
+          "action": "request_collection"
+        },
+        {
+          "id": "damaged-fence",
+          "group": "images",
+          "answers": {
+            "fence_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.95898414,
+                "false": 0.041015945
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "fence_condition": {
+              "winner": "damaged",
+              "probabilities": {
+                "damaged": 0.9592306,
+                "intact": 0.024444744,
+                "unclear": 0.01632461
+              },
+              "answer": "damaged",
+              "expected": "damaged",
+              "correct": true
+            },
+            "fence_material": {
+              "winner": "metal",
+              "probabilities": {
+                "metal": 0.8767529,
+                "other": 0.025001941,
+                "wire_mesh": 0.074696526,
+                "wood": 0.023548683
+              },
+              "answer": "metal",
+              "expected": "metal",
+              "correct": true
+            }
+          },
+          "tokens": 711,
+          "resident_ms": 804.04724,
+          "tok_s": 884.2764014711374,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 7.831756,
+            "prepare_ms": 3.421617,
+            "inference_ms": 792.789687,
+            "readback_ms": 0.00418,
+            "allocated_bytes": 15630479924,
+            "uploaded_bytes": 0
+          },
+          "action": "create_repair_task"
+        },
+        {
+          "id": "image_api_bear",
+          "group": "image_api",
+          "answers": {
+            "scene": {
+              "winner": "outdoors",
+              "probabilities": {
+                "indoors": 0.01078557,
+                "outdoors": 0.9892145
+              },
+              "answer": "outdoors",
+              "expected": null,
+              "correct": null
+            },
+            "animal": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9539603,
+                "false": 0.046039738
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "brightness": {
+              "winner": "1",
+              "probabilities": {
+                "0": 0.037465166,
+                "1": 0.6425982,
+                "2": 0.3199366
+              },
+              "answer": 1.2824714,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 1368,
+          "resident_ms": 6965.3025880000005,
+          "tok_s": 196.40209204361415,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 43.428564,
+            "prepare_ms": 10.619,
+            "inference_ms": 6911.242744,
+            "readback_ms": 0.01228,
+            "allocated_bytes": 15630479924,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "gdpr",
+          "group": "gdpr",
+          "answers": {
+            "breach_72h": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.83043593,
+                "false": 0.16956404
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "applies_non_eu": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.96148694,
+                "false": 0.03851306
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "dpo_all_orgs": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.019323332,
+                "false": 0.98067665
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "pre_ticked_consent": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.033437915,
+                "false": 0.9665621
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "right_erasure": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9540329,
+                "false": 0.04596712
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "data_portability": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9582957,
+                "false": 0.04170431
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "us_federal_law": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.01631355,
+                "false": 0.9836865
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "criminal_penalties": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.037606724,
+                "false": 0.96239334
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "instrument_type": {
+              "winner": "Regulation",
+              "probabilities": {
+                "Directive": 0.013051041,
+                "Recommendation": 0.011272116,
+                "Regulation": 0.95961213,
+                "Treaty": 0.016064702
+              },
+              "answer": "Regulation",
+              "expected": "Regulation",
+              "correct": true
+            },
+            "max_fine": {
+              "winner": "TwentyM_or_4pct",
+              "probabilities": {
+                "FixedCap": 0.0046287472,
+                "NoFines": 0.0040731225,
+                "TenM_or_2pct": 0.0068654707,
+                "TwentyM_or_4pct": 0.9844327
+              },
+              "answer": "TwentyM_or_4pct",
+              "expected": "TwentyM_or_4pct",
+              "correct": true
+            },
+            "individual_rights": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.014018093,
+                "1": 0.019462604,
+                "2": 0.045579158,
+                "3": 0.92094016
+              },
+              "answer": 2.8734414000000004,
+              "expected": null,
+              "correct": null
+            },
+            "penalty_severity": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.007598277,
+                "1": 0.007587799,
+                "2": 0.17317575,
+                "3": 0.8116381
+              },
+              "answer": 2.788853599,
+              "expected": null,
+              "correct": null
+            },
+            "compliance_burden": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.010601721,
+                "1": 0.015430974,
+                "2": 0.0932049,
+                "3": 0.86180985,
+                "4": 0.018952575
+              },
+              "answer": 2.8630806239999997,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 12358,
+          "resident_ms": 6049.124428,
+          "tok_s": 2042.9402878204442,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 20.824552,
+            "prepare_ms": 0.353421,
+            "inference_ms": 6027.938995,
+            "readback_ms": 0.00746,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:police_rear_impact",
+          "group": "insurance_oracle",
+          "answers": {
+            "police_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0162632,
+                "contradicts": 0.020081893,
+                "supports": 0.9505281,
+                "unknown": 0.013126804
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 298,
+          "resident_ms": 184.868253,
+          "tok_s": 1611.9587607072804,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.674781,
+            "prepare_ms": 0.013869999999999999,
+            "inference_ms": 184.175782,
+            "readback_ms": 0.00382,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:witness_rear_impact",
+          "group": "insurance_oracle",
+          "answers": {
+            "witness_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.01699447,
+                "contradicts": 0.02049815,
+                "supports": 0.94856584,
+                "unknown": 0.013941505
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 283,
+          "resident_ms": 182.555286,
+          "tok_s": 1550.2153139515226,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.618213,
+            "prepare_ms": 0.013039,
+            "inference_ms": 181.920624,
+            "readback_ms": 0.00341,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_acute_fracture",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_acute_fracture": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.037296552,
+                "contradicts": 0.040735465,
+                "supports": 0.89031947,
+                "unknown": 0.031648494
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 273,
+          "resident_ms": 179.18619800000002,
+          "tok_s": 1523.5548443301418,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.796678,
+            "prepare_ms": 0.012699,
+            "inference_ms": 178.373521,
+            "readback_ms": 0.0033,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_neurological_deficit",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_neurological_deficit": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.032051466,
+                "contradicts": 0.0345157,
+                "supports": 0.9063581,
+                "unknown": 0.027074741
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 259,
+          "resident_ms": 178.509577,
+          "tok_s": 1450.9025473742508,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.704621,
+            "prepare_ms": 0.01238,
+            "inference_ms": 177.788106,
+            "readback_ms": 0.00447,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:discharged_home",
+          "group": "insurance_oracle",
+          "answers": {
+            "discharged_home": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.024857637,
+                "contradicts": 0.02807369,
+                "supports": 0.9240495,
+                "unknown": 0.023019152
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 267,
+          "resident_ms": 180.916091,
+          "tok_s": 1475.822291561672,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.671492,
+            "prepare_ms": 0.012499,
+            "inference_ms": 180.22695,
+            "readback_ms": 0.00515,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_hospitalization",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_hospitalization": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.032037154,
+                "contradicts": 0.03686067,
+                "supports": 0.9006495,
+                "unknown": 0.030452732
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 263,
+          "resident_ms": 179.430252,
+          "tok_s": 1465.7506026352792,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.560955,
+            "prepare_ms": 0.012490000000000001,
+            "inference_ms": 178.851347,
+            "readback_ms": 0.0054600000000000004,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_neck_stiffness",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_neck_stiffness": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.015881227,
+                "contradicts": 0.018847855,
+                "supports": 0.9531501,
+                "unknown": 0.0121209305
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 285,
+          "resident_ms": 182.988444,
+          "tok_s": 1557.4753999219756,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.74373,
+            "prepare_ms": 0.013589,
+            "inference_ms": 182.227745,
+            "readback_ms": 0.0033799999999999998,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_imaging",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_imaging": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.026614986,
+                "contradicts": 0.030399082,
+                "supports": 0.92071855,
+                "unknown": 0.022267321
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 264,
+          "resident_ms": 179.884129,
+          "tok_s": 1467.6114088975576,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.625763,
+            "prepare_ms": 0.01309,
+            "inference_ms": 179.241616,
+            "readback_ms": 0.00366,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_prescription",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_prescription": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.027339485,
+                "contradicts": 0.032216165,
+                "supports": 0.91729516,
+                "unknown": 0.023149177
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 267,
+          "resident_ms": 177.297109,
+          "tok_s": 1505.9467213309158,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.605503,
+            "prepare_ms": 0.01272,
+            "inference_ms": 176.675146,
+            "readback_ms": 0.0037400000000000003,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_active_treatment",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_active_treatment": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.029300801,
+                "contradicts": 0.032731015,
+                "supports": 0.9128968,
+                "unknown": 0.025071435
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 272,
+          "resident_ms": 183.784032,
+          "tok_s": 1479.9980011321115,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.622933,
+            "prepare_ms": 0.012519,
+            "inference_ms": 183.138021,
+            "readback_ms": 0.010559,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:employer_two_absences",
+          "group": "insurance_oracle",
+          "answers": {
+            "employer_two_absences": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.023127342,
+                "contradicts": 0.029272413,
+                "supports": 0.9303264,
+                "unknown": 0.017273853
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 302,
+          "resident_ms": 185.76661900000002,
+          "tok_s": 1625.6957338497934,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.6983710000000001,
+            "prepare_ms": 0.01315,
+            "inference_ms": 185.051228,
+            "readback_ms": 0.00387,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:employer_no_wage_calculation",
+          "group": "insurance_oracle",
+          "answers": {
+            "employer_no_wage_calculation": {
+              "winner": "unknown",
+              "probabilities": {
+                "conflicted": 0.076898925,
+                "contradicts": 0.098733164,
+                "supports": 0.34127444,
+                "unknown": 0.48309347
+              },
+              "answer": "unknown",
+              "expected": "supports",
+              "correct": false
+            }
+          },
+          "tokens": 268,
+          "resident_ms": 178.51599600000003,
+          "tok_s": 1501.2660266030164,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.691931,
+            "prepare_ms": 0.012719,
+            "inference_ms": 177.80743600000002,
+            "readback_ms": 0.003909999999999999,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:pickup_confirmation_outstanding",
+          "group": "insurance_oracle",
+          "answers": {
+            "pickup_confirmation_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.026978556,
+                "contradicts": 0.028605727,
+                "supports": 0.9224365,
+                "unknown": 0.021979235
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 263,
+          "resident_ms": 177.231872,
+          "tok_s": 1483.9317388691802,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.7133210000000001,
+            "prepare_ms": 0.01415,
+            "inference_ms": 176.500831,
+            "readback_ms": 0.0035700000000000003,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:payroll_statement_outstanding",
+          "group": "insurance_oracle",
+          "answers": {
+            "payroll_statement_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.092507385,
+                "contradicts": 0.10082753,
+                "supports": 0.7612328,
+                "unknown": 0.045432292
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 264,
+          "resident_ms": 178.646263,
+          "tok_s": 1477.7807023032997,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.573925,
+            "prepare_ms": 0.012869,
+            "inference_ms": 178.055659,
+            "readback_ms": 0.00381,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:emergency_bill_matches_demand",
+          "group": "insurance_oracle",
+          "answers": {
+            "emergency_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.024779294,
+                "contradicts": 0.030469488,
+                "supports": 0.92114854,
+                "unknown": 0.023602718
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 304,
+          "resident_ms": 183.70499400000003,
+          "tok_s": 1654.8270865189434,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.6760409999999999,
+            "prepare_ms": 0.013869999999999999,
+            "inference_ms": 183.01189300000001,
+            "readback_ms": 0.00319,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:therapy_bill_matches_demand",
+          "group": "insurance_oracle",
+          "answers": {
+            "therapy_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.026512919,
+                "contradicts": 0.031639174,
+                "supports": 0.9189858,
+                "unknown": 0.022862148
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 310,
+          "resident_ms": 192.26581099999999,
+          "tok_s": 1612.3511423463635,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.7007909999999999,
+            "prepare_ms": 0.01667,
+            "inference_ms": 191.54053,
+            "readback_ms": 0.007819999999999999,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:claimant_collision_mechanism",
+          "group": "insurance_oracle",
+          "answers": {
+            "claimant_collision_mechanism": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.021192353,
+                "contradicts": 0.026451124,
+                "supports": 0.93195766,
+                "unknown": 0.020398842
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 279,
+          "resident_ms": 181.800487,
+          "tok_s": 1534.649354377142,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.628543,
+            "prepare_ms": 0.01346,
+            "inference_ms": 181.155464,
+            "readback_ms": 0.0030199999999999997,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_document",
+          "group": "insurance_document",
+          "answers": {
+            "police_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.01181698,
+                "contradicts": 0.011011906,
+                "supports": 0.96547836,
+                "unknown": 0.011692737
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "witness_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0064354497,
+                "contradicts": 0.009043964,
+                "supports": 0.9741373,
+                "unknown": 0.010383313
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_acute_fracture": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.008683782,
+                "contradicts": 0.01017623,
+                "supports": 0.9718588,
+                "unknown": 0.009281283
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_neurological_deficit": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.012111582,
+                "contradicts": 0.012355815,
+                "supports": 0.96246463,
+                "unknown": 0.01306799
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "discharged_home": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.012671267,
+                "contradicts": 0.0109765455,
+                "supports": 0.96443063,
+                "unknown": 0.011921662
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_hospitalization": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.027870765,
+                "contradicts": 0.029239846,
+                "supports": 0.89756066,
+                "unknown": 0.04532875
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_neck_stiffness": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.012327256,
+                "contradicts": 0.013041315,
+                "supports": 0.9626863,
+                "unknown": 0.011945121
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_imaging": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.017963959,
+                "contradicts": 0.01545554,
+                "supports": 0.94737995,
+                "unknown": 0.019200537
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_prescription": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0130598,
+                "contradicts": 0.013622154,
+                "supports": 0.95139825,
+                "unknown": 0.021919826
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_active_treatment": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.035278577,
+                "contradicts": 0.030996438,
+                "supports": 0.8871667,
+                "unknown": 0.04655833
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "employer_two_absences": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.01543297,
+                "contradicts": 0.01963839,
+                "supports": 0.95062727,
+                "unknown": 0.014301321
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "employer_no_wage_calculation": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.021102926,
+                "contradicts": 0.022809502,
+                "supports": 0.934282,
+                "unknown": 0.021805607
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "pickup_confirmation_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.02603479,
+                "contradicts": 0.028081609,
+                "supports": 0.909542,
+                "unknown": 0.0363415
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "payroll_statement_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.018247942,
+                "contradicts": 0.024201132,
+                "supports": 0.93441397,
+                "unknown": 0.02313696
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "emergency_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.04936628,
+                "contradicts": 0.03263755,
+                "supports": 0.8832229,
+                "unknown": 0.034773227
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "therapy_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.02285849,
+                "contradicts": 0.014783089,
+                "supports": 0.94051534,
+                "unknown": 0.021843087
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "claimant_collision_mechanism": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.017646875,
+                "contradicts": 0.015818229,
+                "supports": 0.9525209,
+                "unknown": 0.0140139
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 6300,
+          "resident_ms": 3493.3803070000004,
+          "tok_s": 1803.4108646505288,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 8.908377,
+            "prepare_ms": 0.172105,
+            "inference_ms": 3484.2899960000004,
+            "readback_ms": 0.009829000000000001,
+            "allocated_bytes": 17857688116,
+            "uploaded_bytes": 0
+          },
+          "composed": [
+            {
+              "id": "independent_liability_support",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "prompt_medical_treatment",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "serious_injury_documented",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "preexisting_neck_condition",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "prior_active_treatment",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "lost_wages_fully_supported",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "rental_fully_supported",
+              "answer": "unknown",
+              "expected": "unknown",
+              "correct": true
+            },
+            {
+              "id": "documents_outstanding",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "medical_expenses_documented",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "collision_accounts_consistent",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            }
+          ]
+        }
+      ],
+      "precision": "bf16"
+    },
+    "clef-omni": {
+      "groups": {
+        "text": {
+          "correct": 2,
+          "scored": 2,
+          "tokens": 1405,
+          "resident_ms": 979.238703,
+          "requests": 7,
+          "tok_s": 1434.7880610678844
+        },
+        "images": {
+          "correct": 26,
+          "scored": 26,
+          "tokens": 7913,
+          "resident_ms": 14350.931238,
+          "requests": 11,
+          "tok_s": 551.3927889952587
+        },
+        "image_api": {
+          "correct": 0,
+          "scored": 0,
+          "tokens": 1271,
+          "resident_ms": 4357.008225,
+          "requests": 1,
+          "tok_s": 291.71393175416836
+        },
+        "gdpr": {
+          "correct": 10,
+          "scored": 10,
+          "tokens": 12357,
+          "resident_ms": 4412.170224,
+          "requests": 1,
+          "tok_s": 2800.6625702662373
+        },
+        "insurance_oracle": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 4636,
+          "resident_ms": 2154.8573509999997,
+          "requests": 17,
+          "tok_s": 2151.4185140137383
+        },
+        "insurance_document": {
+          "correct": 17,
+          "scored": 17,
+          "tokens": 6087,
+          "resident_ms": 1707.8431970000001,
+          "requests": 1,
+          "tok_s": 3564.1445366251614
+        }
+      },
+      "cases": [
+        {
+          "id": "m1_smoke_test.py:0",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "isp",
+              "probabilities": {
+                "isp": 0.47787678,
+                "power_utility": 0.47214657,
+                "router_manufacturer": 0.04997665
+              },
+              "answer": "isp",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 166,
+          "resident_ms": 137.254117,
+          "tok_s": 1209.4354881901284,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.601974,
+            "prepare_ms": 0.01439,
+            "inference_ms": 136.629723,
+            "readback_ms": 0.008029999999999999,
+            "allocated_bytes": 18952472368,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:1",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9850832,
+                "false": 0.014916843
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 163,
+          "resident_ms": 134.353094,
+          "tok_s": 1213.2210368002393,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.578035,
+            "prepare_ms": 0.014209000000000001,
+            "inference_ms": 133.75392,
+            "readback_ms": 0.0069299999999999995,
+            "allocated_bytes": 18952853296,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:2",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9092589,
+                "false": 0.09074116
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 158,
+          "resident_ms": 135.535642,
+          "tok_s": 1165.7450222576879,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.691582,
+            "prepare_ms": 0.012929,
+            "inference_ms": 134.820782,
+            "readback_ms": 0.010349,
+            "allocated_bytes": 18953254704,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:3",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "2",
+              "probabilities": {
+                "0": 0.0051814136,
+                "1": 0.007444157,
+                "2": 0.9873745
+              },
+              "answer": 1.982193157,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 172,
+          "resident_ms": 132.789986,
+          "tok_s": 1295.2783954657546,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.628024,
+            "prepare_ms": 0.013628999999999999,
+            "inference_ms": 132.138533,
+            "readback_ms": 0.0098,
+            "allocated_bytes": 18953254704,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "m1_smoke_test1.py:4",
+          "group": "text",
+          "answers": {
+            "decision": {
+              "winner": "sales",
+              "probabilities": {
+                "billing": 0.01122961,
+                "sales": 0.9815502,
+                "technical": 0.007220176
+              },
+              "answer": "sales",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 186,
+          "resident_ms": 133.523755,
+          "tok_s": 1393.0105545638678,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.639283,
+            "prepare_ms": 0.014789,
+            "inference_ms": 132.863114,
+            "readback_ms": 0.006569,
+            "allocated_bytes": 18953254704,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "sdk_customer",
+          "group": "text",
+          "answers": {
+            "department": {
+              "winner": "billing",
+              "probabilities": {
+                "billing": 0.97750616,
+                "sales": 0.004751228,
+                "technical": 0.017742617
+              },
+              "answer": "billing",
+              "expected": null,
+              "correct": null
+            },
+            "urgent": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.98323834,
+                "false": 0.016761694
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "frustration": {
+              "winner": "1",
+              "probabilities": {
+                "0": 0.014722899,
+                "1": 0.55518883,
+                "2": 0.43008828
+              },
+              "answer": 1.4153653899999998,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 321,
+          "resident_ms": 168.72350799999998,
+          "tok_s": 1902.520898273405,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.883686,
+            "prepare_ms": 0.021489,
+            "inference_ms": 167.809103,
+            "readback_ms": 0.00923,
+            "allocated_bytes": 18976909104,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "customer_routing",
+          "group": "text",
+          "answers": {
+            "department": {
+              "winner": "billing",
+              "probabilities": {
+                "billing": 0.97633356,
+                "sales": 0.0034284182,
+                "technical": 0.02023804
+              },
+              "answer": "billing",
+              "expected": "billing",
+              "correct": true
+            },
+            "urgent": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.99564123,
+                "false": 0.0043587447
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 239,
+          "resident_ms": 137.05860099999998,
+          "tok_s": 1743.779655243964,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.7918689999999999,
+            "prepare_ms": 0.021029000000000003,
+            "inference_ms": 136.234223,
+            "readback_ms": 0.01148,
+            "allocated_bytes": 18976909104,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bird",
+          "group": "images",
+          "answers": {
+            "bird_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.98316956,
+                "false": 0.0168305
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "eagle_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.8393297,
+                "false": 0.16067031
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "human_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.004194617,
+                "false": 0.9958054
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "bird_kind": {
+              "winner": "hawk",
+              "probabilities": {
+                "eagle": 0.10547766,
+                "hawk": 0.7536611,
+                "no_bird": 0.012533525,
+                "other_bird": 0.09605541,
+                "owl": 0.032272317
+              },
+              "answer": "hawk",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 733,
+          "resident_ms": 845.205259,
+          "tok_s": 867.2449587775222,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 7.726384,
+            "prepare_ms": 3.712431,
+            "inference_ms": 833.758824,
+            "readback_ms": 0.00762,
+            "allocated_bytes": 19059351476,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "moon",
+          "group": "images",
+          "answers": {
+            "sky_object": {
+              "winner": "moon",
+              "probabilities": {
+                "moon": 0.9694818,
+                "neither": 0.011435113,
+                "sun": 0.019083064
+              },
+              "answer": "moon",
+              "expected": "moon",
+              "correct": true
+            },
+            "plane_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.2876688,
+                "false": 0.71233124
+              },
+              "answer": false,
+              "expected": null,
+              "correct": null
+            },
+            "tree_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9911299,
+                "false": 0.008870127
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 617,
+          "resident_ms": 796.1255530000001,
+          "tok_s": 775.0033869343721,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 6.478827000000001,
+            "prepare_ms": 3.694062,
+            "inference_ms": 785.941534,
+            "readback_ms": 0.011130000000000001,
+            "allocated_bytes": 19059351476,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "cat-patio",
+          "group": "images",
+          "answers": {
+            "cat_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9898357,
+                "false": 0.010164336
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "cat_count": {
+              "winner": "one",
+              "probabilities": {
+                "multiple": 0.026644621,
+                "one": 0.95594984,
+                "zero": 0.017405536
+              },
+              "answer": "one",
+              "expected": "one",
+              "correct": true
+            },
+            "cat_napping": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.0013110471,
+                "false": 0.998689
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            }
+          },
+          "tokens": 616,
+          "resident_ms": 808.8506629999999,
+          "tok_s": 761.5744514757232,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 7.785232,
+            "prepare_ms": 3.967845,
+            "inference_ms": 797.091456,
+            "readback_ms": 0.00613,
+            "allocated_bytes": 19059351476,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bread",
+          "group": "images",
+          "answers": {
+            "bread_count": {
+              "winner": "one",
+              "probabilities": {
+                "multiple": 0.024928309,
+                "one": 0.96350855,
+                "zero": 0.011563094
+              },
+              "answer": "one",
+              "expected": "one",
+              "correct": true
+            }
+          },
+          "tokens": 465,
+          "resident_ms": 781.730393,
+          "tok_s": 594.8342346208356,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 8.156903,
+            "prepare_ms": 3.9479140000000004,
+            "inference_ms": 769.615316,
+            "readback_ms": 0.01026,
+            "allocated_bytes": 19059351476,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "wooded-stream",
+          "group": "images",
+          "answers": {
+            "backyard_flooded": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.4748836,
+                "false": 0.5251164
+              },
+              "answer": false,
+              "expected": null,
+              "correct": null
+            },
+            "water_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.98725605,
+                "false": 0.01274391
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "water_scene": {
+              "winner": "wooded_creek",
+              "probabilities": {
+                "dry_yard": 0.0054456405,
+                "flooded_yard": 0.0073338496,
+                "wooded_creek": 0.98722047
+              },
+              "answer": "wooded_creek",
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 645,
+          "resident_ms": 852.661193,
+          "tok_s": 756.4552078776264,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 8.297879,
+            "prepare_ms": 3.971634,
+            "inference_ms": 840.3818600000001,
+            "readback_ms": 0.009819999999999999,
+            "allocated_bytes": 19059896244,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "patio-animals",
+          "group": "images",
+          "answers": {
+            "animal_count": {
+              "winner": "multiple",
+              "probabilities": {
+                "multiple": 0.8739357,
+                "one": 0.12004454,
+                "zero": 0.006019813
+              },
+              "answer": "multiple",
+              "expected": "multiple",
+              "correct": true
+            },
+            "bear_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.0012095401,
+                "false": 0.99879044
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "coyote_present": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.0055354717,
+                "false": 0.9944646
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "animal_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.98783314,
+                "false": 0.012166847
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "animal_type": {
+              "winner": "cat",
+              "probabilities": {
+                "bear": 0.008325408,
+                "cat": 0.9515553,
+                "coyote": 0.009628284,
+                "dog": 0.00943638,
+                "no_animal": 0.0052804295,
+                "other_animal": 0.015774166
+              },
+              "answer": "cat",
+              "expected": "cat",
+              "correct": true
+            }
+          },
+          "tokens": 1189,
+          "resident_ms": 3267.797865,
+          "tok_s": 363.8535947204311,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 26.813946,
+            "prepare_ms": 8.289269,
+            "inference_ms": 3232.68385,
+            "readback_ms": 0.0108,
+            "allocated_bytes": 19224487348,
+            "uploaded_bytes": 0
+          },
+          "action": "no_alarm"
+        },
+        {
+          "id": "parked-cars",
+          "group": "images",
+          "answers": {
+            "weather": {
+              "winner": "sunny",
+              "probabilities": {
+                "cloudy": 0.008670133,
+                "night": 0.005872646,
+                "rainy": 0.010052797,
+                "sunny": 0.97540444
+              },
+              "answer": "sunny",
+              "expected": "sunny",
+              "correct": true
+            },
+            "parked_car_count": {
+              "winner": "two",
+              "probabilities": {
+                "one": 0.028794795,
+                "three_or_more": 0.07471897,
+                "two": 0.8755278,
+                "zero": 0.02095846
+              },
+              "answer": "two",
+              "expected": "two",
+              "correct": true
+            }
+          },
+          "tokens": 602,
+          "resident_ms": 812.27335,
+          "tok_s": 741.1298179362896,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 7.452922,
+            "prepare_ms": 3.999313,
+            "inference_ms": 800.8114360000001,
+            "readback_ms": 0.009679,
+            "allocated_bytes": 19224487348,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "cat-window",
+          "group": "images",
+          "answers": {
+            "cat_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9872887,
+                "false": 0.012711279
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "cat_gaze": {
+              "winner": "window",
+              "probabilities": {
+                "camera": 0.010721676,
+                "elsewhere": 0.008917505,
+                "window": 0.9803608
+              },
+              "answer": "window",
+              "expected": "window",
+              "correct": true
+            }
+          },
+          "tokens": 545,
+          "resident_ms": 812.5863699999999,
+          "tok_s": 670.6979345469456,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 7.5050799999999995,
+            "prepare_ms": 3.975254,
+            "inference_ms": 801.0975169999999,
+            "readback_ms": 0.008518999999999999,
+            "allocated_bytes": 19224487348,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "bear",
+          "group": "images",
+          "answers": {
+            "animal_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.99321544,
+                "false": 0.006784547
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "animal_type": {
+              "winner": "bear",
+              "probabilities": {
+                "bear": 0.97766405,
+                "cat": 0.00435803,
+                "coyote": 0.0051662447,
+                "dog": 0.00442705,
+                "no_animal": 0.002571597,
+                "other_animal": 0.005812993
+              },
+              "answer": "bear",
+              "expected": "bear",
+              "correct": true
+            }
+          },
+          "tokens": 1273,
+          "resident_ms": 4386.972398,
+          "tok_s": 290.17734430705667,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 35.229022,
+            "prepare_ms": 9.990544,
+            "inference_ms": 4341.740193,
+            "readback_ms": 0.012639000000000001,
+            "allocated_bytes": 19345170868,
+            "uploaded_bytes": 0
+          },
+          "action": "sound_alarm"
+        },
+        {
+          "id": "overflowing-bin",
+          "group": "images",
+          "answers": {
+            "bin_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.97964394,
+                "false": 0.020356007
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "bin_condition": {
+              "winner": "overflowing",
+              "probabilities": {
+                "contained": 0.007657924,
+                "empty": 0.0069460715,
+                "overflowing": 0.98539597
+              },
+              "answer": "overflowing",
+              "expected": "overflowing",
+              "correct": true
+            },
+            "ground_litter": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9760138,
+                "false": 0.02398626
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            }
+          },
+          "tokens": 522,
+          "resident_ms": 334.45182400000004,
+          "tok_s": 1560.762903777735,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 5.8102350000000005,
+            "prepare_ms": 2.014076,
+            "inference_ms": 326.619003,
+            "readback_ms": 0.00851,
+            "allocated_bytes": 19345170868,
+            "uploaded_bytes": 0
+          },
+          "action": "request_collection"
+        },
+        {
+          "id": "damaged-fence",
+          "group": "images",
+          "answers": {
+            "fence_present": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.94867283,
+                "false": 0.05132716
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "fence_condition": {
+              "winner": "damaged",
+              "probabilities": {
+                "damaged": 0.9776894,
+                "intact": 0.008971161,
+                "unclear": 0.013339408
+              },
+              "answer": "damaged",
+              "expected": "damaged",
+              "correct": true
+            },
+            "fence_material": {
+              "winner": "metal",
+              "probabilities": {
+                "metal": 0.84113777,
+                "other": 0.02713388,
+                "wire_mesh": 0.118830614,
+                "wood": 0.012897795
+              },
+              "answer": "metal",
+              "expected": "metal",
+              "correct": true
+            }
+          },
+          "tokens": 706,
+          "resident_ms": 652.27637,
+          "tok_s": 1082.3632933383742,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 8.189551999999999,
+            "prepare_ms": 3.437338,
+            "inference_ms": 640.64075,
+            "readback_ms": 0.00873,
+            "allocated_bytes": 19345170868,
+            "uploaded_bytes": 0
+          },
+          "action": "create_repair_task"
+        },
+        {
+          "id": "image_api_bear",
+          "group": "image_api",
+          "answers": {
+            "scene": {
+              "winner": "outdoors",
+              "probabilities": {
+                "indoors": 0.006446615,
+                "outdoors": 0.9935534
+              },
+              "answer": "outdoors",
+              "expected": null,
+              "correct": null
+            },
+            "animal": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9856213,
+                "false": 0.0143786995
+              },
+              "answer": true,
+              "expected": null,
+              "correct": null
+            },
+            "brightness": {
+              "winner": "1",
+              "probabilities": {
+                "0": 0.004981012,
+                "1": 0.82375157,
+                "2": 0.17126745
+              },
+              "answer": 1.16628647,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 1271,
+          "resident_ms": 4357.008225,
+          "tok_s": 291.71393175416836,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 21.870416,
+            "prepare_ms": 9.918986,
+            "inference_ms": 4325.209693,
+            "readback_ms": 0.009130000000000001,
+            "allocated_bytes": 19345170868,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "gdpr",
+          "group": "gdpr",
+          "answers": {
+            "breach_72h": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9766806,
+                "false": 0.023319438
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "applies_non_eu": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9769835,
+                "false": 0.023016464
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "dpo_all_orgs": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.015270075,
+                "false": 0.98472995
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "pre_ticked_consent": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.02369802,
+                "false": 0.97630197
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "right_erasure": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.975806,
+                "false": 0.024193974
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "data_portability": {
+              "winner": "true",
+              "probabilities": {
+                "true": 0.9881775,
+                "false": 0.011822481
+              },
+              "answer": true,
+              "expected": true,
+              "correct": true
+            },
+            "us_federal_law": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.0035250208,
+                "false": 0.9964749
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "criminal_penalties": {
+              "winner": "false",
+              "probabilities": {
+                "true": 0.019002147,
+                "false": 0.98099786
+              },
+              "answer": false,
+              "expected": false,
+              "correct": true
+            },
+            "instrument_type": {
+              "winner": "Regulation",
+              "probabilities": {
+                "Directive": 0.014900112,
+                "Recommendation": 0.012088598,
+                "Regulation": 0.9557376,
+                "Treaty": 0.01727368
+              },
+              "answer": "Regulation",
+              "expected": "Regulation",
+              "correct": true
+            },
+            "max_fine": {
+              "winner": "TwentyM_or_4pct",
+              "probabilities": {
+                "FixedCap": 0.011839644,
+                "NoFines": 0.01886498,
+                "TenM_or_2pct": 0.025218843,
+                "TwentyM_or_4pct": 0.94407654
+              },
+              "answer": "TwentyM_or_4pct",
+              "expected": "TwentyM_or_4pct",
+              "correct": true
+            },
+            "individual_rights": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.014048685,
+                "1": 0.018612836,
+                "2": 0.02989789,
+                "3": 0.9374406
+              },
+              "answer": 2.890730416,
+              "expected": null,
+              "correct": null
+            },
+            "penalty_severity": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.007874907,
+                "1": 0.0076654768,
+                "2": 0.3091355,
+                "3": 0.6753241
+              },
+              "answer": 2.6519087768,
+              "expected": null,
+              "correct": null
+            },
+            "compliance_burden": {
+              "winner": "3",
+              "probabilities": {
+                "0": 0.0054794014,
+                "1": 0.005876281,
+                "2": 0.047815736,
+                "3": 0.87915033,
+                "4": 0.061678305
+              },
+              "answer": 2.985671963,
+              "expected": null,
+              "correct": null
+            }
+          },
+          "tokens": 12357,
+          "resident_ms": 4412.170224,
+          "tok_s": 2800.6625702662373,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 23.293458,
+            "prepare_ms": 0.3608,
+            "inference_ms": 4388.506996,
+            "readback_ms": 0.00897,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:police_rear_impact",
+          "group": "insurance_oracle",
+          "answers": {
+            "police_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.019806728,
+                "contradicts": 0.029930612,
+                "supports": 0.93641347,
+                "unknown": 0.013849142
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 293,
+          "resident_ms": 131.033651,
+          "tok_s": 2236.0668253073404,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.7769590000000001,
+            "prepare_ms": 0.012320000000000001,
+            "inference_ms": 130.235842,
+            "readback_ms": 0.00853,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:witness_rear_impact",
+          "group": "insurance_oracle",
+          "answers": {
+            "witness_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.018686056,
+                "contradicts": 0.02718371,
+                "supports": 0.9391586,
+                "unknown": 0.014971608
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 278,
+          "resident_ms": 130.671271,
+          "tok_s": 2127.4760540134334,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.727941,
+            "prepare_ms": 0.012728999999999999,
+            "inference_ms": 129.921821,
+            "readback_ms": 0.008780000000000001,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_acute_fracture",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_acute_fracture": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.02083219,
+                "contradicts": 0.036178764,
+                "supports": 0.9289132,
+                "unknown": 0.014075903
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 268,
+          "resident_ms": 136.363519,
+          "tok_s": 1965.335024831678,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.643643,
+            "prepare_ms": 0.014469,
+            "inference_ms": 135.696677,
+            "readback_ms": 0.00873,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_neurological_deficit",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_neurological_deficit": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.022112215,
+                "contradicts": 0.0344676,
+                "supports": 0.928803,
+                "unknown": 0.014617133
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 254,
+          "resident_ms": 108.56238099999999,
+          "tok_s": 2339.6686555723204,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.697172,
+            "prepare_ms": 0.013458999999999999,
+            "inference_ms": 107.8427,
+            "readback_ms": 0.009049999999999999,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:discharged_home",
+          "group": "insurance_oracle",
+          "answers": {
+            "discharged_home": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.027623111,
+                "contradicts": 0.03773569,
+                "supports": 0.9162415,
+                "unknown": 0.018399635
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 262,
+          "resident_ms": 128.074829,
+          "tok_s": 2045.6790928059722,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.703381,
+            "prepare_ms": 0.012589,
+            "inference_ms": 127.35193,
+            "readback_ms": 0.006929,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:no_hospitalization",
+          "group": "insurance_oracle",
+          "answers": {
+            "no_hospitalization": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.023990357,
+                "contradicts": 0.03837645,
+                "supports": 0.9225474,
+                "unknown": 0.015085766
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 258,
+          "resident_ms": 126.958011,
+          "tok_s": 2032.167942517625,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.703802,
+            "prepare_ms": 0.011349999999999999,
+            "inference_ms": 126.232639,
+            "readback_ms": 0.01022,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_neck_stiffness",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_neck_stiffness": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.020898784,
+                "contradicts": 0.03316698,
+                "supports": 0.9317104,
+                "unknown": 0.014223859
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 280,
+          "resident_ms": 127.83282599999998,
+          "tok_s": 2190.360713765336,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.8044979999999999,
+            "prepare_ms": 0.01336,
+            "inference_ms": 127.00740799999998,
+            "readback_ms": 0.00756,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_imaging",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_imaging": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.021585172,
+                "contradicts": 0.034891747,
+                "supports": 0.9290144,
+                "unknown": 0.014508619
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 259,
+          "resident_ms": 126.49091200000001,
+          "tok_s": 2047.5779319228877,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.684242,
+            "prepare_ms": 0.011579,
+            "inference_ms": 125.78715100000001,
+            "readback_ms": 0.007940000000000001,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_prescription",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_prescription": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.019373674,
+                "contradicts": 0.033723235,
+                "supports": 0.9330139,
+                "unknown": 0.01388921
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 262,
+          "resident_ms": 126.91042100000001,
+          "tok_s": 2064.448277261644,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.708311,
+            "prepare_ms": 0.01183,
+            "inference_ms": 126.18144000000001,
+            "readback_ms": 0.00884,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:prior_no_active_treatment",
+          "group": "insurance_oracle",
+          "answers": {
+            "prior_no_active_treatment": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.03047764,
+                "contradicts": 0.04369711,
+                "supports": 0.90513253,
+                "unknown": 0.02069275
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 267,
+          "resident_ms": 125.79457,
+          "tok_s": 2122.5081495966006,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.74723,
+            "prepare_ms": 0.012129000000000001,
+            "inference_ms": 125.026681,
+            "readback_ms": 0.00853,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:employer_two_absences",
+          "group": "insurance_oracle",
+          "answers": {
+            "employer_two_absences": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.03675326,
+                "contradicts": 0.05772456,
+                "supports": 0.86025524,
+                "unknown": 0.045266848
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 297,
+          "resident_ms": 127.123924,
+          "tok_s": 2336.302960566258,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.820618,
+            "prepare_ms": 0.01328,
+            "inference_ms": 126.282797,
+            "readback_ms": 0.007228999999999999,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:employer_no_wage_calculation",
+          "group": "insurance_oracle",
+          "answers": {
+            "employer_no_wage_calculation": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.045955557,
+                "contradicts": 0.05163067,
+                "supports": 0.8613326,
+                "unknown": 0.041081153
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 263,
+          "resident_ms": 125.753781,
+          "tok_s": 2091.3884092280296,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.797339,
+            "prepare_ms": 0.014609,
+            "inference_ms": 124.934713,
+            "readback_ms": 0.00712,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:pickup_confirmation_outstanding",
+          "group": "insurance_oracle",
+          "answers": {
+            "pickup_confirmation_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.03074341,
+                "contradicts": 0.03451178,
+                "supports": 0.9142383,
+                "unknown": 0.020506566
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 258,
+          "resident_ms": 126.092482,
+          "tok_s": 2046.117230050242,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.737411,
+            "prepare_ms": 0.014159,
+            "inference_ms": 125.333983,
+            "readback_ms": 0.006929,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:payroll_statement_outstanding",
+          "group": "insurance_oracle",
+          "answers": {
+            "payroll_statement_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.13736095,
+                "contradicts": 0.11459173,
+                "supports": 0.6886558,
+                "unknown": 0.059391536
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 259,
+          "resident_ms": 125.87131799999999,
+          "tok_s": 2057.6570112660615,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.6979519999999999,
+            "prepare_ms": 0.011649,
+            "inference_ms": 125.15357799999998,
+            "readback_ms": 0.008138999999999999,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:emergency_bill_matches_demand",
+          "group": "insurance_oracle",
+          "answers": {
+            "emergency_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.028194277,
+                "contradicts": 0.043236893,
+                "supports": 0.9122775,
+                "unknown": 0.016291387
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 299,
+          "resident_ms": 127.07660500000001,
+          "tok_s": 2352.9114584073122,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 1.0384120000000001,
+            "prepare_ms": 0.013600000000000001,
+            "inference_ms": 126.02061400000001,
+            "readback_ms": 0.003979000000000001,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:therapy_bill_matches_demand",
+          "group": "insurance_oracle",
+          "answers": {
+            "therapy_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.02669718,
+                "contradicts": 0.04130896,
+                "supports": 0.9176213,
+                "unknown": 0.014372455
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 305,
+          "resident_ms": 127.47545600000001,
+          "tok_s": 2392.6174462949166,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.873987,
+            "prepare_ms": 0.012830000000000001,
+            "inference_ms": 126.582249,
+            "readback_ms": 0.00639,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_oracle:claimant_collision_mechanism",
+          "group": "insurance_oracle",
+          "answers": {
+            "claimant_collision_mechanism": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.021137951,
+                "contradicts": 0.031152045,
+                "supports": 0.9340267,
+                "unknown": 0.01368324
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 274,
+          "resident_ms": 126.771394,
+          "tok_s": 2161.3708846650375,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 0.783109,
+            "prepare_ms": 0.012870000000000001,
+            "inference_ms": 125.969615,
+            "readback_ms": 0.0058000000000000005,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          }
+        },
+        {
+          "id": "insurance_document",
+          "group": "insurance_document",
+          "answers": {
+            "police_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.0248337,
+                "contradicts": 0.025740383,
+                "supports": 0.9258792,
+                "unknown": 0.023546686
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "witness_rear_impact": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.02125779,
+                "contradicts": 0.025293918,
+                "supports": 0.9313618,
+                "unknown": 0.022086462
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_acute_fracture": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.020004066,
+                "contradicts": 0.0255964,
+                "supports": 0.9310259,
+                "unknown": 0.023373611
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_neurological_deficit": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.022939561,
+                "contradicts": 0.025391767,
+                "supports": 0.92713845,
+                "unknown": 0.02453026
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "discharged_home": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.022657499,
+                "contradicts": 0.02612841,
+                "supports": 0.9276268,
+                "unknown": 0.02358729
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "no_hospitalization": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.03878787,
+                "contradicts": 0.029854836,
+                "supports": 0.90507823,
+                "unknown": 0.026278986
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_neck_stiffness": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.05768187,
+                "contradicts": 0.028849572,
+                "supports": 0.8829704,
+                "unknown": 0.030498113
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_imaging": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.022295495,
+                "contradicts": 0.026664805,
+                "supports": 0.92699885,
+                "unknown": 0.024040828
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_prescription": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.020676384,
+                "contradicts": 0.024706239,
+                "supports": 0.93204457,
+                "unknown": 0.022572791
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "prior_no_active_treatment": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.032110758,
+                "contradicts": 0.030808149,
+                "supports": 0.90650326,
+                "unknown": 0.030577743
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "employer_two_absences": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.1512617,
+                "contradicts": 0.07191622,
+                "supports": 0.7053247,
+                "unknown": 0.071497366
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "employer_no_wage_calculation": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.033996917,
+                "contradicts": 0.027015287,
+                "supports": 0.90820557,
+                "unknown": 0.030782238
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "pickup_confirmation_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.023807583,
+                "contradicts": 0.02334257,
+                "supports": 0.91864,
+                "unknown": 0.034209818
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "payroll_statement_outstanding": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.022085318,
+                "contradicts": 0.023481717,
+                "supports": 0.92952675,
+                "unknown": 0.024906253
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "emergency_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.046773188,
+                "contradicts": 0.027639143,
+                "supports": 0.89942145,
+                "unknown": 0.026166262
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "therapy_bill_matches_demand": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.02667949,
+                "contradicts": 0.035164546,
+                "supports": 0.9059619,
+                "unknown": 0.03219405
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            },
+            "claimant_collision_mechanism": {
+              "winner": "supports",
+              "probabilities": {
+                "conflicted": 0.032315068,
+                "contradicts": 0.026094912,
+                "supports": 0.9177231,
+                "unknown": 0.023866856
+              },
+              "answer": "supports",
+              "expected": "supports",
+              "correct": true
+            }
+          },
+          "tokens": 6087,
+          "resident_ms": 1707.8431970000001,
+          "tok_s": 3564.1445366251614,
+          "repeat_exact": true,
+          "timings": {
+            "encode_ms": 11.705658000000001,
+            "prepare_ms": 0.16308499999999998,
+            "inference_ms": 1695.965584,
+            "readback_ms": 0.00887,
+            "allocated_bytes": 19920839092,
+            "uploaded_bytes": 0
+          },
+          "composed": [
+            {
+              "id": "independent_liability_support",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "prompt_medical_treatment",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "serious_injury_documented",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "preexisting_neck_condition",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "prior_active_treatment",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "lost_wages_fully_supported",
+              "answer": "refuted",
+              "expected": "refuted",
+              "correct": true
+            },
+            {
+              "id": "rental_fully_supported",
+              "answer": "unknown",
+              "expected": "unknown",
+              "correct": true
+            },
+            {
+              "id": "documents_outstanding",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "medical_expenses_documented",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            },
+            {
+              "id": "collision_accounts_consistent",
+              "answer": "established",
+              "expected": "established",
+              "correct": true
+            }
+          ]
+        }
+      ],
+      "model": "clef-omni",
+      "precision": "int4"
+    }
+  },
+  "upstream_images": [
+    {
+      "id": "bear",
+      "answers": {
+        "animal_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        },
+        "animal_type": {
+          "answer": "bear",
+          "expected": "bear",
+          "correct": true
+        }
+      },
+      "median_ms": 316
+    },
+    {
+      "id": "overflowing-bin",
+      "answers": {
+        "bin_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        },
+        "bin_condition": {
+          "answer": "overflowing",
+          "expected": "overflowing",
+          "correct": true
+        },
+        "ground_litter": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        }
+      },
+      "median_ms": 240
+    },
+    {
+      "id": "damaged-fence",
+      "answers": {
+        "fence_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        },
+        "fence_condition": {
+          "answer": "damaged",
+          "expected": "damaged",
+          "correct": true
+        },
+        "fence_material": {
+          "answer": "other",
+          "expected": "metal",
+          "correct": false
+        }
+      },
+      "median_ms": 266
+    },
+    {
+      "id": "bird",
+      "answers": {
+        "bird_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        },
+        "eagle_present": {
+          "answer": true,
+          "expected": null,
+          "correct": null
+        },
+        "human_present": {
+          "answer": false,
+          "expected": false,
+          "correct": true
+        },
+        "bird_kind": {
+          "answer": "other_bird",
+          "expected": null,
+          "correct": null
+        }
+      },
+      "median_ms": 317
+    },
+    {
+      "id": "moon",
+      "answers": {
+        "sky_object": {
+          "answer": "moon",
+          "expected": "moon",
+          "correct": true
+        },
+        "plane_present": {
+          "answer": true,
+          "expected": null,
+          "correct": null
+        },
+        "tree_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        }
+      },
+      "median_ms": 233
+    },
+    {
+      "id": "cat-patio",
+      "answers": {
+        "cat_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        },
+        "cat_count": {
+          "answer": "one",
+          "expected": "one",
+          "correct": true
+        },
+        "cat_napping": {
+          "answer": false,
+          "expected": false,
+          "correct": true
+        }
+      },
+      "median_ms": 234
+    },
+    {
+      "id": "bread",
+      "answers": {
+        "bread_count": {
+          "answer": "one",
+          "expected": "one",
+          "correct": true
+        }
+      },
+      "median_ms": 85
+    },
+    {
+      "id": "wooded-stream",
+      "answers": {
+        "backyard_flooded": {
+          "answer": true,
+          "expected": null,
+          "correct": null
+        },
+        "water_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        },
+        "water_scene": {
+          "answer": "wooded_creek",
+          "expected": null,
+          "correct": null
+        }
+      },
+      "median_ms": 233
+    },
+    {
+      "id": "patio-animals",
+      "answers": {
+        "animal_count": {
+          "answer": "one",
+          "expected": "multiple",
+          "correct": false
+        },
+        "bear_present": {
+          "answer": false,
+          "expected": false,
+          "correct": true
+        },
+        "coyote_present": {
+          "answer": false,
+          "expected": false,
+          "correct": true
+        },
+        "animal_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        },
+        "animal_type": {
+          "answer": "cat",
+          "expected": "cat",
+          "correct": true
+        }
+      },
+      "median_ms": 514
+    },
+    {
+      "id": "parked-cars",
+      "answers": {
+        "weather": {
+          "answer": "sunny",
+          "expected": "sunny",
+          "correct": true
+        },
+        "parked_car_count": {
+          "answer": "two",
+          "expected": "two",
+          "correct": true
+        }
+      },
+      "median_ms": 191
+    },
+    {
+      "id": "cat-window",
+      "answers": {
+        "cat_present": {
+          "answer": true,
+          "expected": true,
+          "correct": true
+        },
+        "cat_gaze": {
+          "answer": "window",
+          "expected": "window",
+          "correct": true
+        }
+      },
+      "median_ms": 180
+    }
+  ]
+}

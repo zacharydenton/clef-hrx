@@ -48,6 +48,9 @@ pub struct EncodedQuestion {
 #[derive(Debug, Clone, Serialize)]
 pub struct EncodedRecord {
     pub input_ids: Vec<u32>,
+    /// End of the shared system/media/state prefix, before the question schema.
+    #[serde(skip)]
+    pub prefix_len: usize,
     pub questions: Vec<EncodedQuestion>,
     pub position_ids: Vec<[u32; 3]>,
     #[serde(skip)]
@@ -239,6 +242,7 @@ impl Encoder {
             .context("multimodal positions")?;
         Ok(EncodedRecord {
             input_ids: prefix,
+            prefix_len: offset,
             questions,
             position_ids,
             media,

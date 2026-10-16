@@ -249,6 +249,7 @@ mod tests {
             .collect();
         let record = EncodedRecord {
             input_ids: (0..24).collect(),
+            prefix_len: 0,
             questions,
             position_ids: (0..24).map(|v| [v; 3]).collect(),
             media: Default::default(),

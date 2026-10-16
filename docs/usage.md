@@ -53,6 +53,83 @@ Oversized schemas and media are rejected in either mode.
 `--max-state-tokens` further limits state text. `--memory-gib` sets an allocation
 budget (default 80), not a reservation. Run full-model jobs sequentially.
 
+## Omni prefix caching
+
+Use `--prefix-cache` to reuse the image, audio, video and state prefix across
+Omni requests in one resident process:
+
+```sh
+./target/release/clef --model clef-omni --precision int4 --prefix-cache \
+  --strict-context decide requests.jsonl --jsonl --raw
+```
+
+The first request populates one cache entry during normal inference. Later
+requests with the same encoded prefix reuse all 48 layers' attention keys and
+values and the prefix hidden states. Only the question suffix runs through the
+backbone; the decision head still runs over the complete context. CPU media
+preprocessing still runs to validate and hash the input. Changing the encoded
+state, media content or positions replaces the entry, even when a media filename
+is unchanged. Request-dependent state truncation can also change the prefix;
+use `--strict-context` when you require the full state.
+
+For isolated questions, put **one question in each JSONL request** with the same
+state and media. Multiple questions in one request retain the model's normal
+cross-question attention. Caching does not change that contract or return joint
+answer probabilities. Splitting computation into prefix and suffix can introduce
+small floating-point differences compared with an ordinary full forward pass.
+
+`timings.cached_prefix_tokens` is zero on a miss and reports the reused prefix
+length on a hit. `input_tokens` always counts the complete logical request, so
+cached tokens must not be described as freshly computed throughput. Report
+request latency and cache-hit counts when comparing this mode. Miss timings
+include prefix population; model loading is separate.
+
+Caching is optional and currently supports Omni only, in all three precisions.
+The entry uses approximately **196 KiB per prefix token** (about 1.53 GiB at
+8,192 tokens), in addition to weights and execution workspace. It shares the
+existing `--memory-gib` budget. There is no disk cache or cross-process reuse.
+
+In Rust, call `model.set_prefix_cache(true)?` after loading Omni. Calling it again
+clears the entry; `model.set_prefix_cache(false)?` clears it and disables reuse.
+The cache lasts until it is replaced, cleared or the model is dropped.
+
+Compare cached and uncached inference with a JSONL corpus, including changed
+questions and changed prefixes:
+
+```sh
+cargo build --release --locked --example compare_prefix_cache
+./target/release/examples/compare_prefix_cache \
+  --model-dir artifacts/model-omni-tiled --precision int4 --memory-gib 28 \
+  --output prefix-comparison.jsonl requests.jsonl
+```
+
+The runner records first-use and repeat timings for uncached, cached and reversed
+request sequences. It checks repeated hits, unchanged winning answers, a default
+maximum probability difference of 0.02, and restoration of uncached results after
+disabling the cache. Use the existing memory guard for full-model runs on a shared
+machine. The GPU mask oracle can be run separately with
+`cargo test --release --lib omni_suffix_attention_oracle -- --ignored`.
+
+The [recorded 28-request check](results/omni-prefix-cache-20261016.json) covers
+isolated and grouped bin-image questions, two 1,669-token text prefixes, images,
+speech, video, prefix replacement and reversed request order. Both INT4 modes
+matched every uncached probability exactly in this check. Warm repeat totals:
+
+| Workload | Precision | Uncached | Cached | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| 17 isolated bin questions | INT4 | 5.07 s | 2.44 s | 2.08× |
+| Four longer-text requests | INT4 | 1.81 s | 0.58 s | 3.12× |
+| 17 isolated bin questions | INT4 MLP | 5.05 s | 2.94 s | 1.72× |
+| Four longer-text requests | INT4 MLP | 1.58 s | 0.47 s | 3.35× |
+
+These are single samples on a shared GPU, excluding model loading. First-use
+timings and cache misses are retained in the result file. BF16 full-model
+validation was blocked by the memory guard (102 GiB required); the BF16 attention
+operator passed its separate 64K oracle. This is a cache equivalence check, not a
+new JevBench or WorkflowEvals score. For reproduction, use the
+[saved request corpus](results/omni-prefix-cache-20261016-requests.jsonl) with the
+comparison runner above and the [pinned OpenDecision image](opendecision-examples.md).
+
 ## Precision
 
 `--precision bf16` is the default for both models. For original CLEF,

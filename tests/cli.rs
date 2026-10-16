@@ -38,6 +38,22 @@ fn empty_jsonl_does_not_load_model() {
 }
 
 #[test]
+fn prefix_cache_requires_omni_before_loading_weights() {
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_clef"))
+        .args(["--prefix-cache", "--model", "clef-flash", "--model-dir"])
+        .arg(root.path())
+        .arg("inspect")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--prefix-cache requires --model clef-omni")
+    );
+}
+
+#[test]
 fn invalid_requests_fail_before_model_loading() {
     for jsonl in [false, true] {
         let output = decide(r#"{"model":"clef","state":"test","questions":{}}"#, jsonl);

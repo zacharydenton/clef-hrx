@@ -75,6 +75,7 @@ Select `--model clef`, `--model clef-flash` or `--model clef-omni`, and
 `--precision bf16`, `--precision int4-mlp` or `--precision int4`.
 Defaults are CLEF, BF16 and a 65,536-token context limit. Add `--jsonl` to process
 multiple requests with the model loaded, or `--raw` for probabilities and timings.
+For repeated Omni image/state inputs, add [`--prefix-cache`](docs/usage.md#omni-prefix-caching).
 
 [CLI and Rust API](docs/usage.md) · [Omni media inputs](docs/clef-omni.md) ·
 [Development](docs/development.md) · [Kernel benchmarks](docs/optimization.md)

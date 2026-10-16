@@ -56,6 +56,62 @@ fn qualified_long_vector_delta(
 }
 
 impl Engine {
+    /// Causal BF16 attention for a suffix whose keys include an immutable prefix.
+    pub(crate) fn attention_suffix(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        prefix: usize,
+    ) -> Result<Tensor> {
+        ensure!(
+            q.rows > 0
+                && prefix > 0
+                && prefix.checked_add(q.rows) == Some(k.rows)
+                && k.rows <= crate::encoding::MAX_CONTEXT_TOKENS
+                && q.cols > 0
+                && k.cols > 0
+                && q.cols <= 65536
+                && k.cols <= 65536
+                && q.cols.is_multiple_of(128)
+                && k.cols.is_multiple_of(128)
+                && q.cols.is_multiple_of(k.cols)
+                && k.rows == v.rows
+                && k.cols == v.cols
+                && [q, k, v].iter().all(|t| t.dtype == DType::Bf16),
+            "Omni suffix attention shape or storage"
+        );
+        let packed = self.transpose_attention_v(v)?;
+        let out = self.alloc(q.rows, q.cols, DType::Bf16)?;
+        let mut spec = Specialization::new("clef_op");
+        for (key, value) in [
+            ("heads", (q.cols / 128).to_string()),
+            ("ratio", (q.cols / k.cols).to_string()),
+            ("qw", q.cols.to_string()),
+            ("kw", k.cols.to_string()),
+            ("scale", format!("{:e}", 1.0 / 128f32.sqrt())),
+            ("causal", "1".into()),
+            ("query_offset", prefix.to_string()),
+        ] {
+            spec.set_config(format!("clef.{key}"), value);
+        }
+        let mut constants = Constants::new();
+        constants.push(q.rows as u32)?;
+        constants.push(k.rows as u32)?;
+        constants.push(packed.cols as u32)?;
+        self.emit_special(
+            concat!(
+                include_str!("../kernels/common.loom"),
+                include_str!("../kernels/omni_attention_prefix.loom")
+            ),
+            spec,
+            constants,
+            &[q.rows as u64, k.rows as u64, packed.cols as u64],
+            &[q, k, &packed],
+            &out,
+        )?;
+        Ok(out)
+    }
     /// Online softmax attention with bounded memory and tiled long-sequence execution.
     pub fn attention(
         &mut self,
@@ -1488,6 +1544,92 @@ mod tests {
                 }
                 previous = Some(actual);
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151; verifies cached-prefix masks, GQA and 64k boundaries against FP64"]
+    fn omni_suffix_attention_oracle() -> Result<()> {
+        for (prefix, rows) in [
+            (1, 1),
+            (31, 17),
+            (32, 129),
+            (127, 33),
+            (129, 129),
+            (8191, 17),
+            (65519, 17),
+        ] {
+            let mut e = Engine::new(&hrx::inference::ModelContext::new(Default::default())?)?;
+            let keys = prefix + rows;
+            let sample = |i: usize, salt: usize| {
+                half::bf16::from_f32(((i * 73 + salt) % 257) as f32 / 256. - 0.5)
+            };
+            let queries: Vec<_> = (0..rows * 256)
+                .map(|i| {
+                    if prefix > 1000 {
+                        half::bf16::ZERO
+                    } else {
+                        sample(i, 17)
+                    }
+                })
+                .collect();
+            let key: Vec<_> = (0..keys * 128).map(|i| sample(i, 103)).collect();
+            let value: Vec<_> = (0..keys * 128).map(|i| sample(i, i / 128)).collect();
+            // Exercise sliced bindings as well as partial tiles and unaligned prefixes.
+            let mut sliced_queries = vec![half::bf16::ZERO; 256];
+            sliced_queries.extend_from_slice(&queries);
+            let q = e
+                .input(
+                    rows + 1,
+                    256,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&sliced_queries),
+                )?
+                .slice_rows(1, rows);
+            let k = e.input(keys, 128, DType::Bf16, bytemuck::cast_slice(&key))?;
+            let v = e.input(keys, 128, DType::Bf16, bytemuck::cast_slice(&value))?;
+            let out = e.attention_suffix(&q, &k, &v, prefix)?;
+            let mut graph = e.finish()?;
+            e.run(&mut graph)?;
+            let actual = e.read_f32(&out)?;
+            for row in 0..rows {
+                for head in 0..2 {
+                    let visible = prefix + row + 1;
+                    let scores: Vec<f64> = (0..visible)
+                        .map(|r| {
+                            if prefix > 1000 {
+                                return 0.;
+                            }
+                            (0..128)
+                                .map(|c| {
+                                    queries[row * 256 + head * 128 + c].to_f64()
+                                        * key[r * 128 + c].to_f64()
+                                })
+                                .sum::<f64>()
+                                / 128f64.sqrt()
+                        })
+                        .collect();
+                    let max = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    let weights: Vec<_> = scores.iter().map(|s| (s - max).exp()).collect();
+                    let sum: f64 = weights.iter().sum();
+                    for c in 0..128 {
+                        let expected: f64 = weights
+                            .iter()
+                            .enumerate()
+                            .map(|(r, w)| w * value[r * 128 + c].to_f64())
+                            .sum::<f64>()
+                            / sum;
+                        let a = f64::from(actual[row * 256 + head * 128 + c]);
+                        assert!(
+                            a.is_finite() && (a - expected).abs() < 0.003,
+                            "prefix={prefix} row={row} head={head} col={c}: {a} vs {expected}"
+                        );
+                    }
+                }
+            }
+            e.run(&mut graph)?;
+            assert_eq!(actual, e.read_f32(&out)?, "suffix replay prefix={prefix}");
         }
         Ok(())
     }

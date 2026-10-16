@@ -35,6 +35,9 @@ struct Args {
     /// Reject requests that would truncate state text.
     #[arg(long, global = true)]
     strict_context: bool,
+    /// Reuse image/state prefix computation across requests (Omni only).
+    #[arg(long, global = true)]
+    prefix_cache: bool,
     #[command(subcommand)]
     command: Action,
 }
@@ -77,6 +80,10 @@ fn request(path: &Path) -> Result<Request> {
 }
 fn main() -> Result<()> {
     let args = Args::parse();
+    ensure!(
+        !args.prefix_cache || args.model == clef_hrx::ModelVariant::ClefOmni,
+        "--prefix-cache requires --model clef-omni"
+    );
     let source = Source {
         model: args.model,
         directory: args.model_dir,
@@ -133,7 +140,11 @@ fn main() -> Result<()> {
                 let req = req?;
                 req.validate()?;
                 if model.is_none() {
-                    model = Some(ClefModel::load(options.clone())?);
+                    let mut loaded = ClefModel::load(options.clone())?;
+                    if args.prefix_cache {
+                        loaded.set_prefix_cache(true)?;
+                    }
+                    model = Some(loaded);
                 }
                 let p = model.as_mut().context("model not loaded")?.infer(&req)?;
                 if raw {

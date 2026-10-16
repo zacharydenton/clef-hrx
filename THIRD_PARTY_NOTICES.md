@@ -94,6 +94,7 @@ The project license is Apache-2.0. Runtime/compiler dependencies retain their
 own licenses, as documented in hrx-rs/THIRD-PARTY.md.
 
 The accepted Omni sources are also embedded as
-`kernels/omni_attention_transposed.loom`, `kernels/omni_expert_bf16_m64.loom`
+`kernels/omni_attention_transposed.loom`, its offset-mask derivative
+`kernels/omni_attention_prefix.loom`, `kernels/omni_expert_bf16_m64.loom`
 and `kernels/omni_expert_i4_k128_down.loom`. They retain the corresponding
 attention/expert source attributions and licenses above.

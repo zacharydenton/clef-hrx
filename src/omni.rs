@@ -598,12 +598,51 @@ pub(crate) fn padded_positions(positions: &[[u32; 3]], padded: usize) -> Result<
     Ok(extended)
 }
 
+/// Prefix tensors own their allocator leases across graph resets.
+pub(crate) struct LayerKv {
+    pub key: Tensor,
+    pub value: Tensor,
+}
+pub(crate) enum KvMode<'a> {
+    None,
+    Capture {
+        tokens: usize,
+        layers: &'a mut Vec<LayerKv>,
+    },
+    Resume(&'a [LayerKv]),
+}
+
 pub(crate) fn forward(
     e: &mut Engine,
     x: Tensor,
     positions: &[[u32; 3]],
     deepstack: &[Vec<(usize, Tensor)>],
 ) -> Result<Tensor> {
+    forward_cached(e, x, positions, deepstack, &mut KvMode::None)
+}
+
+pub(crate) fn forward_cached(
+    e: &mut Engine,
+    x: Tensor,
+    positions: &[[u32; 3]],
+    deepstack: &[Vec<(usize, Tensor)>],
+    cache: &mut KvMode<'_>,
+) -> Result<Tensor> {
+    let prefix = match cache {
+        KvMode::Resume(layers) => {
+            ensure!(layers.len() == 48, "Omni prefix layer count");
+            ensure!(deepstack.is_empty(), "suffix cannot contain media features");
+            layers[0].key.rows
+        }
+        KvMode::Capture { tokens, layers } => {
+            ensure!(
+                *tokens > 0 && *tokens < x.rows && layers.is_empty(),
+                "Omni prefix capture extent"
+            );
+            0
+        }
+        KvMode::None => 0,
+    };
     #[cfg(feature = "bench-internals")]
     let alignment = if e.omni_fast_defaults {
         128
@@ -618,9 +657,14 @@ pub(crate) fn forward(
             "Omni padding alignment"
         );
         let actual = x.rows;
-        let padded = actual.div_ceil(alignment) * alignment;
+        let rounded = actual.div_ceil(alignment) * alignment;
+        let padded = if prefix + rounded <= crate::encoding::MAX_CONTEXT_TOKENS {
+            rounded
+        } else {
+            actual
+        };
         ensure!(
-            padded <= crate::encoding::MAX_CONTEXT_TOKENS,
+            prefix + padded <= crate::encoding::MAX_CONTEXT_TOKENS,
             "Omni padded context limit"
         );
         if actual != padded {
@@ -634,17 +678,31 @@ pub(crate) fn forward(
             )?;
             let x = e.cat_rows(&[x, zeros])?;
             let extended = padded_positions(positions, padded)?;
-            return Ok(forward_layers(e, x, &extended, deepstack, 0..48)?.slice_rows(0, actual));
+            return Ok(
+                forward_layers_cached(e, x, &extended, deepstack, 0..48, cache)?
+                    .slice_rows(0, actual),
+            );
         }
     }
-    forward_layers(e, x, positions, deepstack, 0..48)
+    forward_layers_cached(e, x, positions, deepstack, 0..48, cache)
 }
+#[cfg(test)]
 fn forward_layers(
+    e: &mut Engine,
+    x: Tensor,
+    positions: &[[u32; 3]],
+    deepstack: &[Vec<(usize, Tensor)>],
+    layers: std::ops::Range<usize>,
+) -> Result<Tensor> {
+    forward_layers_cached(e, x, positions, deepstack, layers, &mut KvMode::None)
+}
+fn forward_layers_cached(
     e: &mut Engine,
     mut x: Tensor,
     positions: &[[u32; 3]],
     deepstack: &[Vec<(usize, Tensor)>],
     layers: std::ops::Range<usize>,
+    cache: &mut KvMode<'_>,
 ) -> Result<Tensor> {
     ensure!(
         x.cols == 2048 && x.rows == positions.len(),
@@ -679,7 +737,24 @@ fn forward_layers(
         let k = e.project(&norm, &format!("{a}.k_proj"), false)?;
         let k = e.omni_normalized_rope(&k, &format!("{a}.k_norm"), 4, &cs)?;
         let v = e.project(&norm, &format!("{a}.v_proj"), false)?;
-        let attn = e.attention(&q, &k, &v, 32, 4, true)?;
+        let attn = match &mut *cache {
+            KvMode::Resume(layers) => {
+                let saved = &layers[layer];
+                let keys = e.cat_rows(&[saved.key.clone(), k])?;
+                let values = e.cat_rows(&[saved.value.clone(), v])?;
+                e.attention_suffix(&q, &keys, &values, saved.key.rows)?
+            }
+            mode => {
+                if let KvMode::Capture { tokens, layers } = mode {
+                    let key = e.alloc(*tokens, k.cols, k.dtype)?;
+                    let value = e.alloc(*tokens, v.cols, v.dtype)?;
+                    e.copy_into(&k.slice_rows(0, *tokens), &key)?;
+                    e.copy_into(&v.slice_rows(0, *tokens), &value)?;
+                    layers.push(LayerKv { key, value });
+                }
+                e.attention(&q, &k, &v, 32, 4, true)?
+            }
+        };
         let attn = e.project(&attn, &format!("{a}.o_proj"), false)?;
         x = e.binary(&x, &attn, "addf")?;
         let norm = e.named_norm(&x, &format!("{p}.post_attention_layernorm"), false, 1e-6)?;

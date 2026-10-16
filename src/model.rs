@@ -13,6 +13,9 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use std::time::Instant;
 
+mod prefix;
+use prefix::PrefixCache;
+
 /// Projection precision. INT4 trades some accuracy for lower latency and memory.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -65,6 +68,8 @@ pub struct Timings {
     pub readback_ms: f64,
     pub allocated_bytes: usize,
     pub uploaded_bytes: u64,
+    /// Number of backbone prefix tokens reused on this call (zero on a miss).
+    pub cached_prefix_tokens: usize,
 }
 struct Plan {
     key: String,
@@ -88,6 +93,8 @@ pub struct ClefModel {
 }
 struct NativeState {
     plan: Option<Plan>,
+    prefix_cache_enabled: bool,
+    prefix: Option<PrefixCache>,
     #[cfg(feature = "bench-internals")]
     backbone: Option<BackbonePlan>,
     engine: Engine,
@@ -173,6 +180,8 @@ impl ClefModel {
                     context.runtime(),
                     NativeState {
                         plan: None,
+                        prefix_cache_enabled: false,
+                        prefix: None,
                         #[cfg(feature = "bench-internals")]
                         backbone: None,
                         engine,
@@ -187,6 +196,39 @@ impl ClefModel {
     }
     pub fn context(&self) -> &ModelContext {
         &self.context
+    }
+    /// Enable a single-entry Omni prefix cache. Question schemas are never cached
+    /// as part of the shared prefix. Call with false to release it and disable reuse.
+    /// Cache storage counts against the model's existing memory budget.
+    pub fn set_prefix_cache(&mut self, enabled: bool) -> Result<()> {
+        ensure!(
+            !self.failed,
+            "model execution failed; reload model before reusing it"
+        );
+        ensure!(
+            !enabled || self.options.source.model == crate::ModelVariant::ClefOmni,
+            "prefix caching currently supports CLEF Omni only"
+        );
+        // Safety: cache tensors and graph resources remain inside the fenced session.
+        let result = unsafe {
+            self.native.run(|state| -> Result<()> {
+                state.plan = None;
+                state.prefix = None;
+                #[cfg(feature = "bench-internals")]
+                {
+                    state.backbone = None;
+                }
+                state.engine.reset_plan()?;
+                state.prefix_cache_enabled = enabled;
+                Ok(())
+            })
+        }
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
     }
     pub fn encode_record(&self, request: &Request) -> Result<EncodedRecord> {
         self.encoder.encode_record(request, self.options.encoding)
@@ -254,6 +296,7 @@ impl ClefModel {
         let result = unsafe {
             self.native.run(|state| -> Result<()> {
                 state.plan = None;
+                state.prefix = None;
                 state.backbone = None;
                 state.engine.reset_plan()?;
                 Ok(())
@@ -281,6 +324,7 @@ impl ClefModel {
             self.native.run(|state| -> Result<()> {
                 if state.engine.reference_kernels != kernels {
                     state.plan = None;
+                    state.prefix = None;
                     state.backbone = None;
                     state.engine.reset_plan()?;
                     state.engine.reference_kernels = kernels;
@@ -310,6 +354,7 @@ impl ClefModel {
         let result = unsafe {
             self.native.run(|state| -> Result<()> {
                 state.plan = None;
+                state.prefix = None;
                 state.backbone = None;
                 state.engine.reset_plan()?;
                 state.engine.experimental_attention = source;
@@ -345,6 +390,7 @@ impl ClefModel {
         let result = unsafe {
             self.native.run(|state| -> Result<()> {
                 state.plan = None;
+                state.prefix = None;
                 state.backbone = None;
                 state.engine.reset_plan()?;
                 state.engine.omni_gate_up_source = source;
@@ -375,6 +421,7 @@ impl ClefModel {
         let result = unsafe {
             self.native.run(|state| -> Result<()> {
                 state.plan = None;
+                state.prefix = None;
                 state.backbone = None;
                 state.engine.reset_plan()?;
                 state.engine.omni_fused_norm_rope = enabled;
@@ -420,6 +467,7 @@ impl ClefModel {
         let result = unsafe {
             self.native.run(|state| -> Result<()> {
                 state.plan = None;
+                state.prefix = None;
                 state.backbone = None;
                 state.engine.reset_plan()?;
                 state.engine.omni_fast_defaults = false;
@@ -586,6 +634,7 @@ pub(crate) fn embed_record(
 impl NativeState {
     fn build(&mut self, record: &EncodedRecord) -> Result<Tensor> {
         self.plan = None;
+        self.prefix = None;
         #[cfg(feature = "bench-internals")]
         {
             self.backbone = None;
@@ -690,9 +739,19 @@ impl NativeState {
             hash.update(serde_json::to_vec(&item.grid)?);
         }
         let key = format!("{:x}", hash.finalize());
-        if self.plan.as_ref().is_none_or(|p| p.key != key) {
+        let prefix_key = self
+            .prefix_cache_enabled
+            .then(|| prefix::key(record))
+            .transpose()?;
+        let prefix_hit = prefix_key
+            .as_ref()
+            .is_some_and(|key| self.prefix.as_ref().is_some_and(|p| &p.key == key));
+        if self.plan.as_ref().is_none_or(|p| p.key != key)
+            || (self.prefix_cache_enabled && !prefix_hit)
+        {
             #[cfg(feature = "bench-internals")]
-            let cached = self.engine.omni_reuse_backbone
+            let cached = !self.prefix_cache_enabled
+                && self.engine.omni_reuse_backbone
                 && self.engine.architecture.is_omni()
                 && record.media.items.is_empty()
                 && record
@@ -702,13 +761,19 @@ impl NativeState {
                     .is_none_or(|m| m.audio.is_empty())
                 && std::env::var_os("CLEF_TRACE_DIR").is_none();
             #[cfg(feature = "bench-internals")]
-            let output = if cached {
+            let output = if let Some(key) = &prefix_key {
+                self.build_with_prefix(record, key, prefix_hit)?
+            } else if cached {
                 self.build_cached_text(record)?
             } else {
                 self.build(record)?
             };
             #[cfg(not(feature = "bench-internals"))]
-            let output = self.build(record)?;
+            let output = if let Some(key) = &prefix_key {
+                self.build_with_prefix(record, key, prefix_hit)?
+            } else {
+                self.build(record)?
+            };
             let graph = self.engine.finish()?;
             self.plan = Some(Plan { key, graph, output });
         }
@@ -725,6 +790,11 @@ impl NativeState {
         let logits = self.engine.read_f32(&plan.output)?;
         self.engine.dump_traces()?;
         let readback_ms = start.elapsed().as_secs_f64() * 1000.;
+        // A miss ran the full request while capturing the prefix. Its graph must
+        // not be replayed as a hit: the next call builds only the suffix graph.
+        if self.prefix_cache_enabled && !prefix_hit {
+            self.plan = None;
+        }
         let mut offset = 0;
         let mut questions = Vec::new();
         for question in &record.questions {
@@ -748,6 +818,7 @@ impl NativeState {
                 readback_ms,
                 allocated_bytes: self.engine.allocated_bytes(),
                 uploaded_bytes: self.engine.uploaded - uploaded,
+                cached_prefix_tokens: if prefix_hit { record.prefix_len } else { 0 },
             },
         })
     }

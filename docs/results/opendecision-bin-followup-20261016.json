@@ -1,0 +1,890 @@
+{
+  "cases": [
+    {
+      "id": "overflowing-bin-followup",
+      "group": "images",
+      "expected": {},
+      "request": {
+        "model": "clef",
+        "state": "",
+        "images": [
+          "/home/zach/code/clef-hrx/artifacts/OpenDecision/docs/assets/images/overflowing-bin.jpg"
+        ],
+        "questions": {
+          "man_gray_coat": {
+            "type": "noul",
+            "instructions": "Is there a man wearing a gray coat in the image?"
+          },
+          "person_gray_coat": {
+            "type": "noul",
+            "instructions": "Is any person visibly wearing a gray coat in the image?"
+          },
+          "orange_coat": {
+            "type": "noul",
+            "instructions": "Is there a person wearing an orange coat?"
+          },
+          "blue_jacket": {
+            "type": "noul",
+            "instructions": "Is there a person wearing a blue or teal jacket?"
+          },
+          "glasses_right": {
+            "type": "noul",
+            "instructions": "Is the person closest to the right edge wearing glasses?"
+          },
+          "person_discarding": {
+            "type": "noul",
+            "instructions": "Is anyone visibly putting rubbish into the bin at the instant shown?"
+          },
+          "person_cleaning": {
+            "type": "noul",
+            "instructions": "Is anyone visibly cleaning up the rubbish?"
+          },
+          "litter_obstacle": {
+            "type": "noul",
+            "instructions": "Does the rubbish on the floor extend into the pedestrian walking area?"
+          },
+          "paper_litter": {
+            "type": "noul",
+            "instructions": "Are paper or newspaper pages visible among the rubbish on the floor?"
+          },
+          "bin_door_open": {
+            "type": "noul",
+            "instructions": "Is the large front panel or door of the bin visibly open?"
+          },
+          "dog": {
+            "type": "noul",
+            "instructions": "Is there a dog visible in the image?"
+          },
+          "overflow_above": {
+            "type": "noul",
+            "instructions": "Is rubbish piled above the top of the bin?"
+          },
+          "setting": {
+            "type": "choice",
+            "instructions": "Which setting is best supported by the visible scene?",
+            "criteria": {
+              "indoor_public": "An indoor public passage or concourse.",
+              "outdoor_street": "An outdoor street.",
+              "home": "Inside a private home.",
+              "unknown": "The setting cannot be determined."
+            }
+          },
+          "nearest_person_coat": {
+            "type": "choice",
+            "instructions": "What is the main color of the upper-body outerwear of the person closest to the right edge?",
+            "criteria": {
+              "blue_teal": "Blue or teal.",
+              "gray": "Gray.",
+              "orange": "Orange.",
+              "black": "Black.",
+              "unknown": "Cannot determine."
+            }
+          },
+          "center_person_coat": {
+            "type": "choice",
+            "instructions": "What color coat is the prominent person immediately to the right of the bin wearing?",
+            "criteria": {
+              "orange_brown": "Orange or rusty brown.",
+              "gray": "Gray.",
+              "blue": "Blue.",
+              "black": "Black.",
+              "unknown": "Cannot determine."
+            }
+          },
+          "visible_text": {
+            "type": "choice",
+            "instructions": "Which text is visible on the tall green fixture at the far left?",
+            "criteria": {
+              "de_pers": "De Pers",
+              "metro": "Metro",
+              "recycling": "Recycling",
+              "none": "None of these is clearly visible."
+            }
+          },
+          "blame": {
+            "type": "choice",
+            "instructions": "Can this still image establish who caused the rubbish to accumulate?",
+            "criteria": {
+              "orange_person": "The person in the orange coat caused it.",
+              "blue_person": "The person in the blue jacket caused it.",
+              "all_people": "All visible people caused it.",
+              "unknown": "The image does not establish who caused it."
+            }
+          }
+        }
+      }
+    }
+  ],
+  "method": "One warmup then one measured identical request; 17 questions batched. Resident timing excludes model loading. Shared GPU; no ground-truth labels assigned.",
+  "models": {
+    "clef": {
+      "result": {
+        "groups": {
+          "images": {
+            "correct": 0,
+            "scored": 0,
+            "tokens": 1949,
+            "resident_ms": 3014.9090880000003,
+            "requests": 1,
+            "tok_s": 646.4539868739153
+          }
+        },
+        "cases": [
+          {
+            "id": "overflowing-bin-followup",
+            "group": "images",
+            "answers": {
+              "man_gray_coat": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.1381449,
+                  "false": 0.8618551
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "person_gray_coat": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.11961306,
+                  "false": 0.8803869
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "orange_coat": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.96691763,
+                  "false": 0.033082362
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "blue_jacket": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.94597584,
+                  "false": 0.054024216
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "glasses_right": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.64256334,
+                  "false": 0.35743666
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "person_discarding": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.1452346,
+                  "false": 0.8547654
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "person_cleaning": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.019418012,
+                  "false": 0.98058194
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "litter_obstacle": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.72777253,
+                  "false": 0.2722275
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "paper_litter": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.80463797,
+                  "false": 0.19536206
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "bin_door_open": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.02295596,
+                  "false": 0.97704405
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "dog": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.006383026,
+                  "false": 0.99361694
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "overflow_above": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.81533986,
+                  "false": 0.18466017
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "setting": {
+                "winner": "indoor_public",
+                "probabilities": {
+                  "home": 0.0058611166,
+                  "indoor_public": 0.94865465,
+                  "outdoor_street": 0.01870198,
+                  "unknown": 0.026782164
+                },
+                "answer": "indoor_public",
+                "expected": null,
+                "correct": null
+              },
+              "nearest_person_coat": {
+                "winner": "blue_teal",
+                "probabilities": {
+                  "black": 0.018450918,
+                  "blue_teal": 0.9486231,
+                  "gray": 0.016813021,
+                  "orange": 0.005911144,
+                  "unknown": 0.010201796
+                },
+                "answer": "blue_teal",
+                "expected": null,
+                "correct": null
+              },
+              "center_person_coat": {
+                "winner": "orange_brown",
+                "probabilities": {
+                  "black": 0.027559353,
+                  "blue": 0.0079496475,
+                  "gray": 0.028579967,
+                  "orange_brown": 0.9157492,
+                  "unknown": 0.020161834
+                },
+                "answer": "orange_brown",
+                "expected": null,
+                "correct": null
+              },
+              "visible_text": {
+                "winner": "de_pers",
+                "probabilities": {
+                  "de_pers": 0.7951714,
+                  "metro": 0.044177186,
+                  "none": 0.12645838,
+                  "recycling": 0.034193095
+                },
+                "answer": "de_pers",
+                "expected": null,
+                "correct": null
+              },
+              "blame": {
+                "winner": "unknown",
+                "probabilities": {
+                  "all_people": 0.0079417145,
+                  "blue_person": 0.017039588,
+                  "orange_person": 0.017943364,
+                  "unknown": 0.9570753
+                },
+                "answer": "unknown",
+                "expected": null,
+                "correct": null
+              }
+            },
+            "tokens": 1949,
+            "resident_ms": 3014.9090880000003,
+            "tok_s": 646.4539868739153,
+            "repeat_exact": true,
+            "timings": {
+              "encode_ms": 5.986677,
+              "prepare_ms": 1.992536,
+              "inference_ms": 3006.920715,
+              "readback_ms": 0.00916,
+              "allocated_bytes": 50392015692,
+              "uploaded_bytes": 0
+            }
+          }
+        ],
+        "model": "clef",
+        "precision": "bf16"
+      },
+      "guard": {
+        "state": "complete",
+        "pid": 3533699,
+        "command": [
+          "/home/zach/code/clef-hrx/tests/results/opendecision-bin-followup-resumed-20261016/clef-cache-loader",
+          "--model",
+          "clef",
+          "--precision",
+          "bf16",
+          "--memory-gib",
+          "70",
+          "--max-length",
+          "65536",
+          "--strict-context",
+          "--model-dir",
+          "artifacts/model",
+          "decide",
+          "tests/results/opendecision-bin-followup-resumed-20261016/clef-requests.jsonl",
+          "--jsonl",
+          "--raw"
+        ],
+        "started": 1792123529.3930535,
+        "memory_gib": 70,
+        "admission_gib": 102,
+        "reserve_gib": 24,
+        "maximum_additional_swap_gib": 1,
+        "guard_sha256": "21fe74fa58c70e8e45e77c01d4a6613cb696d7f489e04cf0a238f79ffa7a63a0",
+        "binary_sha256": "46bd5666c38576d6e02cf0a99ad95c402e1eb60b53d4c41c36f8615363d83de1",
+        "environment": {
+          "CLEF_BENCH_CHECKPOINT_DROP_CACHE": "1"
+        },
+        "before": {
+          "MemAvailable": 121285210112,
+          "SwapFree": 54638436352
+        },
+        "child": 3533705,
+        "returncode": 0,
+        "finished": 1792123651.908186
+      }
+    },
+    "clef-flash": {
+      "result": {
+        "groups": {
+          "images": {
+            "correct": 0,
+            "scored": 0,
+            "tokens": 1949,
+            "resident_ms": 1100.690204,
+            "requests": 1,
+            "tok_s": 1770.707137137381
+          }
+        },
+        "cases": [
+          {
+            "id": "overflowing-bin-followup",
+            "group": "images",
+            "answers": {
+              "man_gray_coat": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.24697402,
+                  "false": 0.75302595
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "person_gray_coat": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.25820124,
+                  "false": 0.7417988
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "orange_coat": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.97635037,
+                  "false": 0.02364962
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "blue_jacket": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.9585933,
+                  "false": 0.04140671
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "glasses_right": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.3551354,
+                  "false": 0.64486456
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "person_discarding": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.33733124,
+                  "false": 0.66266876
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "person_cleaning": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.02075368,
+                  "false": 0.9792463
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "litter_obstacle": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.66658527,
+                  "false": 0.33341467
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "paper_litter": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.9663343,
+                  "false": 0.033665698
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "bin_door_open": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.06722398,
+                  "false": 0.93277603
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "dog": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.003979857,
+                  "false": 0.99602014
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "overflow_above": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.80721885,
+                  "false": 0.19278109
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "setting": {
+                "winner": "indoor_public",
+                "probabilities": {
+                  "home": 0.0036843484,
+                  "indoor_public": 0.9649869,
+                  "outdoor_street": 0.013721947,
+                  "unknown": 0.017606772
+                },
+                "answer": "indoor_public",
+                "expected": null,
+                "correct": null
+              },
+              "nearest_person_coat": {
+                "winner": "blue_teal",
+                "probabilities": {
+                  "black": 0.030922594,
+                  "blue_teal": 0.9434564,
+                  "gray": 0.006553483,
+                  "orange": 0.003362615,
+                  "unknown": 0.015704865
+                },
+                "answer": "blue_teal",
+                "expected": null,
+                "correct": null
+              },
+              "center_person_coat": {
+                "winner": "orange_brown",
+                "probabilities": {
+                  "black": 0.027489193,
+                  "blue": 0.0102038495,
+                  "gray": 0.011382923,
+                  "orange_brown": 0.9329566,
+                  "unknown": 0.017967453
+                },
+                "answer": "orange_brown",
+                "expected": null,
+                "correct": null
+              },
+              "visible_text": {
+                "winner": "de_pers",
+                "probabilities": {
+                  "de_pers": 0.96419454,
+                  "metro": 0.0061538424,
+                  "none": 0.020020166,
+                  "recycling": 0.009631528
+                },
+                "answer": "de_pers",
+                "expected": null,
+                "correct": null
+              },
+              "blame": {
+                "winner": "unknown",
+                "probabilities": {
+                  "all_people": 0.030637143,
+                  "blue_person": 0.027895289,
+                  "orange_person": 0.020617353,
+                  "unknown": 0.92085016
+                },
+                "answer": "unknown",
+                "expected": null,
+                "correct": null
+              }
+            },
+            "tokens": 1949,
+            "resident_ms": 1100.690204,
+            "tok_s": 1770.707137137381,
+            "repeat_exact": true,
+            "timings": {
+              "encode_ms": 5.981727,
+              "prepare_ms": 1.9830960000000002,
+              "inference_ms": 1092.715641,
+              "readback_ms": 0.00974,
+              "allocated_bytes": 15413300044,
+              "uploaded_bytes": 0
+            }
+          }
+        ],
+        "model": "clef-flash",
+        "precision": "bf16"
+      },
+      "guard": {
+        "state": "complete",
+        "pid": 3536187,
+        "command": [
+          "/home/zach/code/clef-hrx/tests/results/opendecision-bin-followup-resumed-20261016/clef-cache-loader",
+          "--model",
+          "clef-flash",
+          "--precision",
+          "bf16",
+          "--memory-gib",
+          "40",
+          "--max-length",
+          "65536",
+          "--strict-context",
+          "decide",
+          "tests/results/opendecision-bin-followup-resumed-20261016/clef-flash-requests.jsonl",
+          "--jsonl",
+          "--raw"
+        ],
+        "started": 1792123651.9598925,
+        "memory_gib": 40,
+        "admission_gib": 72,
+        "reserve_gib": 24,
+        "maximum_additional_swap_gib": 1,
+        "guard_sha256": "21fe74fa58c70e8e45e77c01d4a6613cb696d7f489e04cf0a238f79ffa7a63a0",
+        "binary_sha256": "46bd5666c38576d6e02cf0a99ad95c402e1eb60b53d4c41c36f8615363d83de1",
+        "environment": {
+          "CLEF_BENCH_CHECKPOINT_DROP_CACHE": "1"
+        },
+        "before": {
+          "MemAvailable": 122968408064,
+          "SwapFree": 54728351744
+        },
+        "child": 3536193,
+        "returncode": 0,
+        "finished": 1792123701.5651696
+      }
+    },
+    "clef-omni": {
+      "result": {
+        "groups": {
+          "images": {
+            "correct": 0,
+            "scored": 0,
+            "tokens": 1930,
+            "resident_ms": 600.3843009999999,
+            "requests": 1,
+            "tok_s": 3214.6077050738877
+          }
+        },
+        "cases": [
+          {
+            "id": "overflowing-bin-followup",
+            "group": "images",
+            "answers": {
+              "man_gray_coat": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.10076159,
+                  "false": 0.89923847
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "person_gray_coat": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.2156766,
+                  "false": 0.7843234
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "orange_coat": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.986347,
+                  "false": 0.013653014
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "blue_jacket": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.87578714,
+                  "false": 0.12421286
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "glasses_right": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.9326906,
+                  "false": 0.06730944
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "person_discarding": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.053965367,
+                  "false": 0.9460346
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "person_cleaning": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.010736383,
+                  "false": 0.9892636
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "litter_obstacle": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.90255576,
+                  "false": 0.097444184
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "paper_litter": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.98339003,
+                  "false": 0.016609969
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "bin_door_open": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.04174093,
+                  "false": 0.9582591
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "dog": {
+                "winner": "false",
+                "probabilities": {
+                  "true": 0.0018048459,
+                  "false": 0.9981951
+                },
+                "answer": false,
+                "expected": null,
+                "correct": null
+              },
+              "overflow_above": {
+                "winner": "true",
+                "probabilities": {
+                  "true": 0.9017234,
+                  "false": 0.09827666
+                },
+                "answer": true,
+                "expected": null,
+                "correct": null
+              },
+              "setting": {
+                "winner": "indoor_public",
+                "probabilities": {
+                  "home": 0.005615387,
+                  "indoor_public": 0.97395,
+                  "outdoor_street": 0.009328454,
+                  "unknown": 0.0111061465
+                },
+                "answer": "indoor_public",
+                "expected": null,
+                "correct": null
+              },
+              "nearest_person_coat": {
+                "winner": "blue_teal",
+                "probabilities": {
+                  "black": 0.09088332,
+                  "blue_teal": 0.8303953,
+                  "gray": 0.031550907,
+                  "orange": 0.013382256,
+                  "unknown": 0.033788193
+                },
+                "answer": "blue_teal",
+                "expected": null,
+                "correct": null
+              },
+              "center_person_coat": {
+                "winner": "orange_brown",
+                "probabilities": {
+                  "black": 0.047256805,
+                  "blue": 0.017095516,
+                  "gray": 0.022004828,
+                  "orange_brown": 0.8830889,
+                  "unknown": 0.03055396
+                },
+                "answer": "orange_brown",
+                "expected": null,
+                "correct": null
+              },
+              "visible_text": {
+                "winner": "de_pers",
+                "probabilities": {
+                  "de_pers": 0.933756,
+                  "metro": 0.013635354,
+                  "none": 0.042182572,
+                  "recycling": 0.010426088
+                },
+                "answer": "de_pers",
+                "expected": null,
+                "correct": null
+              },
+              "blame": {
+                "winner": "unknown",
+                "probabilities": {
+                  "all_people": 0.02489844,
+                  "blue_person": 0.024487833,
+                  "orange_person": 0.03190298,
+                  "unknown": 0.9187107
+                },
+                "answer": "unknown",
+                "expected": null,
+                "correct": null
+              }
+            },
+            "tokens": 1930,
+            "resident_ms": 600.3843009999999,
+            "tok_s": 3214.6077050738877,
+            "repeat_exact": true,
+            "timings": {
+              "encode_ms": 6.072785,
+              "prepare_ms": 1.9627669999999997,
+              "inference_ms": 592.34201,
+              "readback_ms": 0.006739,
+              "allocated_bytes": 19224469836,
+              "uploaded_bytes": 0
+            }
+          }
+        ],
+        "model": "clef-omni",
+        "precision": "int4"
+      },
+      "guard": {
+        "state": "complete",
+        "pid": 3537713,
+        "command": [
+          "/home/zach/code/clef-hrx/tests/results/opendecision-bin-followup-resumed-20261016/clef-cache-loader",
+          "--model",
+          "clef-omni",
+          "--precision",
+          "int4",
+          "--memory-gib",
+          "28",
+          "--max-length",
+          "65536",
+          "--strict-context",
+          "--model-dir",
+          "artifacts/model-omni-tiled",
+          "decide",
+          "tests/results/opendecision-bin-followup-resumed-20261016/clef-omni-requests.jsonl",
+          "--jsonl",
+          "--raw"
+        ],
+        "started": 1792123707.7045298,
+        "memory_gib": 28,
+        "admission_gib": 60,
+        "reserve_gib": 24,
+        "maximum_additional_swap_gib": 1,
+        "guard_sha256": "21fe74fa58c70e8e45e77c01d4a6613cb696d7f489e04cf0a238f79ffa7a63a0",
+        "binary_sha256": "46bd5666c38576d6e02cf0a99ad95c402e1eb60b53d4c41c36f8615363d83de1",
+        "environment": {
+          "CLEF_BENCH_CHECKPOINT_DROP_CACHE": "1"
+        },
+        "before": {
+          "MemAvailable": 121915977728,
+          "SwapFree": 54731395072
+        },
+        "child": 3537719,
+        "returncode": 0,
+        "finished": 1792123814.6287975
+      }
+    }
+  }
+}
