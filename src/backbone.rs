@@ -114,6 +114,23 @@ impl Engine {
             );
         }
         if TILED
+            && d == 128
+            && self.omni_fast_defaults
+            && self.architecture == crate::ModelVariant::ClefOmni.architecture()
+        {
+            return self.attention_tiled_source_dim(
+                q,
+                k,
+                v,
+                causal,
+                concat!(
+                    include_str!("../kernels/common.loom"),
+                    include_str!("../kernels/omni_attention_transposed.loom")
+                ),
+                128,
+            );
+        }
+        if TILED
             && d == 256
             && (1024..=crate::encoding::MAX_CONTEXT_TOKENS).contains(&q.rows)
             && k.rows <= crate::encoding::MAX_CONTEXT_TOKENS
@@ -248,10 +265,14 @@ impl Engine {
                 dim == 128 && causal,
                 "prepacked INT8 attention requires causal 128-wide heads"
             );
-            Some((
-                self.prepare_attention_int8(q)?,
-                self.prepare_attention_int8(k)?,
-            ))
+            let query = self.prepare_attention_int8(q)?;
+            let key = if let Some(source) = self.omni_centered_key_source.clone() {
+                let mean = self.attention_key_mean(k)?;
+                self.prepare_attention_int8_with_source(k, Some(&mean), &source)?
+            } else {
+                self.prepare_attention_int8(k)?
+            };
+            Some((query, key))
         } else {
             None
         };
@@ -290,6 +311,22 @@ impl Engine {
     }
     #[cfg(feature = "bench-internals")]
     pub(crate) fn prepare_attention_int8(&mut self, x: &Tensor) -> Result<Tensor> {
+        let source = self.omni_qk_prepare_source.clone();
+        self.prepare_attention_int8_with_source(
+            x,
+            None,
+            source.as_deref().unwrap_or(include_str!(
+                "../benches/kernels/omni_prepare_attention_i8.loom"
+            )),
+        )
+    }
+    #[cfg(feature = "bench-internals")]
+    pub(crate) fn prepare_attention_int8_with_source(
+        &mut self,
+        x: &Tensor,
+        mean: Option<&Tensor>,
+        source: &str,
+    ) -> Result<Tensor> {
         ensure!(
             (1..=65536).contains(&x.rows)
                 && (128..=65536).contains(&x.cols)
@@ -302,15 +339,48 @@ impl Engine {
         spec.set_config("clef.qk_i8.width", x.cols.to_string());
         let mut constants = Constants::new();
         constants.push(x.rows as u32)?;
-        self.emit_special(
-            include_str!("../benches/kernels/omni_prepare_attention_i8.loom"),
-            spec,
-            constants,
-            &[x.rows as u64],
-            &[x],
-            &output,
-        )?;
+        if let Some(mean) = mean {
+            ensure!(
+                mean.rows == 1 && mean.cols == x.cols && mean.dtype == DType::F32,
+                "key mean shape or dtype"
+            );
+        }
+        let inputs = if let Some(mean) = mean {
+            vec![x, mean]
+        } else {
+            vec![x]
+        };
+        self.emit_special(source, spec, constants, &[x.rows as u64], &inputs, &output)?;
         Ok(output)
+    }
+
+    #[cfg(feature = "bench-internals")]
+    pub(crate) fn attention_key_mean(&mut self, x: &Tensor) -> Result<Tensor> {
+        ensure!(
+            (1..=65536).contains(&x.rows)
+                && (128..=65536).contains(&x.cols)
+                && x.cols.is_multiple_of(128)
+                && x.dtype == DType::Bf16,
+            "key mean input shape or dtype"
+        );
+        let partials = self.alloc(x.rows.div_ceil(256), x.cols, DType::F32)?;
+        let mean = self.alloc(1, x.cols, DType::F32)?;
+        for (finish, input, output) in [(0, x, &partials), (1, &partials, &mean)] {
+            let mut spec = Specialization::new("clef_key_mean");
+            spec.set_config("clef.key_mean.width", x.cols.to_string());
+            spec.set_config("clef.key_mean.finish", finish.to_string());
+            let mut constants = Constants::new();
+            constants.push(x.rows as u32)?;
+            self.emit_special(
+                include_str!("../benches/kernels/omni_key_mean.loom"),
+                spec,
+                constants,
+                &[x.rows as u64],
+                &[input],
+                output,
+            )?;
+        }
+        Ok(mean)
     }
 
     pub(crate) fn transpose_attention_v(&mut self, v: &Tensor) -> Result<Tensor> {
@@ -783,10 +853,111 @@ mod tests {
 
     #[cfg(feature = "bench-internals")]
     #[test]
-    #[ignore = "requires gfx1151; validates INT8 Q/K codes, row scales, slicing and changed-input replay"]
-    fn int8_attention_packing_oracle() -> Result<()> {
+    #[ignore = "requires gfx1151; checks two-pass key means against FP64 with sliced inputs and replay"]
+    fn attention_key_mean_fp64_oracle() -> Result<()> {
         let context = hrx::inference::ModelContext::new(Default::default())?;
         let mut e = Engine::new(&context)?;
+        let width = 512;
+        for rows in [1, 17, 255, 256, 257, 1023, 65536] {
+            let storage = e.input(
+                rows + 2,
+                width,
+                DType::Bf16,
+                &vec![0; (rows + 2) * width * 2],
+            )?;
+            let input = storage.slice_rows(1, rows);
+            let mean = e.attention_key_mean(&input)?;
+            let mut graph = e.finish()?;
+            for phase in 0..3 {
+                let values: Vec<_> = (0..rows * width)
+                    .map(|i| {
+                        let value = if i % width < 128 && phase == 0 {
+                            0.
+                        } else if i / width == rows / 2 && phase == 2 {
+                            64.
+                        } else {
+                            (((i * 31 + phase * 17) % 251) as f32 - 125.) / 64.
+                        };
+                        half::bf16::from_f32(value)
+                    })
+                    .collect();
+                let mut expected = vec![0f64; width];
+                for row in values.chunks_exact(width) {
+                    for (sum, value) in expected.iter_mut().zip(row) {
+                        *sum += f64::from(value.to_f32());
+                    }
+                }
+                for value in &mut expected {
+                    *value /= rows as f64;
+                }
+                e.upload(&input, bytemuck::cast_slice(&values))?;
+                e.run(&mut graph)?;
+                let actual = e.read_f32(&mean)?;
+                for (column, (&got, &want)) in actual.iter().zip(&expected).enumerate() {
+                    assert!(
+                        got.is_finite()
+                            && (f64::from(got) - want).abs() <= 2e-6 * (1. + want.abs()),
+                        "rows={rows} phase={phase} column={column}: {got} vs {want}"
+                    );
+                }
+                e.run(&mut graph)?;
+                assert_eq!(actual, e.read_f32(&mean)?, "mean replay changed output");
+            }
+            e.reset_plan()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "bench-internals")]
+    #[test]
+    #[ignore = "requires gfx1151; validates INT8 Q/K codes, row scales, slicing and changed-input replay"]
+    fn int8_attention_packing_oracle() -> Result<()> {
+        attention_packing_oracle(false)
+    }
+    #[cfg(feature = "bench-internals")]
+    #[test]
+    #[ignore = "requires gfx1151; validates H128 INT8 packing against independent CPU butterflies"]
+    fn hadamard_attention_packing_oracle() -> Result<()> {
+        attention_packing_oracle(true)
+    }
+    #[cfg(feature = "bench-internals")]
+    #[test]
+    #[ignore = "requires gfx1151; validates group-64 signed nibbles, scales and replay"]
+    fn int4_grouped_attention_packing_oracle() -> Result<()> {
+        for (rotate, source) in [
+            (
+                false,
+                include_str!("../benches/kernels/omni_prepare_attention_i4_g64.loom"),
+            ),
+            (
+                true,
+                include_str!("../benches/kernels/omni_prepare_attention_i4_g64_hadamard.loom"),
+            ),
+        ] {
+            attention_packing_oracle_impl(rotate, 4, 64, Some(source))?;
+        }
+        Ok(())
+    }
+    #[cfg(feature = "bench-internals")]
+    fn attention_packing_oracle(rotate: bool) -> Result<()> {
+        attention_packing_oracle_impl(rotate, 8, 128, None)
+    }
+    #[cfg(feature = "bench-internals")]
+    fn attention_packing_oracle_impl(
+        rotate: bool,
+        bits: usize,
+        group: usize,
+        source: Option<&str>,
+    ) -> Result<()> {
+        let context = hrx::inference::ModelContext::new(Default::default())?;
+        let mut e = Engine::new(&context)?;
+        if let Some(source) = source {
+            e.omni_qk_prepare_source = Some(source.into());
+        } else if rotate {
+            e.omni_qk_prepare_source = Some(
+                include_str!("../benches/kernels/omni_prepare_attention_i8_hadamard.loom").into(),
+            );
+        }
         for rows in [1, 17, 65] {
             for heads in [1, 4, 32] {
                 let width = heads * 128;
@@ -822,33 +993,54 @@ mod tests {
                         .iter()
                         .zip(actual.as_chunks::<36>().0.iter())
                     {
-                        let maximum = head
-                            .iter()
-                            .map(|x| x.to_f32().abs())
-                            .fold(1e-30f32, f32::max);
-                        let scale = maximum / 127.;
-                        let inverse = 127. / maximum;
-                        let actual_scale = f32::from_bits(words[32]);
-                        assert!(
-                            (scale - actual_scale).abs() <= scale.abs() * 2. * f32::EPSILON,
-                            "packing scale differs: {scale} vs {actual_scale}"
-                        );
-                        for (values, &actual_word) in
-                            head.as_chunks::<4>().0.iter().zip(&words[..32])
+                        let mut head = head.map(half::bf16::to_f32);
+                        if rotate {
+                            // Independent contiguous CPU butterflies, unlike the
+                            // GPU's four values per lane plus lane shuffles.
+                            for stride in [1, 2, 4, 8, 16, 32, 64] {
+                                for block in head.chunks_exact_mut(2 * stride) {
+                                    for i in 0..stride {
+                                        let (a, b) = (block[i], block[i + stride]);
+                                        block[i] = a + b;
+                                        block[i + stride] = a - b;
+                                    }
+                                }
+                            }
+                        }
+                        let top = ((1 << (bits - 1)) - 1) as f32;
+                        let mask = (1u32 << bits) - 1;
+                        let codes_per_word = 32 / bits;
+                        let payload_words = 128 / codes_per_word;
+                        let mut inverses = Vec::new();
+                        for (g, values) in head.chunks_exact(group).enumerate() {
+                            let maximum = values.iter().map(|x| x.abs()).fold(1e-30f32, f32::max);
+                            let scale = maximum / top / if rotate { 128f32.sqrt() } else { 1. };
+                            inverses.push(top / maximum);
+                            let actual_scale = f32::from_bits(words[32 + g]);
+                            assert!(
+                                (scale - actual_scale).abs() <= scale.abs() * 2. * f32::EPSILON,
+                                "group {g} packing scale differs: {scale} vs {actual_scale}"
+                            );
+                        }
+                        for (index, (values, &actual_word)) in head
+                            .chunks_exact(codes_per_word)
+                            .zip(&words[..payload_words])
+                            .enumerate()
                         {
+                            let inverse = inverses[index * codes_per_word / group];
                             let expected_word =
-                                values.iter().enumerate().fold(0u32, |word, (byte, x)| {
+                                values.iter().enumerate().fold(0u32, |word, (element, x)| {
                                     let code =
-                                        (x.to_f32() * inverse).round_ties_even().clamp(-127., 127.)
-                                            as i32;
-                                    word | ((code as u32 & 255) << (byte * 8))
+                                        (x * inverse).round_ties_even().clamp(-top, top) as i32;
+                                    word | ((code as u32 & mask) << (element * bits))
                                 });
                             assert_eq!(
                                 actual_word, expected_word,
                                 "rows={rows} heads={heads} phase={phase}"
                             );
                         }
-                        assert_eq!(&words[33..], &[0, 0, 0]);
+                        assert!(words[payload_words..32].iter().all(|&word| word == 0));
+                        assert!(words[32 + 128 / group..].iter().all(|&word| word == 0));
                     }
                     e.run(&mut graph)?;
                     assert_eq!(

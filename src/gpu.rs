@@ -139,6 +139,8 @@ pub(crate) struct Engine {
     pub long_vector_delta: Option<bool>,
     #[cfg(feature = "bench-internals")]
     pub bf16_m_group: usize,
+    /// Use the accepted embedded Omni configuration unless benchmarking overrides it.
+    pub omni_fast_defaults: bool,
     #[cfg(feature = "bench-internals")]
     pub omni_kernel_dir: Option<std::path::PathBuf>,
     #[cfg(feature = "bench-internals")]
@@ -152,9 +154,17 @@ pub(crate) struct Engine {
     #[cfg(feature = "bench-internals")]
     pub omni_prepack_qk: bool,
     #[cfg(feature = "bench-internals")]
+    pub omni_qk_prepare_source: Option<String>,
+    #[cfg(feature = "bench-internals")]
+    pub omni_centered_key_source: Option<String>,
+    #[cfg(feature = "bench-internals")]
     pub omni_sorted_combine: bool,
     #[cfg(feature = "bench-internals")]
     pub omni_fused_mlp: bool,
+    #[cfg(feature = "bench-internals")]
+    pub omni_gate_up_source: Option<std::sync::Arc<str>>,
+    #[cfg(feature = "bench-internals")]
+    pub omni_fused_norm_rope: bool,
     #[cfg(feature = "bench-internals")]
     pub omni_pack_swiglu: bool,
     #[cfg(feature = "bench-internals")]
@@ -267,6 +277,13 @@ impl Engine {
                 )
             }),
             architecture: crate::ModelVariant::Clef.architecture(),
+            #[cfg(not(feature = "bench-internals"))]
+            omni_fast_defaults: true,
+            #[cfg(feature = "bench-internals")]
+            omni_fast_defaults: !std::env::vars_os().any(|(key, _)| {
+                let key = key.to_string_lossy();
+                key.starts_with("CLEF_BENCH_OMNI_") || key == "CLEF_EXPERIMENT_ATTENTION_SOURCE"
+            }),
             #[cfg(feature = "bench-internals")]
             omni_kernel_dir: std::env::var_os("CLEF_BENCH_OMNI_KERNEL_DIR").map(Into::into),
             #[cfg(feature = "bench-internals")]
@@ -286,9 +303,22 @@ impl Engine {
             #[cfg(feature = "bench-internals")]
             omni_prepack_qk: std::env::var_os("CLEF_BENCH_OMNI_PREPACK_QK").is_some(),
             #[cfg(feature = "bench-internals")]
+            omni_qk_prepare_source: None,
+            #[cfg(feature = "bench-internals")]
+            omni_centered_key_source: None,
+            #[cfg(feature = "bench-internals")]
             omni_sorted_combine: std::env::var_os("CLEF_BENCH_OMNI_COMBINE").is_some(),
             #[cfg(feature = "bench-internals")]
             omni_fused_mlp: std::env::var_os("CLEF_BENCH_OMNI_FUSED_MLP").is_some(),
+            #[cfg(feature = "bench-internals")]
+            omni_gate_up_source: std::env::var_os("CLEF_BENCH_OMNI_GATE_UP_SOURCE")
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .map(|source| {
+                    format!("{}\n{source}", include_str!("../kernels/common.loom")).into()
+                }),
+            #[cfg(feature = "bench-internals")]
+            omni_fused_norm_rope: std::env::var_os("CLEF_BENCH_OMNI_FUSED_NORM_ROPE").is_some(),
             #[cfg(feature = "bench-internals")]
             omni_pack_swiglu: std::env::var_os("CLEF_BENCH_OMNI_PACK_SWIGLU").is_some(),
             #[cfg(feature = "bench-internals")]

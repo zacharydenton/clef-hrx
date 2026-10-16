@@ -1,0 +1,184 @@
+// Experimental per-head INT8 Q/K packing. One wave quantizes 128 BF16 values.
+// Quantization/packing adapted from h3-hrx prepare_qk_i8hm.loom, revision
+// 95ed12f43bd3e596cbfad175c22de9560447e9e5 (Apache-2.0), including H128 rotation.
+// SPDX-License-Identifier: Apache-2.0
+// No mean subtraction; normalization is folded into the stored scale.
+// Each head stores 32 packed words, one FP32 scale and three zero padding words.
+amdgpu.target<gfx1151> @clef_qk_i8_target {subgroup_size = 32}
+config.decl @clef.qk_i8.width : %value: index where [range(%value, 128, 65536), multiple_of(%value, 128)]
+kernel.def target(@clef_qk_i8_target) export("clef_prepare_qk_int8") @clef_prepare_qk_int8(%rows: index) {
+ %one = index.constant 1 : index
+ %c32 = index.constant 32 : index
+ %c128 = index.constant 128 : index
+ %width = config.get @clef.qk_i8.width : index
+ %heads = index.div %width, %c128 : index
+ %groups = index.mul %rows, %heads : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%c32, %one, %one) : index
+} launch(%rows: index, %input: buffer, %output: buffer) {
+ %c0 = index.constant 0 : index
+ %c1 = index.constant 1 : index
+ %c4 = index.constant 4 : index
+ %c28 = index.constant 28 : index
+ %c32 = index.constant 32 : index
+ %c36 = index.constant 36 : index
+ %c128 = index.constant 128 : index
+ %off = index.constant 0 : offset
+ %width = config.get @clef.qk_i8.width : index
+ %heads = index.div %width, %c128 : index
+ %out_width = index.mul %heads, %c36 : index
+ %count = index.assume %rows [range(%rows, 1, 65536)] : index
+ %groups = index.mul %count, %heads : index
+ %group0 = kernel.workgroup.id<x> : index
+ %group = index.assume %group0 [lt(%group0, %groups)] : index
+ %row0 = index.div %group, %heads : index
+ %row = index.assume %row0 [lt(%row0, %count)] : index
+ %head = index.rem %group, %heads : index
+ %lane = kernel.workitem.id<x> : index
+ %head_col = index.mul %head, %c128 : index
+ %lane_col = index.mul %lane, %c4 : index
+ %col0 = index.add %head_col, %lane_col : index
+ %limit = index.sub %width, %c4 : index
+ %col = index.assume %col0 [le(%col0, %limit), multiple_of(%col0, 4)] : index
+ %ig = buffer.assume.memory_space<global> %input : buffer
+ %og = buffer.assume.memory_space<global> %output : buffer
+ %iv = buffer.view %ig[%off] : buffer -> view<[%count]x[%width]xbf16>
+ %ov = buffer.view %og[%off] : buffer -> view<[%count]x[%out_width]xi32>
+ %sv = buffer.view %og[%off] : buffer -> view<[%count]x[%out_width]xf32>
+ %h = vector.load %iv[%row, %col] : view<[%count]x[%width]xbf16> -> vector<4xbf16>
+ %hr_input = vector.extf %h : vector<4xbf16> to vector<4xf32>
+ %hr_c1 = index.constant 1 : index
+ %hr_c2 = index.constant 2 : index
+ %hr_c4 = index.constant 4 : index
+ %hr_c8 = index.constant 8 : index
+ %hr_c16 = index.constant 16 : index
+ %hr_width = scalar.constant 32 : i32
+ %hr_v0 = vector.extract %hr_input[0] : vector<4xf32> -> f32
+ %hr_v1 = vector.extract %hr_input[1] : vector<4xf32> -> f32
+ %hr_v2 = vector.extract %hr_input[2] : vector<4xf32> -> f32
+ %hr_v3 = vector.extract %hr_input[3] : vector<4xf32> -> f32
+ %hr_abp = scalar.addf %hr_v0, %hr_v1 : f32
+ %hr_abm = scalar.subf %hr_v0, %hr_v1 : f32
+ %hr_cdp = scalar.addf %hr_v2, %hr_v3 : f32
+ %hr_cdm = scalar.subf %hr_v2, %hr_v3 : f32
+ %hr_e0 = scalar.addf %hr_abp, %hr_cdp : f32
+ %hr_e1 = scalar.addf %hr_abm, %hr_cdm : f32
+ %hr_e2 = scalar.subf %hr_abp, %hr_cdp : f32
+ %hr_e3 = scalar.subf %hr_abm, %hr_cdm : f32
+ %hr_s0 = vector.from_elements %hr_e0, %hr_e1, %hr_e2, %hr_e3 : vector<4xf32>
+ %hr_lq1 = index.div %lane, %hr_c1 : index
+ %hr_bit1 = index.rem %hr_lq1, %hr_c2 : index
+ %hr_hi1 = index.cmp eq, %hr_bit1, %hr_c1 : index
+ %hr_minus1 = index.sub %lane, %hr_c1 : index
+ %hr_plus1 = index.add %lane, %hr_c1 : index
+ %hr_partner1 = scf.select %hr_hi1, %hr_minus1, %hr_plus1 : index
+ %hr_bounded1 = index.assume %hr_partner1 [range(%hr_partner1, 0, 31)] : index
+ %hr_lane1 = index.cast %hr_bounded1 : index to i32
+ %hr_p1, %hr_ok1 = kernel.subgroup.shuffle<index> %hr_s0, %hr_lane1, %hr_width : vector<4xf32>, i32, i32
+ %hr_sum1 = vector.addf %hr_s0, %hr_p1 : vector<4xf32>
+ %hr_diff1 = vector.subf %hr_p1, %hr_s0 : vector<4xf32>
+ %hr_s1 = scf.select %hr_hi1, %hr_diff1, %hr_sum1 : vector<4xf32>
+ %hr_lq2 = index.div %lane, %hr_c2 : index
+ %hr_bit2 = index.rem %hr_lq2, %hr_c2 : index
+ %hr_hi2 = index.cmp eq, %hr_bit2, %hr_c1 : index
+ %hr_minus2 = index.sub %lane, %hr_c2 : index
+ %hr_plus2 = index.add %lane, %hr_c2 : index
+ %hr_partner2 = scf.select %hr_hi2, %hr_minus2, %hr_plus2 : index
+ %hr_bounded2 = index.assume %hr_partner2 [range(%hr_partner2, 0, 31)] : index
+ %hr_lane2 = index.cast %hr_bounded2 : index to i32
+ %hr_p2, %hr_ok2 = kernel.subgroup.shuffle<index> %hr_s1, %hr_lane2, %hr_width : vector<4xf32>, i32, i32
+ %hr_sum2 = vector.addf %hr_s1, %hr_p2 : vector<4xf32>
+ %hr_diff2 = vector.subf %hr_p2, %hr_s1 : vector<4xf32>
+ %hr_s2 = scf.select %hr_hi2, %hr_diff2, %hr_sum2 : vector<4xf32>
+ %hr_lq4 = index.div %lane, %hr_c4 : index
+ %hr_bit4 = index.rem %hr_lq4, %hr_c2 : index
+ %hr_hi4 = index.cmp eq, %hr_bit4, %hr_c1 : index
+ %hr_minus4 = index.sub %lane, %hr_c4 : index
+ %hr_plus4 = index.add %lane, %hr_c4 : index
+ %hr_partner4 = scf.select %hr_hi4, %hr_minus4, %hr_plus4 : index
+ %hr_bounded4 = index.assume %hr_partner4 [range(%hr_partner4, 0, 31)] : index
+ %hr_lane4 = index.cast %hr_bounded4 : index to i32
+ %hr_p4, %hr_ok4 = kernel.subgroup.shuffle<index> %hr_s2, %hr_lane4, %hr_width : vector<4xf32>, i32, i32
+ %hr_sum4 = vector.addf %hr_s2, %hr_p4 : vector<4xf32>
+ %hr_diff4 = vector.subf %hr_p4, %hr_s2 : vector<4xf32>
+ %hr_s4 = scf.select %hr_hi4, %hr_diff4, %hr_sum4 : vector<4xf32>
+ %hr_lq8 = index.div %lane, %hr_c8 : index
+ %hr_bit8 = index.rem %hr_lq8, %hr_c2 : index
+ %hr_hi8 = index.cmp eq, %hr_bit8, %hr_c1 : index
+ %hr_minus8 = index.sub %lane, %hr_c8 : index
+ %hr_plus8 = index.add %lane, %hr_c8 : index
+ %hr_partner8 = scf.select %hr_hi8, %hr_minus8, %hr_plus8 : index
+ %hr_bounded8 = index.assume %hr_partner8 [range(%hr_partner8, 0, 31)] : index
+ %hr_lane8 = index.cast %hr_bounded8 : index to i32
+ %hr_p8, %hr_ok8 = kernel.subgroup.shuffle<index> %hr_s4, %hr_lane8, %hr_width : vector<4xf32>, i32, i32
+ %hr_sum8 = vector.addf %hr_s4, %hr_p8 : vector<4xf32>
+ %hr_diff8 = vector.subf %hr_p8, %hr_s4 : vector<4xf32>
+ %hr_s8 = scf.select %hr_hi8, %hr_diff8, %hr_sum8 : vector<4xf32>
+ %hr_lq16 = index.div %lane, %hr_c16 : index
+ %hr_bit16 = index.rem %hr_lq16, %hr_c2 : index
+ %hr_hi16 = index.cmp eq, %hr_bit16, %hr_c1 : index
+ %hr_minus16 = index.sub %lane, %hr_c16 : index
+ %hr_plus16 = index.add %lane, %hr_c16 : index
+ %hr_partner16 = scf.select %hr_hi16, %hr_minus16, %hr_plus16 : index
+ %hr_bounded16 = index.assume %hr_partner16 [range(%hr_partner16, 0, 31)] : index
+ %hr_lane16 = index.cast %hr_bounded16 : index to i32
+ %hr_p16, %hr_ok16 = kernel.subgroup.shuffle<index> %hr_s8, %hr_lane16, %hr_width : vector<4xf32>, i32, i32
+ %hr_sum16 = vector.addf %hr_s8, %hr_p16 : vector<4xf32>
+ %hr_diff16 = vector.subf %hr_p16, %hr_s8 : vector<4xf32>
+ %x = scf.select %hr_hi16, %hr_diff16, %hr_sum16 : vector<4xf32>
+ %absolute = vector.absf %x : vector<4xf32>
+ %zero = scalar.constant 0.0 : f32
+ %tiny = scalar.constant 1e-30 : f32
+ %qmax = scalar.constant 127.0 : f32
+ %hi = vector.constant 127.0 : vector<4xf32>
+ %lo = vector.constant -127.0 : vector<4xf32>
+ %mask = vector.constant 255 : vector<4xi32>
+ %local_max = vector.reduce<maxnumf> %absolute, %zero : vector<4xf32>, f32
+ %row_max = kernel.subgroup.reduce<maxnumf> %local_max : f32
+ %maximum = scalar.maxnumf %row_max, %tiny : f32
+ // H128 is unnormalized above. Apply 1/sqrt(128) to each stored scale,
+ // so the product of Q/K scales cancels H128's factor of 128 in dot products.
+ %hr_norm = scalar.constant 0.08838834764831845 : f32
+ %hr_raw_scale = scalar.divf %maximum, %qmax : f32
+ %scale = scalar.mulf %hr_raw_scale, %hr_norm : f32
+ %inverse = scalar.divf %qmax, %maximum : f32
+ %ivector = vector.splat %inverse : vector<4xf32>
+ %scaled = vector.mulf %x, %ivector : vector<4xf32>
+ %rounded = vector.roundevenf %scaled : vector<4xf32>
+ %lower = vector.maxnumf %rounded, %lo : vector<4xf32>
+ %upper = vector.minnumf %lower, %hi : vector<4xf32>
+ %signed = vector.fptosi %upper : vector<4xf32> to vector<4xi32>
+ %bytes = vector.andi %signed, %mask : vector<4xi32>
+ %b0 = vector.extract %bytes[0] : vector<4xi32> -> i32
+ %b1 = vector.extract %bytes[1] : vector<4xi32> -> i32
+ %b2 = vector.extract %bytes[2] : vector<4xi32> -> i32
+ %b3 = vector.extract %bytes[3] : vector<4xi32> -> i32
+ %s8 = scalar.constant 8 : i32
+ %s16 = scalar.constant 16 : i32
+ %s24 = scalar.constant 24 : i32
+ %p1 = scalar.shli %b1, %s8 : i32
+ %p2 = scalar.shli %b2, %s16 : i32
+ %p3 = scalar.shli %b3, %s24 : i32
+ %a = scalar.ori %b0, %p1 : i32
+ %b = scalar.ori %p2, %p3 : i32
+ %word = scalar.ori %a, %b : i32
+ %base = index.mul %head, %c36 : index
+ %out_col0 = index.add %base, %lane : index
+ %out_col = index.assume %out_col0 [lt(%out_col0, %out_width)] : index
+ view.store %word, %ov[%row, %out_col] : i32, view<[%count]x[%out_width]xi32>
+ %first = index.cmp eq, %lane, %c0 : index
+ scf.if %first {
+  %scale_col0 = index.add %base, %c32 : index
+  %scale_col = index.assume %scale_col0 [lt(%scale_col0, %out_width)] : index
+  view.store %scale, %sv[%row, %scale_col] : f32, view<[%count]x[%out_width]xf32>
+ }
+ %padding = index.cmp ult, %lane, %c4 : index
+ %not_first = index.cmp ne, %lane, %c0 : index
+ %write_padding = scalar.andi %padding, %not_first : i1
+ scf.if %write_padding {
+  %pad0 = index.add %out_col0, %c32 : index
+  %pad = index.assume %pad0 [lt(%pad0, %out_width)] : index
+  %izero = scalar.constant 0 : i32
+  view.store %izero, %ov[%row, %pad] : i32, view<[%count]x[%out_width]xi32>
+ }
+ kernel.return
+}

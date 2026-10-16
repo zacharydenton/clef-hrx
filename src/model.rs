@@ -323,6 +323,72 @@ impl ClefModel {
         }
         result
     }
+    /// Select an experimental INT4 expert gate/up kernel, dropping cached graphs.
+    #[cfg(feature = "bench-internals")]
+    pub fn set_benchmark_omni_gate_up_source(&mut self, source: Option<&str>) -> Result<()> {
+        ensure!(
+            !self.failed,
+            "model execution failed; reload model before reusing it"
+        );
+        ensure!(
+            self.options.source.model == crate::ModelVariant::ClefOmni,
+            "Omni model required"
+        );
+        ensure!(
+            source.is_none() || self.options.precision != Precision::Bf16,
+            "gate/up fusion requires INT4 expert weights"
+        );
+        let source: Option<std::sync::Arc<str>> = source
+            .map(|source| format!("{}\n{source}", include_str!("../kernels/common.loom")).into());
+        // Safety: only owned host source crosses the session. Drop graphs before
+        // replacing the selector so no cached plan can retain the old variant.
+        let result = unsafe {
+            self.native.run(|state| -> Result<()> {
+                state.plan = None;
+                state.backbone = None;
+                state.engine.reset_plan()?;
+                state.engine.omni_gate_up_source = source;
+                Ok(())
+            })
+        }
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    /// Toggle Q/K normalization/RoPE fusion without changing other benchmark settings.
+    #[cfg(feature = "bench-internals")]
+    pub fn set_benchmark_omni_fused_norm_rope(&mut self, enabled: bool) -> Result<()> {
+        ensure!(
+            !self.failed,
+            "model execution failed; reload model before reusing it"
+        );
+        ensure!(
+            self.options.source.model == crate::ModelVariant::ClefOmni,
+            "Omni model required"
+        );
+        // Safety: only a host boolean crosses the session. Drop cached graphs
+        // before changing the operator selection, as for other benchmark switches.
+        let result = unsafe {
+            self.native.run(|state| -> Result<()> {
+                state.plan = None;
+                state.backbone = None;
+                state.engine.reset_plan()?;
+                state.engine.omni_fused_norm_rope = enabled;
+                Ok(())
+            })
+        }
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
     /// Switches Omni benchmark variants while retaining the checkpoint allocation.
     #[cfg(feature = "bench-internals")]
     pub fn set_benchmark_omni_kernels(
@@ -356,6 +422,7 @@ impl ClefModel {
                 state.plan = None;
                 state.backbone = None;
                 state.engine.reset_plan()?;
+                state.engine.omni_fast_defaults = false;
                 state.engine.omni_kernel_dir = config.directory;
                 state.engine.omni_chunk = config.chunk;
                 state.engine.omni_alignment = config.alignment;
@@ -364,6 +431,7 @@ impl ClefModel {
                 state.engine.omni_tiled_attention = config.tiled_attention;
                 state.engine.omni_prepack_qk = config.prepack_qk;
                 state.engine.omni_fused_mlp = config.fused_mlp;
+                state.engine.omni_fused_norm_rope = config.fused_norm_rope;
                 state.engine.omni_pack_swiglu = config.pack_swiglu;
                 state.engine.omni_compact_experts = config.compact_experts;
                 state.engine.omni_reuse_backbone = config.reuse_backbone;

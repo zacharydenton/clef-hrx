@@ -1,4 +1,4 @@
-//! Compare attention sources using one weight allocation and rebuilt request graphs.
+//! Compare attention or Omni fusion variants with one resident checkpoint.
 use clap::Parser;
 use clef_hrx::{
     ClefModel, EncodeOptions, LoadOptions, Precision, Request, Result, checkpoint::Source,
@@ -23,6 +23,14 @@ struct Args {
     reference: PathBuf,
     #[arg(long)]
     candidate: PathBuf,
+    /// Also fuse Omni Q/K normalization/RoPE in the candidate only. Use identical
+    /// attention sources to isolate the fusion's whole-request effect.
+    #[arg(long)]
+    candidate_fused_norm_rope: bool,
+    /// Fuse Omni INT4 gate/up with this source in the candidate only. Identical
+    /// attention sources isolate the fusion, including on short requests.
+    #[arg(long)]
+    candidate_gate_up_source: Option<PathBuf>,
     /// Fresh result path, updated after every request.
     #[arg(long)]
     output: PathBuf,
@@ -49,6 +57,15 @@ fn main() -> Result<()> {
         std::fs::read_to_string(&args.reference)?,
         std::fs::read_to_string(&args.candidate)?,
     ];
+    let gate_up_source = args
+        .candidate_gate_up_source
+        .as_ref()
+        .map(std::fs::read_to_string)
+        .transpose()?;
+    anyhow::ensure!(
+        gate_up_source.is_none() || args.model == clef_hrx::ModelVariant::ClefOmni,
+        "gate/up fusion requires Omni"
+    );
     let bytes = std::fs::read(&args.input)?;
     let request: Request = serde_json::from_slice(&bytes)?;
     let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
@@ -56,6 +73,9 @@ fn main() -> Result<()> {
         "state": "loading", "model": format!("{:?}", args.model),
         "precision": format!("{:?}", args.precision), "memory_gib": args.memory_gib,
         "max_length": args.max_length, "rounds": args.rounds,
+        "candidate_fused_norm_rope": args.candidate_fused_norm_rope,
+        "candidate_gate_up_source": args.candidate_gate_up_source.as_ref().zip(gate_up_source.as_ref())
+            .map(|(path, source)| serde_json::json!({"path": path, "sha256": hash(source.as_bytes())})),
         "reference": {"path": args.reference, "sha256": hash(sources[0].as_bytes())},
         "candidate": {"path": args.candidate, "sha256": hash(sources[1].as_bytes())},
         "input": {"path": args.input, "sha256": hash(&bytes)},
@@ -85,11 +105,17 @@ fn main() -> Result<()> {
     report["state"] = "warmup".into();
     save(&args.output, &report)?;
     let mut expected = None;
-    for source in &sources {
+    for (variant, source) in sources.iter().enumerate() {
+        if args.candidate_fused_norm_rope {
+            model.set_benchmark_omni_fused_norm_rope(variant == 1)?;
+        }
+        if let Some(gate_up) = gate_up_source.as_deref() {
+            model.set_benchmark_omni_gate_up_source((variant == 1).then_some(gate_up))?;
+        }
         model.set_benchmark_attention_source(Some(source))?;
         let prediction = model.infer(&request)?;
         anyhow::ensure!(
-            prediction.input_tokens >= 8192,
+            gate_up_source.is_some() || prediction.input_tokens >= 8192,
             "request does not select the attention override"
         );
         let questions = serde_json::to_value(&prediction.questions)?;
@@ -101,7 +127,7 @@ fn main() -> Result<()> {
         if let Some(reference) = &expected {
             anyhow::ensure!(
                 reference == &questions,
-                "attention candidate changed predictions; raw outputs saved"
+                "candidate changed predictions; raw outputs saved"
             );
         } else {
             expected = Some(questions);
@@ -112,6 +138,12 @@ fn main() -> Result<()> {
     let mut totals = [0.; 2];
     for round in 0..args.rounds {
         for variant in [round % 2, 1 - round % 2] {
+            if args.candidate_fused_norm_rope {
+                model.set_benchmark_omni_fused_norm_rope(variant == 1)?;
+            }
+            if let Some(gate_up) = gate_up_source.as_deref() {
+                model.set_benchmark_omni_gate_up_source((variant == 1).then_some(gate_up))?;
+            }
             model.set_benchmark_attention_source(Some(&sources[variant]))?;
             let started = Instant::now();
             let prediction = model.infer(&request)?;

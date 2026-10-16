@@ -1,0 +1,161 @@
+// Experimental fusion of omni_rms_norm.loom and omni_rope.loom for 128-wide heads.
+// Preserve the subgroup reduction and every intermediate BF16 rounding point.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.cs_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.cs_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.heads : %value: index where [range(%value, 0, 4294967295)]
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %groups = config.get @clef.groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %w_buffer: buffer, %cs_buffer: buffer, %out_buffer: buffer) {
+ %two = index.constant 2 : index
+ %wave = index.constant 32 : index
+ %width = index.constant 128 : index
+ %cswidth = index.constant 256 : index
+ %wf = scalar.constant 128.0 : f32
+ %eps = scalar.constant 1.0e-6 : f32
+ %zero = scalar.constant 0.0 : f32
+ %wg = kernel.workgroup.id<x> : index
+ %subgroup = kernel.subgroup.id : index
+ %lane = kernel.subgroup.lane.id : index
+ %head_base = index.mul %wg, %two : index
+ %head_row = index.add %head_base, %subgroup : index
+ %head_work = index.mul %head_row, %wave : index
+ %work = config.get @clef.work : index
+ %active = index.cmp ult, %head_work, %work : index
+ scf.if %active {
+ %heads = config.get @clef.heads : index
+ %token = index.div %head_row, %heads : index
+ %csbase = index.mul %token, %cswidth : index
+ %base = index.mul %head_row, %width : index
+ %x_len = config.get @clef.x_len : index
+ %x_dtype = config.get @clef.x_dtype : index
+ %w_len = config.get @clef.w_len : index
+ %w_dtype = config.get @clef.w_dtype : index
+ %cs_len = config.get @clef.cs_len : index
+ %cs_dtype = config.get @clef.cs_dtype : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %offset0 = index.constant 0 : index
+ %col0 = index.add %lane, %offset0 : index
+ %at0 = index.add %base, %col0 : index
+ %x0 = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at0) : (index, buffer, index, index) -> (f32)
+ %d0 = scalar.subf %x0, %zero : f32
+ %sum0 = scalar.fmaf %d0, %d0, %zero : f32
+ %offset1 = index.constant 32 : index
+ %col1 = index.add %lane, %offset1 : index
+ %at1 = index.add %base, %col1 : index
+ %x1 = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at1) : (index, buffer, index, index) -> (f32)
+ %d1 = scalar.subf %x1, %zero : f32
+ %sum1 = scalar.fmaf %d1, %d1, %sum0 : f32
+ %offset2 = index.constant 64 : index
+ %col2 = index.add %lane, %offset2 : index
+ %at2 = index.add %base, %col2 : index
+ %x2 = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at2) : (index, buffer, index, index) -> (f32)
+ %d2 = scalar.subf %x2, %zero : f32
+ %sum2 = scalar.fmaf %d2, %d2, %sum1 : f32
+ %offset3 = index.constant 96 : index
+ %col3 = index.add %lane, %offset3 : index
+ %at3 = index.add %base, %col3 : index
+ %x3 = template.apply<@clef.load>(%x_dtype, %x_buffer, %x_len, %at3) : (index, buffer, index, index) -> (f32)
+ %d3 = scalar.subf %x3, %zero : f32
+ %sum3 = scalar.fmaf %d3, %d3, %sum2 : f32
+ %ss = kernel.subgroup.reduce<addf> %sum3 : f32
+ %variance = scalar.divf %ss, %wf : f32
+ %ve = scalar.addf %variance, %eps : f32
+ %inverse = scalar.rsqrtf %ve : f32
+ %w0 = template.apply<@clef.load>(%w_dtype, %w_buffer, %w_len, %col0) : (index, buffer, index, index) -> (f32)
+ %weight0 = scalar.addf %w0, %zero : f32
+ %n0 = scalar.mulf %d0, %inverse : f32
+ %nb0 = scalar.fptrunc %n0 : f32 to bf16
+ %nf0 = scalar.extf %nb0 : bf16 to f32
+ %weighted0 = scalar.mulf %nf0, %weight0 : f32
+ %weighted_b0 = scalar.fptrunc %weighted0 : f32 to bf16
+ %normalized0 = scalar.extf %weighted_b0 : bf16 to f32
+ %w1 = template.apply<@clef.load>(%w_dtype, %w_buffer, %w_len, %col1) : (index, buffer, index, index) -> (f32)
+ %weight1 = scalar.addf %w1, %zero : f32
+ %n1 = scalar.mulf %d1, %inverse : f32
+ %nb1 = scalar.fptrunc %n1 : f32 to bf16
+ %nf1 = scalar.extf %nb1 : bf16 to f32
+ %weighted1 = scalar.mulf %nf1, %weight1 : f32
+ %weighted_b1 = scalar.fptrunc %weighted1 : f32 to bf16
+ %normalized1 = scalar.extf %weighted_b1 : bf16 to f32
+ %w2 = template.apply<@clef.load>(%w_dtype, %w_buffer, %w_len, %col2) : (index, buffer, index, index) -> (f32)
+ %weight2 = scalar.addf %w2, %zero : f32
+ %n2 = scalar.mulf %d2, %inverse : f32
+ %nb2 = scalar.fptrunc %n2 : f32 to bf16
+ %nf2 = scalar.extf %nb2 : bf16 to f32
+ %weighted2 = scalar.mulf %nf2, %weight2 : f32
+ %weighted_b2 = scalar.fptrunc %weighted2 : f32 to bf16
+ %normalized2 = scalar.extf %weighted_b2 : bf16 to f32
+ %w3 = template.apply<@clef.load>(%w_dtype, %w_buffer, %w_len, %col3) : (index, buffer, index, index) -> (f32)
+ %weight3 = scalar.addf %w3, %zero : f32
+ %n3 = scalar.mulf %d3, %inverse : f32
+ %nb3 = scalar.fptrunc %n3 : f32 to bf16
+ %nf3 = scalar.extf %nb3 : bf16 to f32
+ %weighted3 = scalar.mulf %nf3, %weight3 : f32
+ %weighted_b3 = scalar.fptrunc %weighted3 : f32 to bf16
+ %normalized3 = scalar.extf %weighted_b3 : bf16 to f32
+ %partner0 = scalar.negf %normalized2 : f32
+ %ci0 = index.add %csbase, %col0 : index
+ %si0 = index.add %ci0, %width : index
+ %cos0 = template.apply<@clef.load>(%cs_dtype, %cs_buffer, %cs_len, %ci0) : (index, buffer, index, index) -> (f32)
+ %sin0 = template.apply<@clef.load>(%cs_dtype, %cs_buffer, %cs_len, %si0) : (index, buffer, index, index) -> (f32)
+ %xc0 = scalar.mulf %normalized0, %cos0 : f32
+ %xb0 = scalar.fptrunc %xc0 : f32 to bf16
+ %xf0 = scalar.extf %xb0 : bf16 to f32
+ %ys0 = scalar.mulf %partner0, %sin0 : f32
+ %yb0 = scalar.fptrunc %ys0 : f32 to bf16
+ %yf0 = scalar.extf %yb0 : bf16 to f32
+ %result0 = scalar.addf %xf0, %yf0 : f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %at0, %result0) : (index, buffer, index, index, f32) -> ()
+ %partner1 = scalar.negf %normalized3 : f32
+ %ci1 = index.add %csbase, %col1 : index
+ %si1 = index.add %ci1, %width : index
+ %cos1 = template.apply<@clef.load>(%cs_dtype, %cs_buffer, %cs_len, %ci1) : (index, buffer, index, index) -> (f32)
+ %sin1 = template.apply<@clef.load>(%cs_dtype, %cs_buffer, %cs_len, %si1) : (index, buffer, index, index) -> (f32)
+ %xc1 = scalar.mulf %normalized1, %cos1 : f32
+ %xb1 = scalar.fptrunc %xc1 : f32 to bf16
+ %xf1 = scalar.extf %xb1 : bf16 to f32
+ %ys1 = scalar.mulf %partner1, %sin1 : f32
+ %yb1 = scalar.fptrunc %ys1 : f32 to bf16
+ %yf1 = scalar.extf %yb1 : bf16 to f32
+ %result1 = scalar.addf %xf1, %yf1 : f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %at1, %result1) : (index, buffer, index, index, f32) -> ()
+ %ci2 = index.add %csbase, %col2 : index
+ %si2 = index.add %ci2, %width : index
+ %cos2 = template.apply<@clef.load>(%cs_dtype, %cs_buffer, %cs_len, %ci2) : (index, buffer, index, index) -> (f32)
+ %sin2 = template.apply<@clef.load>(%cs_dtype, %cs_buffer, %cs_len, %si2) : (index, buffer, index, index) -> (f32)
+ %xc2 = scalar.mulf %normalized2, %cos2 : f32
+ %xb2 = scalar.fptrunc %xc2 : f32 to bf16
+ %xf2 = scalar.extf %xb2 : bf16 to f32
+ %ys2 = scalar.mulf %normalized0, %sin2 : f32
+ %yb2 = scalar.fptrunc %ys2 : f32 to bf16
+ %yf2 = scalar.extf %yb2 : bf16 to f32
+ %result2 = scalar.addf %xf2, %yf2 : f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %at2, %result2) : (index, buffer, index, index, f32) -> ()
+ %ci3 = index.add %csbase, %col3 : index
+ %si3 = index.add %ci3, %width : index
+ %cos3 = template.apply<@clef.load>(%cs_dtype, %cs_buffer, %cs_len, %ci3) : (index, buffer, index, index) -> (f32)
+ %sin3 = template.apply<@clef.load>(%cs_dtype, %cs_buffer, %cs_len, %si3) : (index, buffer, index, index) -> (f32)
+ %xc3 = scalar.mulf %normalized3, %cos3 : f32
+ %xb3 = scalar.fptrunc %xc3 : f32 to bf16
+ %xf3 = scalar.extf %xb3 : bf16 to f32
+ %ys3 = scalar.mulf %normalized1, %sin3 : f32
+ %yb3 = scalar.fptrunc %ys3 : f32 to bf16
+ %yf3 = scalar.extf %yb3 : bf16 to f32
+ %result3 = scalar.addf %xf3, %yf3 : f32
+ template.apply<@clef.store>(%out_dtype, %out_buffer, %out_len, %at3, %result3) : (index, buffer, index, index, f32) -> ()
+ }
+ kernel.return
+}

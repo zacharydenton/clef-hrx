@@ -124,10 +124,20 @@ name = "omni"
 harness = false
 required-features = ["bench-internals"]
 
+[[bench]]
+name = "omni_norm_rope"
+harness = false
+required-features = ["bench-internals"]
+
 [[example]]
 name = "compare_omni"
 required-features = ["bench-internals"]
 
 [[example]]
 name = "prepack_omni"
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "omni_gate_up"
+harness = false
 required-features = ["bench-internals"]

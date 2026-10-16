@@ -1,0 +1,87 @@
+// SPDX-License-Identifier: Apache-2.0
+// Column mean based on h3-hrx colmean_f32.loom, revision
+// 95ed12f43bd3e596cbfad175c22de9560447e9e5. BF16 input, vectorized columns,
+// and 256-row partial sums avoid a serial full-context reduction on four heads.
+// Partial and finish passes share a source and specialize on clef.key_mean.finish.
+amdgpu.target<gfx1151> @clef_key_mean_target {subgroup_size = 32}
+config.decl @clef.key_mean.width : %value: index where [range(%value, 128, 65536), multiple_of(%value, 128)]
+config.decl @clef.key_mean.finish : %value: index where [range(%value, 0, 1)]
+kernel.def target(@clef_key_mean_target) export("clef_key_mean") @clef_key_mean(%rows: index) {
+ %one = index.constant 1 : index
+ %c32 = index.constant 32 : index
+ %c128 = index.constant 128 : index
+ %c255 = index.constant 255 : index
+ %c256 = index.constant 256 : index
+ %zero = index.constant 0 : index
+ %width = config.get @clef.key_mean.width : index
+ %finish = config.get @clef.key_mean.finish : index
+ %is_finish = index.cmp ne, %finish, %zero : index
+ %heads = index.div %width, %c128 : index
+ %rounded = index.add %rows, %c255 : index
+ %blocks = index.div %rounded, %c256 : index
+ %partial_groups = index.mul %blocks, %heads : index
+ %groups = scf.select %is_finish, %heads, %partial_groups : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%c32, %one, %one) : index
+} launch(%rows: index, %input: buffer, %output: buffer) {
+ %c0 = index.constant 0 : index
+ %c1 = index.constant 1 : index
+ %c4 = index.constant 4 : index
+ %c128 = index.constant 128 : index
+ %c255 = index.constant 255 : index
+ %c256 = index.constant 256 : index
+ %off = index.constant 0 : offset
+ %zero = vector.constant 0.0 : vector<4xf32>
+ %width = config.get @clef.key_mean.width : index
+ %finish = config.get @clef.key_mean.finish : index
+ %is_finish = index.cmp ne, %finish, %c0 : index
+ %count = index.assume %rows [range(%rows, 1, 65536)] : index
+ %rounded = index.add %count, %c255 : index
+ %blocks0 = index.div %rounded, %c256 : index
+ %blocks = index.assume %blocks0 [range(%blocks0, 1, 256)] : index
+ %heads = index.div %width, %c128 : index
+ %groups = index.mul %blocks, %heads : index
+ %group0 = kernel.workgroup.id<x> : index
+ %group = index.assume %group0 [lt(%group0, %groups)] : index
+ %head = index.rem %group, %heads : index
+ %block0 = index.div %group, %heads : index
+ %block = index.assume %block0 [lt(%block0, %blocks)] : index
+ %lane = kernel.workitem.id<x> : index
+ %head_col = index.mul %head, %c128 : index
+ %lane_col = index.mul %lane, %c4 : index
+ %col0 = index.add %head_col, %lane_col : index
+ %limit = index.sub %width, %c4 : index
+ %col = index.assume %col0 [le(%col0, %limit), multiple_of(%col0, 4)] : index
+ %ig = buffer.assume.memory_space<global> %input : buffer
+ %og = buffer.assume.memory_space<global> %output : buffer
+ scf.if %is_finish {
+  %iv = buffer.view %ig[%off] : buffer -> view<[%blocks]x[%width]xf32>
+  %ov = buffer.view %og[%off] : buffer -> view<[%width]xf32>
+  %sum = scf.for %b = [%c0 to %blocks step %c1](%acc = %zero : vector<4xf32>) -> (vector<4xf32>) {
+   %bi = index.assume %b [lt(%b, %blocks)] : index
+   %value = vector.load %iv[%bi, %col] : view<[%blocks]x[%width]xf32> -> vector<4xf32>
+   %next = vector.addf %acc, %value : vector<4xf32>
+   scf.yield %next : vector<4xf32>
+  }
+  %ni = index.cast %count : index to i32
+  %nf = scalar.sitofp %ni : i32 to f32
+  %nv = vector.splat %nf : vector<4xf32>
+  %mean = vector.divf %sum, %nv : vector<4xf32>
+  vector.store %mean, %ov[%col] : vector<4xf32>, view<[%width]xf32>
+ } else {
+  %iv = buffer.view %ig[%off] : buffer -> view<[%count]x[%width]xbf16>
+  %ov = buffer.view %og[%off] : buffer -> view<[%blocks]x[%width]xf32>
+  %start = index.mul %block, %c256 : index
+  %end0 = index.add %start, %c256 : index
+  %full = index.cmp ult, %end0, %count : index
+  %end = scf.select %full, %end0, %count : index
+  %sum = scf.for %row = [%start to %end step %c1](%acc = %zero : vector<4xf32>) -> (vector<4xf32>) {
+   %ri = index.assume %row [lt(%row, %count)] : index
+   %value_h = vector.load %iv[%ri, %col] : view<[%count]x[%width]xbf16> -> vector<4xbf16>
+   %value = vector.extf %value_h : vector<4xbf16> to vector<4xf32>
+   %next = vector.addf %acc, %value : vector<4xf32>
+   scf.yield %next : vector<4xf32>
+  }
+  vector.store %sum, %ov[%block, %col] : vector<4xf32>, view<[%blocks]x[%width]xf32>
+ }
+ kernel.return
+}

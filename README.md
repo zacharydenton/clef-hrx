@@ -111,8 +111,9 @@ default in their qualified precision modes. Results and reproduction:
 Original CLEF INT4 also uses optimized long-context attention; see its
 [qualification coverage](docs/attention-kernel-tuning.md#acceptance-with-partial-coverage-october-15).
 
-With opt-in experimental kernels, Omni reaches **1,145 BF16 / 3,031 INT4 input
+Omni uses optimized kernels by default: **1,145 BF16 / 3,031 INT4 input
 tok/s** on full JevBench, with **80.1% / 81.0% accuracy** respectively.
+Full WorkflowEvals measured **1,194 INT4 input tok/s** on a shared GPU.
 [Omni results and reproduction](docs/omni-memory-tuning.md).
 
 ## Library

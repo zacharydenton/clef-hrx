@@ -1,8 +1,9 @@
 use clef_hrx::{
     Precision,
     benchmarking::{
-        AttentionBenchmark, AttentionFixture, OmniCombineBenchmark, OmniExpertBenchmark,
-        OmniRouteBenchmark, OmniRouterBenchmark, PackingBenchmark, SwiGluBenchmark,
+        AttentionBenchmark, AttentionFixture, AttentionProbeOptions, OmniCombineBenchmark,
+        OmniExpertBenchmark, OmniRouteBenchmark, OmniRouterBenchmark, PackingBenchmark,
+        SwiGluBenchmark,
     },
 };
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -281,7 +282,25 @@ fn benches(c: &mut Criterion) {
             .map(|path| std::fs::read_to_string(path).unwrap());
         let reference_prepacked =
             std::env::var_os("CLEF_BENCH_OMNI_ATTENTION_REFERENCE_PREPACKED").is_some();
-        let mut reference = if reference_prepacked {
+        let input_directory =
+            std::env::var_os("CLEF_BENCH_OMNI_ATTENTION_INPUT_DIR").map(std::path::PathBuf::from);
+        let mut reference = if input_directory.is_some() {
+            assert!(
+                !reference_prepacked || reference_source.is_some(),
+                "prepacked reference requires an explicit source"
+            );
+            AttentionBenchmark::probe_case(
+                tokens,
+                reference_source.as_deref(),
+                model,
+                fixture,
+                reference_prepacked,
+                AttentionProbeOptions {
+                    input_directory: input_directory.as_deref(),
+                    ..Default::default()
+                },
+            )
+        } else if reference_prepacked {
             AttentionBenchmark::prepacked_case(
                 tokens,
                 reference_source
@@ -298,15 +317,30 @@ fn benches(c: &mut Criterion) {
             .map(|path| std::fs::read_to_string(path).unwrap())
             .unwrap_or_else(|_| include_str!("../kernels/attention_tiled_128.loom").into());
         let prepacked = std::env::var_os("CLEF_BENCH_OMNI_PREPACK_QK").is_some();
-        let mut candidate = if prepacked {
+        let packing_source = std::env::var("CLEF_BENCH_OMNI_ATTENTION_PACKING_SOURCE")
+            .ok()
+            .map(|path| std::fs::read_to_string(path).unwrap());
+        let centered_key_source = std::env::var("CLEF_BENCH_OMNI_ATTENTION_CENTERED_KEY_SOURCE")
+            .ok()
+            .map(|path| std::fs::read_to_string(path).unwrap());
+        if prepacked {
             assert!(
                 std::env::var_os("CLEF_BENCH_OMNI_ATTENTION_SOURCE").is_some(),
                 "prepacked attention requires an explicit compatible source"
             );
-            AttentionBenchmark::prepacked_case(tokens, &source, model, fixture)
-        } else {
-            AttentionBenchmark::case(tokens, Some(&source), false, model, fixture)
         }
+        let mut candidate = AttentionBenchmark::probe_case(
+            tokens,
+            Some(&source),
+            model,
+            fixture,
+            prepacked,
+            AttentionProbeOptions {
+                packing_source: packing_source.as_deref(),
+                centered_key_source: centered_key_source.as_deref(),
+                input_directory: input_directory.as_deref(),
+            },
+        )
         .unwrap();
         let a = reference.output().unwrap();
         let b = candidate.output().unwrap();

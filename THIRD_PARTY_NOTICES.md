@@ -47,10 +47,29 @@
   at the same Apache-2.0 revision. The generator supports inline or separate
   Q/K packing, omits H3's rotation, and keeps BF16 probability/value operands
   and FP32 softmax/accumulation.
+  `scripts/omni_attention_scale_candidate.py` transposes the derived kernel's
+  shared key-scale storage and vectorizes its reads while retaining the same
+  values, rescaling order and provenance.
+- `benches/kernels/omni_prepare_attention_i8_hadamard.loom` additionally adapts
+  the ordered H128 FP32 butterflies from H3's `prepare_qk_i8hm.loom` at that
+  revision. It accepts BF16 inputs, folds orthogonal normalization into each
+  stored scale, and omits mean subtraction.
+- `scripts/omni_attention_int4_candidate.py` and the generated
+  `benches/kernels/omni_prepare_attention_i4_g64*.loom` adapt those packers and
+  the signed INT4 operand schema from H3's `attention_i4qks_family.loom` at
+  the same revision. They use two 64-channel scales per head, retaining BF16
+  probability/value products and the existing benchmark buffer ABI.
+- `benches/kernels/omni_key_mean.loom` adapts the column-mean reduction from
+  H3's `colmean_f32.loom` at the same revision, with BF16 input, vectorized
+  columns and two passes over 256-row partial sums. The experimental
+  `scripts/omni_attention_center_candidate.py` adds mean subtraction to the
+  plain or rotated packer while retaining its H3 provenance.
 - `scripts/omni_attention_mask_candidate.py` adds an interior-tile mask branch
   to the transposed and prefetch sources, retaining their provenance.
   `scripts/omni_attention_qk_candidate.py` reorders their independent QK
   accumulators while preserving each summation order and the same provenance.
+  `scripts/omni_attention_loader_candidate.py` changes the loader thread
+  assignment while retaining the transposed LDS layout and source provenance.
 - `scripts/omni_attention_probability_candidate.py` reorders operations produced
   by the transposed and prefetch generators below, retaining their provenance.
 - `scripts/omni_attention_prefetch_candidate.py` adapts the next-tile loading
@@ -73,3 +92,8 @@
 
 The project license is Apache-2.0. Runtime/compiler dependencies retain their
 own licenses, as documented in hrx-rs/THIRD-PARTY.md.
+
+The accepted Omni sources are also embedded as
+`kernels/omni_attention_transposed.loom`, `kernels/omni_expert_bf16_m64.loom`
+and `kernels/omni_expert_i4_k128_down.loom`. They retain the corresponding
+attention/expert source attributions and licenses above.

@@ -22,6 +22,7 @@ impl OmniRouterBenchmark {
             ..Default::default()
         })?;
         let mut engine = Engine::new(&context)?;
+        engine.omni_fast_defaults = false;
         let dtype = if dtype_bf16 { DType::Bf16 } else { DType::F32 };
         let logits = engine.alloc(tokens, experts, dtype)?;
         let old = engine.alloc(tokens, topk * 2, DType::F32)?;
@@ -119,6 +120,7 @@ impl OmniRouteBenchmark {
             ..Default::default()
         })?;
         let mut engine = Engine::new(&context)?;
+        engine.omni_fast_defaults = false;
         let routes = engine.input(
             tokens,
             16,
@@ -197,6 +199,7 @@ impl OmniExpertBenchmark {
             ..Default::default()
         })?;
         let mut engine = Engine::new(&context)?;
+        engine.omni_fast_defaults = false;
         engine.quantized = crate::quantized::QuantizedProjections::for_precision(precision);
         // Nonperiodic, exactly representable fixtures exercise cancellation and all experts.
         let mut state = 12345u32;
@@ -306,7 +309,7 @@ impl OmniExpertBenchmark {
             .map(|i| half::bf16::from_f32(((i * 17 + phase * 7) % 251) as f32 / 128. - 1.))
             .collect()
     }
-    fn routes(tokens: usize, skewed: bool, phase: usize) -> Vec<f32> {
+    pub(super) fn routes(tokens: usize, skewed: bool, phase: usize) -> Vec<f32> {
         (0..tokens)
             .flat_map(|t| {
                 (0..16).map(move |r| {
@@ -372,6 +375,7 @@ impl OmniCombineBenchmark {
             ..Default::default()
         })?;
         let mut engine = Engine::new(&context)?;
+        engine.omni_fast_defaults = false;
         let routes = engine.alloc(tokens, 16, DType::F32)?;
         let values = engine.alloc(tokens * 8, 2048, DType::Bf16)?;
         let old_groups = engine.omni_group_routes(&routes)?;

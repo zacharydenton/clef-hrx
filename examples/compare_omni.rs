@@ -33,6 +33,9 @@ struct Args {
     /// Share gate/up packing and fuse SwiGLU in variants after the reference.
     #[arg(long)]
     fused_mlp: bool,
+    /// Fuse Q/K RMS normalization with RoPE in variants after the reference.
+    #[arg(long)]
+    fused_norm_rope: bool,
     /// Fuse SwiGLU into INT4 expert packing in variants after the reference.
     #[arg(long)]
     pack_swiglu: bool,
@@ -82,6 +85,7 @@ fn main() -> Result<()> {
         output,
         "{}",
         serde_json::json!({"kind":"metadata", "precision":args.precision,
+        "fused_norm_rope":args.fused_norm_rope,
         "reuse_backbone":args.reuse_backbone, "pack_swiglu":args.pack_swiglu, "prepack_qk":args.prepack_qk,
         "binary_sha256":hash(&std::fs::read(std::env::current_exe()?)?), "input_sha256":hash(input.as_bytes()),
         "sources":sources, "sorted_combine": args.sorted_combine, "fused_mlp":args.fused_mlp, "compact_experts":args.compact_experts, "candidate_min_tokens": args.candidate_min_tokens, "variants_requested": args.variants, "attention_source": args.attention_source.as_ref().map(|p| -> Result<_> { Ok(serde_json::json!({"path":p,"sha256":hash(&std::fs::read(p)?)})) }).transpose()?, "reference_attention_source":args.reference_attention_source.as_ref().map(|p| -> Result<_> { Ok(serde_json::json!({"path":p,"sha256":hash(&std::fs::read(p)?)})) }).transpose()?, "max_length":args.max_length, "memory_gib":args.memory_gib,
@@ -208,6 +212,7 @@ fn main() -> Result<()> {
                 },
                 sorted_combine: args.sorted_combine && !is_reference,
                 fused_mlp: args.fused_mlp && !is_reference,
+                fused_norm_rope: args.fused_norm_rope && !is_reference,
                 pack_swiglu: args.pack_swiglu && !is_reference,
                 compact_experts: args.compact_experts && !is_reference,
                 reuse_backbone: args.reuse_backbone && !is_reference,

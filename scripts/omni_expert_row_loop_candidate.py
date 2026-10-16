@@ -15,15 +15,23 @@ import re
 from pathlib import Path
 
 
-def generate(source, row_waves, min_tokens=0):
-    assert row_waves in (1, 2, 4, 8, 16, 32)
+def generate(source, row_waves=None, min_tokens=0):
+    assert row_waves is None or row_waves in (1, 2, 4, 8, 16, 32)
     assert 0 <= min_tokens <= 2048
     original = source
     # Launch and device-side wave decoding must use the same capped tile count.
     tile = r' %tiles = index.div %rounded, (%c(?:16|32)) : index'
+    # Eight of 128 experts are selected per token. Size the initial grid for
+    # the mean populated row count; the existing strided loop covers skew.
+    cap = (f' %max_row_waves = index.constant {row_waves} : index\n'
+           if row_waves is not None else
+           ' %row_balance_padding = index.constant 15 : index\n'
+           ' %row_balance_divisor = index.constant 16 : index\n'
+           ' %row_balance_rounded = index.add %unbounded_tiles, %row_balance_padding : index\n'
+           ' %max_row_waves = index.div %row_balance_rounded, %row_balance_divisor : index\n')
     replacement = (
         r' %unbounded_tiles = index.div %rounded, \1 : index\n'
-        f' %max_row_waves = index.constant {row_waves} : index\n'
+        + cap +
         ' %over_limit = index.cmp ugt, %unbounded_tiles, %max_row_waves : index\n'
         ' %tiles = scf.select %over_limit, %max_row_waves, %unbounded_tiles : index'
     )
@@ -47,8 +55,8 @@ def generate(source, row_waves, min_tokens=0):
         # Both the grid and body branch specialize on the request's token count.
         # Small requests retain the original body, including its register use.
         source = source.replace(
-            f' %max_row_waves = index.constant {row_waves} : index',
-            f' %row_wave_cap = index.constant {row_waves} : index\n'
+            cap.rstrip('\n'),
+            cap.replace('%max_row_waves', '%row_wave_cap') +
             f' %row_loop_min = index.constant {min_tokens} : index\n'
             ' %row_loop_large = index.cmp uge, %tokens, %row_loop_min : index\n'
             ' %max_row_waves = scf.select %row_loop_large, %row_wave_cap, %unbounded_tiles : index',
@@ -65,7 +73,9 @@ def generate(source, row_waves, min_tokens=0):
             ' scf.if %row_loop_enabled {\n'
         ) + body + ' } else {\n' + original_body + ' }\n kernel.return\n}\n'
     return (
-        f'// Experimental capped row grid: at most {row_waves} waves per expert/channel tile.\n'
+        (f'// Experimental capped row grid: at most {row_waves} waves per expert/channel tile.\n'
+         if row_waves is not None else
+         '// Experimental balanced row grid: ceil(full row tiles / 16), with a skew-safe loop.\n')
         + source
     )
 
@@ -73,7 +83,10 @@ def generate(source, row_waves, min_tokens=0):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
-    parser.add_argument('--row-waves', type=int, choices=(1, 2, 4, 8, 16, 32), required=True)
+    grid = parser.add_mutually_exclusive_group(required=True)
+    grid.add_argument('--row-waves', type=int, choices=(1, 2, 4, 8, 16, 32))
+    grid.add_argument('--balanced-grid', action='store_true',
+                      help='Size the row grid for eight-of-128 expert routing; loop over overflow.')
     parser.add_argument('--min-tokens', type=int, default=0,
                         help='Keep the original specialized body below this token count.')
     parser.add_argument('--source', type=Path, default=Path('kernels/omni_expert_i4.loom'))

@@ -1,5 +1,9 @@
 # CLEF Omni
 
+Optimized attention and expert kernels are enabled by default in ordinary
+builds. No benchmark flags or local kernel files are required. See
+[performance results and configuration](omni-memory-tuning.md#default-configuration).
+
 CLEF Omni uses the Qwen3-Omni thinker: 48 text layers, 128 experts with eight
 selected per token, a vision encoder, an audio encoder, and Cloudflare's trained
 decision head. The runtime is native Rust/HRX. Python is used only to generate

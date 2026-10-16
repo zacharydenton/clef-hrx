@@ -1,0 +1,299 @@
+// Prefetch K64 BF16 values per row; consume ascending K16 matrix fragments.
+// SPDX-License-Identifier: MIT
+// BF16 fragments and publishing adapted from gemm_bf16_tiled.loom
+// (qwen-image-hrx / h3-hrx; see licenses/qwen-image-hrx-MIT.txt).
+// A wave handles 64 routed rows x 16 output channels.
+// Gather/scatter keeps activation packing and combine order unchanged.
+// Omni grouped BF16 experts. Shapes are compiler specializations.
+amdgpu.target<gfx11-generic> @clef_target {subgroup_size = 32}
+config.decl @clef.work : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.groups : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.out_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.x_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.w_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.routes_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.xs_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.xs_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ws_len : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.ws_dtype : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.tokens : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.topk : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.k : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.n : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.stride : %value: index where [range(%value, 0, 4294967295)]
+config.decl @clef.input_routed : %value: index where [range(%value, 0, 4294967295)]
+kernel.def target(@clef_target) export("clef_op") @clef_op() {
+ %one = index.constant 1 : index
+ %threads = index.constant 64 : index
+ %original_groups = config.get @clef.groups : index
+ %two = index.constant 4 : index
+ %groups = index.mul %original_groups, %two : index
+ kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%x_buffer: buffer, %w_buffer: buffer, %routes_buffer: buffer, %xs_buffer: buffer, %ws_buffer: buffer, %out_buffer: buffer) {
+ %c0 = index.constant 0 : index
+ %c1 = index.constant 1 : index
+ %c2 = index.constant 2 : index
+ %c4 = index.constant 4 : index
+ %c8 = index.constant 8 : index
+ %c16 = index.constant 16 : index
+ %c32 = index.constant 32 : index
+ %c48 = index.constant 48 : index
+ %c64 = index.constant 64 : index
+ %c128 = index.constant 128 : index
+ %c256 = index.constant 256 : index
+ %offset = index.constant 0 : offset
+ %x_len = config.get @clef.x_len : index
+ %x_dtype = config.get @clef.x_dtype : index
+ %w_len = config.get @clef.w_len : index
+ %w_dtype = config.get @clef.w_dtype : index
+ %routes_len = config.get @clef.routes_len : index
+ %routes_dtype = config.get @clef.routes_dtype : index
+ %xs_len = config.get @clef.xs_len : index
+ %xs_dtype = config.get @clef.xs_dtype : index
+ %ws_len = config.get @clef.ws_len : index
+ %ws_dtype = config.get @clef.ws_dtype : index
+ %out_len = config.get @clef.out_len : index
+ %out_dtype = config.get @clef.out_dtype : index
+ %tokens = config.get @clef.tokens : index
+ %topk = config.get @clef.topk : index
+ %k = config.get @clef.k : index
+ %n = config.get @clef.n : index
+ %stride = config.get @clef.stride : index
+ %input_routed = config.get @clef.input_routed : index
+ %wg = kernel.workgroup.id<x> : index
+ %subgroup = kernel.subgroup.id : index
+ %lane = kernel.subgroup.lane.id : index
+ %wgbase = index.mul %wg, %c2 : index
+ %wave = index.add %wgbase, %subgroup : index
+ %ntiles = index.div %n, %c16 : index
+ %expert = index.div %wave, %ntiles : index
+ %ntile = index.rem %wave, %ntiles : index
+ %nbase = index.mul %ntile, %c16 : index
+ %estride = index.add %tokens, %c1 : index
+ %ebase = index.mul %expert, %estride : index
+ %countf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %ebase) : (index, buffer, index, index) -> (f32)
+ %counti0 = scalar.fptosi %countf : f32 to i32
+ %counti = kernel.subgroup.broadcast.first %counti0 : i32
+ %count0 = index.cast %counti : i32 to index
+ %count = index.assume %count0 [range(%count0, 0, 2048)] : index
+ %lane16 = index.rem %lane, %c16 : index
+ %expertrow = index.mul %expert, %n : index
+ %wrowbase = index.add %expertrow, %nbase : index
+ %wrow = index.add %wrowbase, %lane16 : index
+ %routed = index.cmp ne, %input_routed, %c0 : index
+ %lds_bytes = index.constant 2048 : offset
+ %wave_bytes = index.constant 1024 : offset
+ %lds = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
+ %wave_offset = index.scale %subgroup, %wave_bytes : index, offset -> offset
+ %result = buffer.view %lds[%wave_offset] : buffer -> view<16x16xf32>
+ %x_global = buffer.assume.memory_space<global> %x_buffer : buffer
+ %xv = buffer.view %x_global[%offset] : buffer -> view<[%x_len]xbf16>
+ %w_global = buffer.assume.memory_space<global> %w_buffer : buffer
+ %wv = buffer.view %w_global[%offset] : buffer -> view<[%w_len]xbf16>
+ %init0 = vector.constant 0.0 : vector<8xf32>
+ %init = vector.fragment<init> %init0 shape [%c16, %c16] : vector<8xf32>
+ scf.for %mbase = [%c0 to %count step %c64] {
+  %mr = index.add %mbase, %lane16 : index
+  %ok = index.cmp ult, %mr, %count : index
+  %safe = scf.select %ok, %mr, %c0 : index
+  %slot0 = index.add %ebase, %safe : index
+  %slot = index.add %slot0, %c1 : index
+  %rf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %slot) : (index, buffer, index, index) -> (f32)
+  %ri = scalar.fptosi %rf : f32 to i32
+  %route0 = index.cast %ri : i32 to index
+  %route = index.assume %route0 [range(%route0, 0, 16383)] : index
+  %token = index.div %route, %topk : index
+  %xr = scf.select %routed, %route, %token : index
+  %xbase0 = index.mul %xr, %stride : index
+  %xbase = index.add %xbase0, %c0 : index
+  %mbase1 = index.add %mbase, %c16 : index
+  %s1mr = index.add %mbase1, %lane16 : index
+  %s1ok = index.cmp ult, %s1mr, %count : index
+  %s1safe = scf.select %s1ok, %s1mr, %c0 : index
+  %s1slot0 = index.add %ebase, %s1safe : index
+  %s1slot = index.add %s1slot0, %c1 : index
+  %s1rf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %s1slot) : (index, buffer, index, index) -> (f32)
+  %s1ri = scalar.fptosi %s1rf : f32 to i32
+  %s1route0 = index.cast %s1ri : i32 to index
+  %s1route = index.assume %s1route0 [range(%s1route0, 0, 16383)] : index
+  %s1token = index.div %s1route, %topk : index
+  %s1xr = scf.select %routed, %s1route, %s1token : index
+  %s1xbase0 = index.mul %s1xr, %stride : index
+  %s1xbase = index.add %s1xbase0, %c0 : index
+  %mbase2 = index.add %mbase, %c32 : index
+  %s2mr = index.add %mbase2, %lane16 : index
+  %s2ok = index.cmp ult, %s2mr, %count : index
+  %s2safe = scf.select %s2ok, %s2mr, %c0 : index
+  %s2slot0 = index.add %ebase, %s2safe : index
+  %s2slot = index.add %s2slot0, %c1 : index
+  %s2rf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %s2slot) : (index, buffer, index, index) -> (f32)
+  %s2ri = scalar.fptosi %s2rf : f32 to i32
+  %s2route0 = index.cast %s2ri : i32 to index
+  %s2route = index.assume %s2route0 [range(%s2route0, 0, 16383)] : index
+  %s2token = index.div %s2route, %topk : index
+  %s2xr = scf.select %routed, %s2route, %s2token : index
+  %s2xbase0 = index.mul %s2xr, %stride : index
+  %s2xbase = index.add %s2xbase0, %c0 : index
+  %mbase3 = index.add %mbase, %c48 : index
+  %s3mr = index.add %mbase3, %lane16 : index
+  %s3ok = index.cmp ult, %s3mr, %count : index
+  %s3safe = scf.select %s3ok, %s3mr, %c0 : index
+  %s3slot0 = index.add %ebase, %s3safe : index
+  %s3slot = index.add %s3slot0, %c1 : index
+  %s3rf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %s3slot) : (index, buffer, index, index) -> (f32)
+  %s3ri = scalar.fptosi %s3rf : f32 to i32
+  %s3route0 = index.cast %s3ri : i32 to index
+  %s3route = index.assume %s3route0 [range(%s3route0, 0, 16383)] : index
+  %s3token = index.div %s3route, %topk : index
+  %s3xr = scf.select %routed, %s3route, %s3token : index
+  %s3xbase0 = index.mul %s3xr, %stride : index
+  %s3xbase = index.add %s3xbase0, %c0 : index
+  %acc0, %acc1, %acc2, %acc3 = scf.for %kk = [%c0 to %k step %c64](%a0 = %init : vector<8xf32>, %a1 = %init : vector<8xf32>, %a2 = %init : vector<8xf32>, %a3 = %init : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+   %xk = index.add %kk, %c0 : index
+   %blocks = index.div %k, %c64 : index
+   %blockk = index.div %kk, %c64 : index
+   %kw = index.rem %kk, %c64 : index
+   %xa0 = index.add %xbase, %xk : index
+   %xlimit = index.constant 64 : index
+   %xmax = index.sub %x_len, %xlimit : index
+   %xa = index.assume %xa0 [range(%xa0, 0, 4294967294), le(%xa0, %xmax), multiple_of(%xa0, 64)] : index
+   %aa = vector.load %xv[%xa] : view<[%x_len]xbf16> -> vector<64xbf16>
+   %s1xa0 = index.add %s1xbase, %xk : index
+   %s1xlimit = index.constant 64 : index
+   %s1xmax = index.sub %x_len, %s1xlimit : index
+   %s1xa = index.assume %s1xa0 [range(%s1xa0, 0, 4294967294), le(%s1xa0, %s1xmax), multiple_of(%s1xa0, 64)] : index
+   %s1aa = vector.load %xv[%s1xa] : view<[%x_len]xbf16> -> vector<64xbf16>
+   %s2xa0 = index.add %s2xbase, %xk : index
+   %s2xlimit = index.constant 64 : index
+   %s2xmax = index.sub %x_len, %s2xlimit : index
+   %s2xa = index.assume %s2xa0 [range(%s2xa0, 0, 4294967294), le(%s2xa0, %s2xmax), multiple_of(%s2xa0, 64)] : index
+   %s2aa = vector.load %xv[%s2xa] : view<[%x_len]xbf16> -> vector<64xbf16>
+   %s3xa0 = index.add %s3xbase, %xk : index
+   %s3xlimit = index.constant 64 : index
+   %s3xmax = index.sub %x_len, %s3xlimit : index
+   %s3xa = index.assume %s3xa0 [range(%s3xa0, 0, 4294967294), le(%s3xa0, %s3xmax), multiple_of(%s3xa0, 64)] : index
+   %s3aa = vector.load %xv[%s3xa] : view<[%x_len]xbf16> -> vector<64xbf16>
+   %nc0 = index.constant 0 : index
+   %wr0 = index.add %wrow, %nc0 : index
+   %wn0 = index.div %wr0, %c256 : index
+   %wb00 = index.mul %wn0, %blocks : index
+   %wb10 = index.add %wb00, %blockk : index
+   %wb20 = index.mul %wb10, %c256 : index
+   %wl0 = index.rem %wr0, %c256 : index
+   %wb30 = index.add %wb20, %wl0 : index
+   %wb40 = index.mul %wb30, %c64 : index
+   %wa00 = index.add %wb40, %kw : index
+   %wmax0 = index.sub %w_len, %xlimit : index
+   %wa0 = index.assume %wa00 [range(%wa00, 0, 4294967294), le(%wa00, %wmax0), multiple_of(%wa00, 64)] : index
+   %bb0 = vector.load %wv[%wa0] : view<[%w_len]xbf16> -> vector<64xbf16>
+   %l0_p0_v = vector.slice %aa[0] : vector<64xbf16> -> vector<16xbf16>
+   %l0_p0 = vector.fragment<lhs> %l0_p0_v shape [%c16, %c16] : vector<16xbf16>
+   %l1_p0_v = vector.slice %s1aa[0] : vector<64xbf16> -> vector<16xbf16>
+   %l1_p0 = vector.fragment<lhs> %l1_p0_v shape [%c16, %c16] : vector<16xbf16>
+   %l2_p0_v = vector.slice %s2aa[0] : vector<64xbf16> -> vector<16xbf16>
+   %l2_p0 = vector.fragment<lhs> %l2_p0_v shape [%c16, %c16] : vector<16xbf16>
+   %l3_p0_v = vector.slice %s3aa[0] : vector<64xbf16> -> vector<16xbf16>
+   %l3_p0 = vector.fragment<lhs> %l3_p0_v shape [%c16, %c16] : vector<16xbf16>
+   %r0_p0_v = vector.slice %bb0[0] : vector<64xbf16> -> vector<16xbf16>
+   %r0_p0 = vector.fragment<rhs> %r0_p0_v shape [%c16, %c16] : vector<16xbf16>
+   %v0_p0 = vector.mma %l0_p0, %r0_p0, %a0 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v1_p0 = vector.mma %l1_p0, %r0_p0, %a1 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v2_p0 = vector.mma %l2_p0, %r0_p0, %a2 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v3_p0 = vector.mma %l3_p0, %r0_p0, %a3 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %l0_p1_v = vector.slice %aa[16] : vector<64xbf16> -> vector<16xbf16>
+   %l0_p1 = vector.fragment<lhs> %l0_p1_v shape [%c16, %c16] : vector<16xbf16>
+   %l1_p1_v = vector.slice %s1aa[16] : vector<64xbf16> -> vector<16xbf16>
+   %l1_p1 = vector.fragment<lhs> %l1_p1_v shape [%c16, %c16] : vector<16xbf16>
+   %l2_p1_v = vector.slice %s2aa[16] : vector<64xbf16> -> vector<16xbf16>
+   %l2_p1 = vector.fragment<lhs> %l2_p1_v shape [%c16, %c16] : vector<16xbf16>
+   %l3_p1_v = vector.slice %s3aa[16] : vector<64xbf16> -> vector<16xbf16>
+   %l3_p1 = vector.fragment<lhs> %l3_p1_v shape [%c16, %c16] : vector<16xbf16>
+   %r0_p1_v = vector.slice %bb0[16] : vector<64xbf16> -> vector<16xbf16>
+   %r0_p1 = vector.fragment<rhs> %r0_p1_v shape [%c16, %c16] : vector<16xbf16>
+   %v0_p1 = vector.mma %l0_p1, %r0_p1, %v0_p0 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v1_p1 = vector.mma %l1_p1, %r0_p1, %v1_p0 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v2_p1 = vector.mma %l2_p1, %r0_p1, %v2_p0 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v3_p1 = vector.mma %l3_p1, %r0_p1, %v3_p0 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %l0_p2_v = vector.slice %aa[32] : vector<64xbf16> -> vector<16xbf16>
+   %l0_p2 = vector.fragment<lhs> %l0_p2_v shape [%c16, %c16] : vector<16xbf16>
+   %l1_p2_v = vector.slice %s1aa[32] : vector<64xbf16> -> vector<16xbf16>
+   %l1_p2 = vector.fragment<lhs> %l1_p2_v shape [%c16, %c16] : vector<16xbf16>
+   %l2_p2_v = vector.slice %s2aa[32] : vector<64xbf16> -> vector<16xbf16>
+   %l2_p2 = vector.fragment<lhs> %l2_p2_v shape [%c16, %c16] : vector<16xbf16>
+   %l3_p2_v = vector.slice %s3aa[32] : vector<64xbf16> -> vector<16xbf16>
+   %l3_p2 = vector.fragment<lhs> %l3_p2_v shape [%c16, %c16] : vector<16xbf16>
+   %r0_p2_v = vector.slice %bb0[32] : vector<64xbf16> -> vector<16xbf16>
+   %r0_p2 = vector.fragment<rhs> %r0_p2_v shape [%c16, %c16] : vector<16xbf16>
+   %v0_p2 = vector.mma %l0_p2, %r0_p2, %v0_p1 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v1_p2 = vector.mma %l1_p2, %r0_p2, %v1_p1 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v2_p2 = vector.mma %l2_p2, %r0_p2, %v2_p1 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %v3_p2 = vector.mma %l3_p2, %r0_p2, %v3_p1 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %l0_p3_v = vector.slice %aa[48] : vector<64xbf16> -> vector<16xbf16>
+   %l0_p3 = vector.fragment<lhs> %l0_p3_v shape [%c16, %c16] : vector<16xbf16>
+   %l1_p3_v = vector.slice %s1aa[48] : vector<64xbf16> -> vector<16xbf16>
+   %l1_p3 = vector.fragment<lhs> %l1_p3_v shape [%c16, %c16] : vector<16xbf16>
+   %l2_p3_v = vector.slice %s2aa[48] : vector<64xbf16> -> vector<16xbf16>
+   %l2_p3 = vector.fragment<lhs> %l2_p3_v shape [%c16, %c16] : vector<16xbf16>
+   %l3_p3_v = vector.slice %s3aa[48] : vector<64xbf16> -> vector<16xbf16>
+   %l3_p3 = vector.fragment<lhs> %l3_p3_v shape [%c16, %c16] : vector<16xbf16>
+   %r0_p3_v = vector.slice %bb0[48] : vector<64xbf16> -> vector<16xbf16>
+   %r0_p3 = vector.fragment<rhs> %r0_p3_v shape [%c16, %c16] : vector<16xbf16>
+   %next0 = vector.mma %l0_p3, %r0_p3, %v0_p2 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %next1 = vector.mma %l1_p3, %r0_p3, %v1_p2 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %next2 = vector.mma %l2_p3, %r0_p3, %v2_p2 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   %next3 = vector.mma %l3_p3, %r0_p3, %v3_p2 : vector<16xbf16>, vector<16xbf16>, vector<8xf32>
+   scf.yield %next0, %next1, %next2, %next3 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
+  %pr0 = index.div %lane, %c4 : index
+  %pc0 = index.rem %lane, %c4 : index
+  %pc = index.mul %pc0, %c4 : index
+  scf.for %j = [%c0 to %c4 step %c1] unroll {
+   %is1 = index.cmp eq, %j, %c1 : index
+   %is2 = index.cmp eq, %j, %c2 : index
+   %c3 = index.constant 3 : index
+   %is3 = index.cmp eq, %j, %c3 : index
+   %pick1 = scf.select %is1, %acc1, %acc0 : vector<8xf32>
+   %pick2 = scf.select %is2, %acc2, %pick1 : vector<8xf32>
+   %pick3 = scf.select %is3, %acc3, %pick2 : vector<8xf32>
+   vector.fragment.store<result> %pick3, %result[%c0, %c0] shape [%c16, %c16] : vector<8xf32>, view<16x16xf32>
+   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+   %nj = index.rem %j, %c1 : index
+   %mj = index.div %j, %c1 : index
+   %mc = index.mul %mj, %c16 : index
+   %outmbase = index.add %mbase, %mc : index
+   %nc = index.mul %nj, %c16 : index
+   %oc0 = index.add %nbase, %nc : index
+   %oc = index.add %oc0, %pc : index
+   scf.for %half = [%c0 to %c2 step %c1] unroll {
+    %pr1 = index.mul %half, %c8 : index
+    %pr = index.add %pr0, %pr1 : index
+    %mrout = index.add %outmbase, %pr : index
+    %writes = index.cmp ult, %mrout, %count : index
+    scf.if %writes {
+     %oslot0 = index.add %ebase, %mrout : index
+     %oslot = index.add %oslot0, %c1 : index
+     %orf = template.apply<@clef.load>(%routes_dtype, %routes_buffer, %routes_len, %oslot) : (index, buffer, index, index) -> (f32)
+     %ori = scalar.fptosi %orf : f32 to i32
+     %oroute0 = index.cast %ori : i32 to index
+     %oroute = index.assume %oroute0 [range(%oroute0, 0, 16383)] : index
+     %vals = vector.load %result[%pr, %pc] : view<16x16xf32> -> vector<4xf32>
+     %zero = vector.constant 0.0 : vector<4xf32>
+     %scaled = vector.addf %vals, %zero : vector<4xf32>
+     %narrow = vector.fptrunc %scaled : vector<4xf32> to vector<4xbf16>
+     %ob = index.mul %oroute, %n : index
+     %oa0 = index.add %ob, %oc : index
+     %omax = index.sub %out_len, %c4 : index
+     %oa = index.assume %oa0 [range(%oa0, 0, 4294967294), le(%oa0, %omax), multiple_of(%oa0, 4)] : index
+     %ov = buffer.view %out_buffer[%offset] : buffer -> view<[%out_len]xbf16>
+     vector.store %narrow, %ov[%oa] : vector<4xbf16>, view<[%out_len]xbf16>
+    }
+   }
+   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+  }
+ }
+ kernel.return
+}

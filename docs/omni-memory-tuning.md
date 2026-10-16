@@ -10,6 +10,36 @@ readback, excluding model loading. Warm diagnostic measurements below exclude
 the first request for each configuration and are not full-suite qualification.
 All measurements used the shared Radeon 8060S (gfx1151).
 
+## Default configuration
+
+The established fast configuration is enabled in ordinary builds for Omni.
+No `bench-internals` feature, environment variables or external kernel files
+are needed. It uses 2,048-token expert chunks, 128-token padding, transposed
+BF16 attention, ordered expert accumulation and shared gate/up input packing
+with the existing BF16-rounded SwiGLU operation. BF16 selects M64 experts at
+128 tokens; INT4 selects the K128/M32 down-projection kernel at 512 tokens.
+Smaller chunks retain the original expert kernels. BF16 remains the default
+precision; `--precision int4` remains optional.
+
+The embedded sources match the accepted evaluation files byte-for-byte. An ordinary
+release executable, with all `CLEF_*` environment variables removed, reproduced
+the saved raw outputs exactly for requests of 232 and 2,601 tokens in both BF16
+and INT4. The source-identity and threshold tests, 27 ordinary-build CPU tests,
+and stable/Rust 1.91 Clippy checks pass. This bounded smoke check did not restart
+the paused evaluation. Full
+JevBench was completed in BF16 and INT4; full INT4 WorkflowEvals completed all
+705 cases. Full BF16 WorkflowEvals remains unmeasured. The user accepted this
+coverage for default selection. The newer gate/up projection fusion,
+normalization/RoPE fusion and quantized attention experiments remain optional.
+The performance goal is separate from this default promotion and remains paused.
+
+The following sections preserve the experiment history. Statements describing
+these accepted kernels as opt-in or awaiting promotion refer to that earlier
+stage. Benchmark builds with explicit `CLEF_BENCH_OMNI_*` settings or an explicit
+attention source retain the previous configuration behavior; the benchmark
+configuration setter also selects an explicit configuration. This keeps saved
+reference/candidate experiments reproducible.
+
 ## Changes
 
 The default expert kernels now load 128 bytes of each operand row at once and
@@ -1078,6 +1108,127 @@ cache and a 28 GiB engine cap for long inputs. This queue stops on any failed jo
 or changed preliminary raw prediction; it does not retry automatically. Full
 suite performance and accuracy remain pending until those runs complete.
 
+The queue was paused by the user and resumed on October 16. Completed BF16
+multimodal results were retained: all 32 raw outputs match the prior comparison.
+The resumed INT4 comparison also completed, preserving all 64 raw outputs.
+With an unrelated GPU client present and about 69 GiB available before loading,
+the full INT4 suite runs first. BF16 waits for its unchanged 102 GiB admission
+requirement. `full-workflows-qualification-paused-20261016.json` preserves the
+pause record; `full-workflows-qualification-status.json` tracks the resumed
+queue. No finished suite cases were discarded or rerun.
+
+A metadata-only memory audit confirms **58.1248 GiB of resident BF16 weights**:
+54 GiB of experts, 1.7113 GiB of other text weights, 1.2069 GiB of audio,
+1.0033 GiB of vision and 0.2034 GiB of decision-head weights. This excludes
+host-backed vocabulary tables and runtime workspace. The component sum matches
+the frozen CLI's `inspect` result exactly. Deferring media weights would save
+only 2.2101 GiB and does not resolve the shared-system RAM shortage. The 70 GiB
+engine cap, 102 GiB admission requirement and 24 GiB live reserve remain
+unchanged. `bf16-resident-memory-audit.json` records metadata hashes and the
+inspection command; it loads no GPU weights.
+
+The resumed K128 INT4 run completed all 204 customer-service cases at
+**3,236.4 resident input tok/s**, scoring **422/612 consensus decisions
+(68.95%)**. All 508 raw calls and every label-set metric match
+`workflows-customer-transposed` exactly. The resident portion contains 507 calls
+and 595,675 tokens over 184.05 seconds; GPU execution takes 160.88 seconds and
+preparation 21.69 seconds. Peak engine allocation is 17.60 GiB. This shared-GPU
+result qualifies the customer workflow only; the other three workflows and
+full BF16 suite remain pending. The per-workflow record is
+`workflow-resume-customer-complete.json`.
+
+Agent trace then completed all 111 cases at **3,333.1 resident input tok/s**,
+with **140/222 consensus decisions correct (63.06%)**. All 372 raw calls and
+every label-set metric match `workflows-transposed-remaining` exactly. All
+372 calls are resident here because the model was already loaded for customer
+service: 792,915 tokens over 237.89 seconds, including 25.42 seconds of
+preparation and 210.59 seconds of GPU execution. Peak engine allocation is
+18.09 GiB. `workflow-resume-agent-complete.json` records this shared-GPU result.
+Security and invoice qualification remain pending.
+
+Security incidents subsequently completed all 240 cases at **3,430.9 resident
+input tok/s**, with **136/240 consensus decisions correct (56.67%)**. All 270
+raw calls and every label-set metric match `workflows-transposed-remaining`
+exactly. Its 702,900 tokens take 204.87 seconds, including 15.07 seconds of
+preparation and 188.25 seconds of GPU execution; peak engine allocation is
+18.09 GiB. The shared GPU prevents attributing timing differences to K128
+alone. `workflow-resume-security-complete.json` records this result.
+
+The guard stopped the resumed run after 42 of 150 invoices when additional
+system swap reached 1.004 GiB, above the unchanged 1 GiB limit. Available RAM
+at the stop was 38.61 GiB; this was not an engine allocation failure or a
+numerical mismatch. All 42 saved invoice outputs match the previous reference
+exactly. Their 1,341,053 input tokens took 966.98 resident seconds, or
+1,386.9 tok/s, with a 25.28 GiB peak engine allocation and inputs up to 52,077
+tokens. That interruption left 597 of 705 cases saved.
+
+After available RAM recovered above the unchanged 60 GiB admission requirement,
+an explicit second resume started the 108 remaining invoices. All 19 frozen
+runtime/source hashes matched, and the runner accepted the unchanged manifest.
+It reuses the saved cases, retains the 28 GiB engine budget and both live memory
+guards, and has no automatic retry. `workflow-invoice-resume2-status.json` and
+`workflows-int4-full-qualification-resume2-guard/status.json` record this attempt.
+At that stage, the full-suite result was incomplete; the completed audit below
+supersedes that status. Shared-GPU timing cannot establish an isolated speedup.
+`workflow-resume-invoice-partial.json` and the guard report preserve the stop;
+the controller did not retry. Full BF16 WorkflowEvals has not started.
+
+The second resume saved 139/150 invoices before the same unchanged guard
+stopped it at 1.0029 GiB of additional system swap, with 38.59 GiB available.
+The model and evaluation runner exited. This leaves **694/705 cases saved**
+and 11 invoices remaining. No saved case has an execution failure, and all 78
+historical invoice references still match raw outputs and input lengths exactly.
+There are 140 logged native calls for 139 cases because invoice `ap_00174`
+requires two capacity-split requests. The completed audit below matches every
+call to its checkpoint; no orphan or duplicate request is present. The 97 resident calls in this resume processed 2,832,764 tokens
+in 3,659.70 seconds (**774.0 tok/s**, shared GPU). These are partial timings,
+not full-suite qualification. `workflow-invoice-resume2-stop-summary.json`
+preserves the guard, checkpoint and parity audit; no automatic model retry was
+started. Smaller guarded operator checks proceeded after the model exited.
+
+After those operator checks and the nonzero INT4 timing diagnostics finished,
+the remaining-invoice resume initially failed its preflight when available RAM
+dipped below 60 GiB; no model or guard was launched by that rejected preflight.
+RAM then recovered above 62 GiB. A reviewed third resume passed the unchanged
+guard, verified all 19 frozen hashes and reused all 694 saved cases. Its 11
+remaining invoices are tracked by `workflow-invoice-resume3-status.json` and
+`workflows-int4-full-qualification-resume3-guard`. This is one guarded attempt,
+with no automatic retry or change to the model configuration.
+
+### Completed INT4 WorkflowEvals (October 16)
+
+The third resume completed successfully: **705/705 cases, zero execution
+failures**, using the same frozen binary, kernels, model and 28 GiB budget.
+All 151 invoice requests match saved calls one-for-one; `ap_00174` requires two
+capacity-split calls. The earlier interpretation of the extra call as an
+unfinished checkpoint was incorrect. No request is duplicated or discarded.
+
+| Workflow | Cases | Consensus score | Resident input tok/s |
+|---|---:|---|---:|
+| Customer service | 204 | 422/612 exact actions (68.95%) | 3,236.4 |
+| Agent traces | 111 | 140/222 primary action (63.06%) | 3,333.1 |
+| Security incidents | 240 | 136/240 exact actions (56.67%) | 3,430.9 |
+| Invoices | 150 | 258/450 exact actions (57.33%); 357/450 primary action (79.33%) | 918.1 |
+
+Across all workflows, 6,556,170 resident input tokens took 5,489.91 seconds:
+**1,194.2 input tok/s**, excluding each CLI process's loading request. This is a
+resumed, sequential run with GPU contention, not an isolated hardware ceiling.
+It does not meet the 4,000 INT4 tok/s target. The long invoice workload accounts
+for 88.6% of resident time. Full BF16 WorkflowEvals remains unmeasured.
+
+All 1,228 calls with historical references match raw question outputs and input
+lengths exactly. The other 73 invoice calls have no historical reference, so
+this establishes a complete score and future reference, not full-suite
+regression parity against an earlier complete run.
+
+`full-workflows-20261016-audit.json` records scores, throughput, source hashes,
+reference coverage and the request-to-checkpoint audit. Reproduce the audit
+without rerunning the model with:
+
+```sh
+python3 artifacts/omni-memory-opt/audit-full-workflows-20261016.py
+```
+
 ## Workgroup scheduling candidate
 
 `scripts/omni_expert_workgroup_candidate.py OUTPUT --source SOURCE --waves N`
@@ -1085,6 +1236,558 @@ regroups the existing independent INT4 expert waves into workgroups of one,
 four or eight waves. Two waves reproduce the input source unchanged. Global
 wave IDs, private LDS slices and arithmetic stay the same; a final partial
 workgroup masks excess waves before tensor access. All six K128 up/down
-specializations compile successfully. GPU correctness and timing have not yet
-run; these sources are experimental and do not affect defaults or the queued
-suite configurations.
+specializations compile successfully. All three candidates subsequently pass
+28 exact GPU cases each, covering seven lengths from 1 through 2,048 tokens,
+both projections, balanced/concentrated routes and changed-input replay.
+One-wave scheduling stays near parity on balanced routes at 512–2,048 tokens.
+Four/eight-wave scheduling regresses balanced down projections to 0.75×/0.69×
+at 512 tokens and 0.79×/0.74× at 1,024. Keep the two-wave kernel.
+`expert-workgroup-summary.json` records all 84 paired comparisons. The printed
+aggregates include Criterion warmup and are shared-GPU operator diagnostics.
+
+The row-loop generator's `--balanced-grid` option sizes the initial row grid
+for eight-of-128 routing: `ceil(full_row_tiles / 16)` waves per expert/channel
+tile. Overflow stays in the existing strided loop, so skewed routes retain
+coverage without a task list or CPU readback. At 1,024 tokens it launches four
+up/gate row waves and two down row waves, rather than 64 and 32 respectively.
+The candidate compiles with 224/192 VGPRs for up/down and no spills. All 28 GPU
+cases pass exactly. The unconditional version is rejected: concentrated
+128/256-token up projections fall to 0.59×/0.45×, and 512-token down falls to
+0.67×. At 1,024–2,048 tokens, several samples improve substantially, but reference
+timings also vary. `expert-row-loop-balanced-summary.json` records the full
+matrix. A separate `--balanced-grid --min-tokens 1024` candidate retains the
+original kernel below the threshold. It passes all 28 exact checks. A second
+paired run at 1,024/2,048 tokens improves all eight operator comparisons by
+1.04–1.59×, including concentrated routes. These remain shared-GPU diagnostics.
+Another 24 exact checks pass at 1,023/1,025, 1,535/1,536/1,537 and 2,047 tokens,
+covering threshold and partial-tile boundaries in both projections and routing
+distributions. Combined with Q/K normalization/RoPE fusion, full JevBench
+matches all 231 saved INT4 outputs exactly (187 correct). Its shared-GPU rate
+is 1,476.0 input tok/s; even the unchanged short-request paths slowed compared
+with the preceding fusion-only run. No end-to-end gain is established, so the
+schedule remains experimental. All 64 multimodal diagnostic samples also match
+their saved same-variant outputs exactly: eight requests, four variants and
+two replays each. `media-balanced-norm-summary.json` records that comparison.
+Full WorkflowEvals qualification remains pending.
+`jev-balanced-norm-summary.json` records that full-suite result.
+`expert-row-loop-balanced-min1024-summary.json` records those samples. This is
+separate from changing waves per workgroup.
+
+## Fused Q/K normalization and RoPE candidate
+
+`benches/kernels/omni_norm_rope.loom` combines the existing Omni RMS normalization
+and rotary embedding operations for 128-wide query/key heads. It preserves the
+four-term lane reduction, subgroup reduction and BF16 rounding after
+normalization, weight multiplication, each rotary product and the final sum.
+The candidate keeps four values per lane in registers and removes the
+materialized normalized tensor. This would eliminate two dispatches per layer
+when applied to both Q and K. Model testing can select it with
+`CLEF_BENCH_OMNI_FUSED_NORM_ROPE=1` in a `bench-internals` build. It is off by
+default; full-model qualification is in progress.
+
+The first 32-head specialization compiles with 20 VGPRs, 16 SGPRs and no spills.
+The Criterion harness compares against the existing separate operators, using
+three changed-input/weight/position patterns, zero rows, signed zeros, outliers
+and repeated graph execution. All 14 shapes pass bit-exact GPU comparisons:
+four and 32 heads at 1, 17, 128, 512, 4,096, 16,384 and 65,536 tokens, with
+three changed-input patterns and two replays per pattern. Paired operator
+speedups range from 1.26× to 2.17× in the shared-GPU run. At 4K–64K, K improves
+1.82–1.94× and Q improves 2.15–2.17×. The printed paired aggregates include
+Criterion warmup; these are operator diagnostics, not full-model speedups.
+`norm-rope-operator-summary.json` records the samples. To build:
+
+```sh
+cargo +stable bench --locked --features bench-internals --bench omni_norm_rope --no-run
+```
+
+Run the printed executable under the memory guard with a 4 GiB budget and
+`--test` for exact checks or `--bench` for alternating paired timings. Set
+`CLEF_BENCH_OMNI_TOKENS=1,17,128,512,4096,16384,65536` to include the full
+context range. Both four-head K and 32-head Q shapes are covered. These operator
+tests must pass before testing the candidate in JevBench or WorkflowEvals.
+
+The integrated operator passes the same 14 shape checks. A subsequent resident
+INT4 comparison on the 36,883-token invoice keeps attention, experts and other
+settings fixed and alternates only this fusion. Both warmups and all six timed
+predictions are exact; the reference also matches the previously saved build.
+Across three pairs, aggregate throughput is 1,353.3 versus 1,476.2 input tok/s
+(1.091×). Individual pair ratios are 1.079×, 1.224× and 0.979×. The last pair
+regresses, so the shared-GPU result is tentative and does not qualify a
+full-suite speedup. Both variants peak at 20.12 GiB. Raw samples and commands
+are in `norm-rope-invoice.json` and `norm-rope-invoice-launch.json`.
+`compare_attention_inference --candidate-fused-norm-rope` reproduces the
+comparison; supply the same selected attention source for `--reference` and
+`--candidate` to isolate fusion.
+
+The subsequent full INT4 JevBench run matches all 231 saved outputs and input
+lengths exactly: 187 correct (80.95%), with unchanged Brier score 0.250889.
+Resident throughput is 1,946.1 input tok/s under GPU contention. After our jobs
+finished, the unrelated GPU client alone produced 70–82% utilization. This run
+does not establish a speedup or regression against the historical 3,031.4 tok/s
+measurement. `jev-norm-rope-summary.json` records the comparison and launch
+command. The combined fusion/scheduling candidate subsequently passes the
+64-sample INT4 multimodal comparison described above. WorkflowEvals and BF16
+qualification of fusion remain pending.
+
+## Attention loader assignment candidate
+
+The HRX bank-service report identifies four exact LDS store packets requiring
+16 extra structural service rounds in the selected 128-query/32-key layout.
+Its 64 modeled load packets have no extra rounds. The previously rejected
+swizzled layout introduces 32 extra load rounds at four proven sites, with
+60 further sites unknown. These are static structural counts, not GPU cycle
+measurements.
+
+`scripts/omni_attention_loader_candidate.py SOURCE OUTPUT --operand k|v|both`
+changes which threads load each 16-element K/V packet. Adjacent threads visit
+rows instead of columns, retaining the original LDS layout, fragment reads,
+barriers and attention arithmetic. Global reads and their matching shared-memory
+writes use the same new coordinates. This trades global-read coalescing against
+shared-memory store conflicts.
+
+All three 128-query/32-key candidates compile with the original 184 VGPRs and
+no spills. Changing K or V alone reduces the modeled extra store rounds from
+16 to eight; changing both reduces them to zero. All 64 modeled load packets
+remain conflict-free. The subsequent GPU measurements below do not justify
+changing model configuration or defaults. Raw compiler reports are
+`attention-loader-compile-summary.json` and `resource-guidance-review-20261016.json`.
+
+The `--mapping cacheline` alternative pairs adjacent 32-byte column reads and
+swaps row bits 1 and 2. This preserves contiguous 64-byte read pairs while
+distributing each eight-lane LDS store phase across all 32 banks. CPU checks
+interpret the emitted index arithmetic for both 32- and 64-key tiles: every
+packet is covered exactly once, all addresses are inside the tile, read pairs
+are adjacent, and store phases have no repeated banks.
+
+For 128 queries and 32 keys, the combined K/V variant compiles with 192 VGPRs,
+no spills and the same modeled 50% occupancy. All 68 modeled load/store packets
+are conflict-free. V-only retains 184 VGPRs; K-only grows to 200 and drops to
+43.75% modeled occupancy. These are compiler results, not measured speedups. See
+`attention-loader-cacheline-compile-summary.json`. Reproduce the address checks
+with `python3 -m unittest discover -s scripts -p test_omni_attention_loader_candidate.py -v`.
+
+All six variants subsequently pass 51 GPU checks each: three fixtures and 17
+lengths from 1 through 65,536, with zero absolute output error and unchanged
+outputs after graph replay. Seven-pair timings against the selected transposed
+kernel do not establish a useful long-context gain:
+
+| Loader mapping | 1K | 8K | 32K | 64K |
+| --- | ---: | ---: | ---: | ---: |
+| Row-first K | 1.098× | 0.995× | 1.000× | 1.002× |
+| Row-first V | 0.995× | 1.001× | 1.028× | 1.006× |
+| Row-first K/V | 1.041× | 0.995× | 0.968× | 1.005× |
+| Cacheline-paired K | 0.977× | 0.964× | 0.943× | 0.949× |
+| Cacheline-paired V | 1.033× | 0.996× | 1.017× | 1.005× |
+| Cacheline-paired K/V | 0.995× | 0.946× | 0.941× | 0.960× |
+
+These shared-GPU measurements show that removing the modeled store conflicts
+is insufficient. Keep the selected kernel; none of these candidates proceeds
+to a model speedup claim. `attention-loader-results.json` contains all 330
+checks/timing comparisons and commands; `attention-loader-summary.json` is the
+compact report. The 4 GiB memory guard completed normally.
+
+## Hadamard rotation before INT8 attention packing
+
+`benches/kernels/omni_prepare_attention_i8_hadamard.loom` applies H3's ordered
+FP32 H128 transform before per-head quantization. It keeps the existing 36-word
+packed layout and folds `1/sqrt(128)` into each stored scale, preserving dot
+product magnitude. It does not subtract a mean. The 32-head specialization
+compiles with 16 VGPRs, eight SGPRs and no spills. The candidate is rejected for
+promotion: rotation alone worsens the numerical screening results below. It
+remains an operator experiment and does not change model defaults.
+
+The independent CPU packing oracle covers sliced inputs, one/four/32 heads,
+zero rows, outliers and changed-input graph replay. The attention probe accepts
+`--packing-source` only with `--prepacked-qk`; both Q/K preparation passes run
+inside every timed graph. The reference retains its own packing source.
+Criterion uses `CLEF_BENCH_OMNI_ATTENTION_PACKING_SOURCE` for the same explicit
+candidate selection. For a bounded reproduction:
+
+```sh
+python3 scripts/omni_attention_int8_candidate.py /tmp/omni-i8-h128-attention.loom --prepacked --queries 128 --keys 32
+cargo +stable build --locked --release --features bench-internals --example probe_attention
+python3 scripts/memory_guard.py --output artifacts/hadamard-probe-guard --memory-gib 4 -- \
+  target/release/examples/probe_attention --model clef-omni --tokens 17 \
+  --fixture hashed --rounds 7 --max-error 0.02 --prepacked-qk \
+  --packing-source benches/kernels/omni_prepare_attention_i8_hadamard.loom \
+  --reference-source benches/kernels/omni_attention_transposed.loom \
+  /tmp/omni-i8-h128-attention.loom
+```
+
+Use a fresh guard output directory for each invocation. The numerical check runs
+before timings; a failed check cannot support a performance claim. The hashed
+reproduction above is expected to fail the current 0.02 limit.
+
+Both rotated and plain packing pass their independent CPU/GPU oracles: nine
+row/head shapes, three changed inputs and two graph executions per input.
+One-token attention is exact for both nonzero fixtures, but at 17 tokens the
+maximum absolute error is 0.056640625 for the patterned fixture and 0.0390625
+for the hashed fixture. The previous plain INT8 hashed result was 0.024658203.
+All 17 zero-query checks through 65,536 tokens remain exact. The failure is
+therefore quantization accuracy rather than an incorrect transform, missing
+normalization or persistent-state error. No model evaluation was run for this
+candidate, and these operator differences do not establish a model-accuracy
+regression. `hadamard-qualification-summary.json` records all 23 checks; the raw
+report preserves commands and output. Keep BF16 attention selected.
+
+## Key centering and model-derived attention inputs
+
+A CPU screen checks mean/midrange key centering, with and without rotation, on
+six synthetic fixtures. It verifies the unquantized softmax invariance before
+measuring quantization error. Neither centering strategy consistently resolves
+the synthetic failures. `key-centering-cpu-screen.json` records 108 comparisons.
+These use FP64 softmax/PV and do not reproduce the GPU's online BF16 rounding.
+
+Three additional inputs reconstruct BF16 layer 0 from the pinned Omni weights
+and native JevBench token IDs. The first two retain all 232/244 tokens; the third
+uses the first 512 of 2,601 tokens solely as an operator fixture. Only embedding
+rows and first-layer projections/norms are loaded on CPU. These are neither
+native runtime captures nor full model/eval results. Their Q/K outliers are much
+larger than the synthetic fixtures, and centering is more useful:
+
+| CPU first-layer tokens | Plain INT8 max error | Key mean | Rotation | Key mean + rotation |
+| --- | ---: | ---: | ---: | ---: |
+| 232 | 0.010099 | 0.002067 | 0.002157 | 0.001030 |
+| 244 | 0.012949 | 0.001889 | 0.002157 | 0.001067 |
+| 512 | 0.009024 | 0.002132 | 0.002157 | 0.001154 |
+
+This supports testing the combined transform; it does not qualify model accuracy
+or override the failed synthetic screening. `key-centering-layer0-cpu-screen.json`
+records input/weight hashes and all 18 comparisons. The unquantized transformed
+attention differs by less than 2e-8 in these CPU probes.
+
+`benches/kernels/omni_key_mean.loom` computes 256-row FP32 partial sums, then
+reduces and divides them by the original token count. The two passes compile
+with nine and 20 VGPRs, respectively, without spills. The centered plain/rotated
+packers each use 16 VGPRs without spills. GPU oracle results are reported below.
+`scripts/omni_attention_center_candidate.py SOURCE OUTPUT` generates a key
+packer that subtracts this FP32 mean before quantization and optional rotation.
+The attention benchmark's `--centered-key-source` includes both mean passes and
+packing in every replay. It requires `--prepacked-qk`, and Q/K must use the same
+rotation. All selection remains explicit and confined to operator probes.
+
+`probe_attention --input-directory DIR --tokens N` loads `q.bf16`, `k.bf16` and
+`v.bf16` for both reference and candidate, checks their exact shapes and finite
+values, and records their hashes. Criterion accepts the same fixtures through
+`CLEF_BENCH_OMNI_ATTENTION_INPUT_DIR`; set its token list to the fixture's exact
+length. `CLEF_BENCH_OMNI_ATTENTION_CENTERED_KEY_SOURCE` selects the centered key
+packer. Preparation remains inside timed graph execution, while reference
+selection stays independent of candidate options.
+
+For the centered/rotated 232-token operator fixture, after generating the saved
+CPU inputs and building `probe_attention` as above:
+
+```sh
+python3 scripts/omni_attention_int8_candidate.py /tmp/omni-i8-centered-attention.loom --prepacked --queries 128 --keys 32
+python3 scripts/omni_attention_center_candidate.py benches/kernels/omni_prepare_attention_i8_hadamard.loom /tmp/omni-centered-key-packing.loom
+python3 scripts/memory_guard.py --output artifacts/centered-probe-guard --memory-gib 4 -- \
+  target/release/examples/probe_attention --model clef-omni --tokens 232 \
+  --input-directory artifacts/omni-memory-opt/attention-layer0-cpu-0 \
+  --rounds 7 --max-error 0.02 --prepacked-qk \
+  --packing-source benches/kernels/omni_prepare_attention_i8_hadamard.loom \
+  --centered-key-source /tmp/omni-centered-key-packing.loom \
+  --reference-source benches/kernels/omni_attention_transposed.loom \
+  /tmp/omni-i8-centered-attention.loom
+```
+
+The 24 guarded GPU checks have completed. The FP64 key-mean oracle and both
+plain/Hadamard packing oracles pass. All three BF16 file-fixture self-controls
+are exact, and all 12 plain/rotated/centered first-layer screens pass 0.02.
+Centering plus rotation reduces maximum GPU output error from
+0.010132/0.012939/0.008789 to **0.001160/0.001099/0.001221** for the
+232/244/512-token inputs.
+
+Three synthetic checks still fail: centered plain INT8 reaches **0.027344** on
+17 hashed tokens; centered/rotated INT8 reaches **0.072266** on the patterned
+fixture and **0.039063** on hashed inputs. Both centered variants are exact
+on 65,536 zero-query tokens. Their one-pair uniform-attention diagnostics run
+at 0.673×/0.697× BF16 speed, including preparation. These shared-GPU timings
+are not a model throughput result; even the identical BF16 self-controls vary
+from 0.889× to 1.169×. `centered-gpu-summary.json` records all commands,
+resource hashes and outcomes. No model promotion is qualified.
+
+## Vector reads for INT8 key scales
+
+The prepacked INT8 attention assembly reads every key scale separately from
+LDS: 16 scalar reads for a 32-key tile, or 32 for a 64-key tile. The experimental
+`scripts/omni_attention_scale_candidate.py` stores even and odd key scales in
+separate contiguous rows. Each half-wave then loads eight scales as a vector.
+This preserves the original scale values and the order of Q/K rescaling.
+Its optional `--vector-multiply` also expresses the two rescaling multiplies as
+vector operations without reassociating them.
+
+For 128 queries/32 keys, compilation replaces 16 scalar reads with four vector
+reads and reduces static `s_waitcnt` instructions from 97 to 83. The kernel
+retains 152 VGPRs and no spills. For 256 queries/64 keys, 32 scalar reads become
+eight vector reads, with 125→117 waits and the same 184 VGPRs. Vector multiply
+uses 152/192 VGPRs for those two shapes and has no spills. These are compiler
+results, not measured gains. `attention-int8-scales-compile-summary.json` records
+both candidates and references.
+
+CPU checks interpret emitted addresses for 24 combinations of tile size,
+inline/prepacked inputs and scalar/vector rescaling. Every key scale has one
+storage address, and every fragment reads the correct key's scale. Reproduce:
+
+```sh
+python3 -m unittest discover -s scripts -p test_omni_attention_scale_candidate.py -v
+python3 scripts/omni_attention_int8_candidate.py /tmp/omni-scale-reference.loom --prepacked --queries 128 --keys 32
+python3 scripts/omni_attention_scale_candidate.py /tmp/omni-scale-reference.loom /tmp/omni-scale-vector.loom
+target/release/examples/probe_attention --model clef-omni --compile-only \
+  --assembly /tmp/omni-scale-vector.asm /tmp/omni-scale-vector.loom
+```
+
+The GPU qualification completed all **228 exact-output comparisons** against
+the same-tile prepacked INT8 reference, followed by 16 seven-pair timings.
+Q/K packing and V transposition remain inside both timed graphs. Speedups were:
+
+| Tile and rescaling | 1K | 8K | 32K | 64K |
+|---|---:|---:|---:|---:|
+| Q128/K32, vector load | 0.943× | 1.267× | 0.977× | 0.885× |
+| Q128/K32, vector multiply | 0.994× | 1.057× | 0.952× | 1.098× |
+| Q256/K64, vector load | 0.996× | 1.011× | 1.082× | 0.937× |
+| Q256/K64, vector multiply | 1.021× | 1.017× | 0.994× | 0.971× |
+
+These shared-GPU results show no consistent gain across context lengths, so
+the original scale layout is retained. `int8-scale-gpu-summary.json` records
+the timings and source hashes; `after-centered-scale-status.json` preserves
+all 244 commands and outputs. This does not address INT8's BF16 numerical
+screening failures or qualify full-model accuracy/performance.
+
+For subsequent paired probes, `--report-json PATH` preserves every reference
+and candidate duration in execution order, the first variant in each pair,
+per-pair speedups and the ratio of medians. It also records maximum/RMS output
+error, exact replay checks for both graphs, the command, binary hash and hashes
+of supplied sources/fixtures. By default a report is written only after
+correctness and replay checks pass. The explicit `--time-on-mismatch` diagnostic
+option requires a report path and permits timing finite mismatching outputs;
+it records `numerical_check_passed: false` and still exits with failure. It does
+not relax the error limit, nonfinite-output checks or exact-replay checks.
+Inspect the pairs when judging a gain under GPU contention;
+the probe does not establish exclusive GPU access. These are operator replay
+times, not resident model throughput. The already queued frozen probes predate
+this report option and continue unchanged.
+
+## Grouped INT4 Q/K numerical screen
+
+`artifacts/omni-memory-opt/screen-grouped-int4-attention.py` runs 100 bounded
+CPU comparisons over the three saved first-layer inputs and two 17-token
+synthetic controls. It compares INT8 per-head scaling with INT4 scaling groups
+of 128, 64, 32 and 16 channels, with and without key centering/H128 rotation.
+Centering precedes rotation, matching the proposed GPU preparation order.
+Unquantized transform invariance is checked independently against FP64 causal
+attention. Inputs and script hashes are recorded in
+`key-centering-layer0-grouped-int4-cpu-screen.json`.
+
+With both centering and rotation, maximum absolute errors are:
+
+| CPU first-layer tokens | INT4 group 128 | Group 64 | Group 32 | Group 16 |
+|---|---:|---:|---:|---:|
+| 232 | 0.020554 | 0.014030 | 0.017633 | 0.017844 |
+| 244 | 0.019386 | 0.019452 | 0.013007 | 0.014924 |
+| 512 | 0.020386 | 0.017963 | 0.016196 | 0.013706 |
+
+The smaller groups fall below 0.02 on these first-layer inputs, but do not
+reliably improve maximum error monotonically. The synthetic patterned/hashed
+controls still exceed 0.02: group-64 errors are 0.562/0.620, group-32 errors
+0.501/0.673, and group-16 errors 0.405/0.416. These failures remain recorded.
+This motivates further investigation of grouped INT4; it does not qualify
+INT4 attention or establish a speedup. No INT4 attention kernel is implemented
+by this screen. GPU rounding, later layers, INT4 projection inputs, long-context
+behavior and full-model accuracy remain untested.
+
+The recorded command uses the previously saved BF16 fixtures. To repeat it,
+archive the existing report first; the script refuses to overwrite evidence:
+
+```sh
+python3 artifacts/omni-memory-opt/screen-grouped-int4-attention.py
+```
+
+## Grouped INT4 Q/K operator prototype
+
+`scripts/omni_attention_int4_candidate.py` now generates an operator-only
+group-64 candidate from the prepacked attention implementation. Each head has
+two symmetric signed INT4 scales. QK uses H3's signed INT4 WMMA operand layout;
+the two integer partial sums are rescaled separately and added in FP32.
+Softmax, BF16 probability/value products and output rounding retain the
+previous source. The plain and H128 packers also accept the existing key-mean
+transformation. This changes attention operands, independently of model weight
+precision, and is not connected to a default model selector.
+
+The prototype retains the benchmark's 36-word head stride: 16 packed words,
+16 zero words, two FP32 scales and two zero words. Keeping this ABI lets the
+existing graph replay include packing, centering and V transpose without
+changing frozen model binaries. Shared K payload rows shrink to 20 words.
+
+All six query/key tile combinations and four plain/rotated/centered packers
+compile without private scratch. The 128-query/32-key kernel uses 152 VGPRs
+and 13,056 LDS bytes; 256-query/64-key uses 160 VGPRs and 24,064 bytes. Both
+packers use 15 VGPRs. These are static resource reports, not measured speedups.
+`i4-grouped-compile-summary.json` records the commands and source hashes.
+
+CPU structural checks cover all six tile combinations, verify full 128-channel
+Q/K coverage and ensure the softmax/PV/output recurrence remains unchanged.
+The independent GPU packing oracle checks both plain and rotated INT4 against
+CPU group maxima, exact signed nibbles, both scales, padding, sliced buffers
+and changed-input replay. This GPU oracle now passes. The release
+test binary passes 29 CPU tests; 56 GPU tests are ignored in that invocation.
+Stable and Rust 1.91 Clippy pass.
+
+All **79 guarded checks have completed**: three packing oracles, 36 exact
+single-key/uniform-attention controls, 24 first-layer screens, eight synthetic
+screens and eight seven-pair timing diagnostics. The packing oracles and all
+36 exact controls pass. Only the centered/rotated combination passes 0.02 on
+all three first-layer inputs, with maximum errors **0.014160, 0.019409 and
+0.017944** on both tile sizes. The other 18 first-layer screens fail, as do
+all eight nonzero synthetic screens; centered/rotated synthetic errors reach
+about 0.54 and 0.62. All 26 numerical failures remain failures.
+
+Uniform-attention diagnostic speedups, including both packing passes, mean
+reduction and V transpose:
+
+| Tile | 8K | 16K | 32K | 64K |
+|---|---:|---:|---:|---:|
+| Q128/K32 | 1.269× | 1.200× | 0.718× | 0.904× |
+| Q256/K64 | 1.149× | 1.118× | 1.073× | 1.219× |
+
+The larger tile suggests a possible gain, but the shared GPU produces wide
+pair-to-pair variation: at 32K its pair ratios range from 0.465× to 1.437×;
+at 64K, 1.020× to 1.400×. These are zero-query diagnostics, not nonzero
+long-context or model throughput qualification. `i4-grouped-gpu-summary.json`
+records commands, hashes, errors and pair ratios, while
+`after-scale-int4-status.json` preserves all outputs. Full-model accuracy and
+throughput remain untested. No default changes or model promotion follow.
+
+Subsequent seven-pair **nonzero hashed-input** diagnostics keep the 0.02 error
+limit and use `--time-on-mismatch` to record performance while returning failed
+numerical checks. Three small controls verify that ordinary failures produce
+no timing report, diagnostic failures preserve a nonzero exit code and explicit
+failed status, and exact outputs still pass. The Q256/K64 centered/rotated
+results are:
+
+| Tokens | Maximum error (failed) | Diagnostic speedup | BF16 self-control ratio |
+|---|---:|---:|---:|
+| 8,192 | 0.740479 | 1.087× | 0.988× |
+| 32,768 | 0.659424 | 1.086× | 0.966× |
+| 65,536 | 0.757080 | 1.021× | 0.966× |
+
+The 64K gain is too small relative to shared-GPU variability to establish a
+useful tradeoff, while numerical screening still fails substantially. Grouped
+INT4 attention is not selected for model integration on this evidence.
+`i4-nonzero-timing-summary.json` preserves all nine checks, their exit codes,
+source hashes and individual timing pairs. These diagnostics do not qualify
+model accuracy or meet the full-suite throughput target.
+
+```sh
+python3 -m unittest discover -s scripts -p test_omni_attention_int4_candidate.py -v
+python3 scripts/omni_attention_int4_candidate.py /tmp/omni-i4-g64.loom \
+  --packing-source benches/kernels/omni_prepare_attention_i8_hadamard.loom \
+  --packing-output /tmp/omni-i4-g64-pack.loom
+python3 scripts/omni_attention_center_candidate.py \
+  /tmp/omni-i4-g64-pack.loom /tmp/omni-i4-g64-centered.loom
+cargo +stable build --locked --release --features bench-internals --example probe_attention
+python3 scripts/memory_guard.py --output /tmp/omni-i4-g64-guard --memory-gib 4 -- \
+  target/release/examples/probe_attention --model clef-omni --tokens 232 \
+  --input-directory artifacts/omni-memory-opt/attention-layer0-cpu-0 \
+  --reference-source benches/kernels/omni_attention_transposed.loom \
+  --prepacked-qk --packing-source /tmp/omni-i4-g64-pack.loom \
+  --centered-key-source /tmp/omni-i4-g64-centered.loom \
+  --max-error 0.02 --rounds 7 --report-json /tmp/omni-i4-g64-pairs.json \
+  /tmp/omni-i4-g64.loom
+```
+
+## Fused expert gate/up and SwiGLU
+
+`benches/kernels/omni_gate_up_i4.loom` combines two INT4 projections with the
+existing SwiGLU operation. It retains ascending integer dot products, scaling
+order, BF16 rounding of both projections, BF16 rounding of SiLU, and BF16 final
+output. It removes the intermediate projection writes/reads and two dispatches.
+The M16/N32 variant keeps four accumulators per wave. Its smaller channel tile
+means it does not reduce total activation loads versus the two original N64
+projections. The N64/K128 variant shares those loads across both projections.
+
+The `omni_gate_up` Criterion bench compares full operator graphs: route grouping,
+shared activation packing, gate/up projections and SwiGLU. It uses independent
+nonperiodic gate/up weights, balanced and concentrated routes, six token counts
+(1, 17, 128, 512, 1,024, 2,048), three input/routing phases, and two replays per
+phase. Zero rows, signed zeros and outliers are included. Both outputs are
+poisoned before each check, and every finite BF16 result must match bit-for-bit.
+All three candidates pass **72 checks each**. These are operator checks, not
+model accuracy qualification.
+
+| Candidate | VGPR/thread | LDS/workgroup | Private scratch |
+|---|---:|---:|---:|
+| N32/K256 | 224 | 4,096 B | 0 |
+| N32/K128 | 128 | 4,096 B | 0 |
+| N64/K128 | 240 | 4,096 B | 0 |
+
+Paired Criterion timings against the selected expert-k128-m32-down directory
+(which retains the original gate/up kernels), including warmup:
+
+| Tokens / routing | N32/K256 | N32/K128 | N64/K128 |
+|---|---:|---:|---:|
+| 512 / balanced | 1.099× | 1.058× | 1.056× |
+| 512 / concentrated | 0.947× | 1.012× | 1.147× |
+| 1,024 / balanced | 1.068× | 0.934× | 1.019× |
+| 1,024 / concentrated | 1.007× | 1.091× | 1.275× |
+| 2,048 / balanced | 1.016× | 0.835× | 1.065× |
+| 2,048 / concentrated | 1.109× | 1.359× | 1.577× |
+
+Order alternates within each pair; the GPU remains shared. Lower register use
+alone did not improve balanced routing. N64/K128 is the next model-level
+candidate because it improves all six measured cases, but its benefit depends
+strongly on route concentration. The production default is unchanged.
+`gate-up-experiments-summary.json` preserves timings, guard outcomes, resources
+and source hashes; `gate-up-build-v1.json` and `gate-up-build-v2.json` identify the
+frozen benchmark executables. The completed WorkflowEvals run provides the full
+INT4 reference for any subsequent integration.
+
+```sh
+python3 scripts/omni_gate_up_wide_candidate.py \
+  artifacts/omni-memory-opt/gate-up-i4-n64-k128.loom
+cargo +stable bench --features bench-internals --bench omni_gate_up --no-run
+CLEF_BENCH_OMNI_GATE_UP_SOURCE=artifacts/omni-memory-opt/gate-up-i4-n64-k128.loom \
+CLEF_BENCH_OMNI_REFERENCE_DIR=artifacts/omni-memory-opt/expert-k128-m32-down \
+  python3 scripts/memory_guard.py --output /tmp/omni-gate-up-guard --memory-gib 4 -- \
+  cargo +stable bench --features bench-internals --bench omni_gate_up
+```
+
+Omit `CLEF_BENCH_OMNI_GATE_UP_SOURCE` for N32/K256. Generate N32/K128 with
+`scripts/omni_expert_k128_candidate.py OUTPUT --rows 16 --source
+benches/kernels/omni_gate_up_i4.loom`. `CLEF_BENCH_OMNI_TOKENS` accepts a
+comma-separated shape list. A fresh guard output directory is required for
+each run. Stable and Rust 1.91 all-target/all-feature Clippy checks pass.
+
+### Fused gate/up model integration
+
+Benchmark builds accept `CLEF_BENCH_OMNI_GATE_UP_SOURCE=PATH`. The model and
+Criterion harness use the same dispatch function. The fusion requires INT4
+expert weights and regular grouped routes; compact routes and direct SwiGLU
+packing are incompatible. The public benchmark setter drops cached plans
+before changing the source. BF16 and ordinary builds retain their existing
+path. The integrated operator recheck passes all 72 exact checks; 29 CPU tests,
+stable/Rust 1.91 all-target Clippy, and the non-benchmark library check pass.
+
+On JevBench request 230 (2,601 tokens), three alternating-order model pairs give
+**3,953.8 → 4,015.2 resident input tok/s (1.0155×)**. All eight predictions,
+including both warmups, are exact; the warmups also match the historical full
+JevBench result. Pair ratios are 1.0042×, 1.0229× and 1.0195×. These shared-GPU
+single-request diagnostics exclude loading and initial compilation and do not
+establish the 4,000 tok/s full-suite target. Small synthetic requests favored
+the original path, so model selection still needs a short-request assessment.
+
+`gate-up-model-build-v1.json` pins the integrated binaries and sources;
+`gate-up-model-jev230-summary.json` records the paired result and historical
+parity check. `qualify-gate-up-model-v1.py` runs the operator recheck and paired
+Jev/invoice comparisons sequentially under unchanged guards, without retries.
+Use identical attention sources to isolate gate/up fusion:
+
+```sh
+# Apply the selected INT4 environment from the full-suite reproduction above.
+python3 scripts/memory_guard.py --output /tmp/omni-gate-up-model-guard --memory-gib 28 -- \
+  artifacts/omni-memory-opt/compare-gate-up-model-v1 \
+  --model clef-omni --precision int4 --memory-gib 28 --max-length 65536 --rounds 3 \
+  --reference benches/kernels/omni_attention_transposed.loom \
+  --candidate benches/kernels/omni_attention_transposed.loom \
+  --candidate-gate-up-source artifacts/omni-memory-opt/gate-up-i4-n64-k128.loom \
+  --output /tmp/omni-gate-up-model.json artifacts/omni-memory-opt/invoice-long.json
+```

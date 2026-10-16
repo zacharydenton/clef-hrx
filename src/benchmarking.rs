@@ -6,9 +6,13 @@ use crate::{
 use hrx::{GraphExec, inference::ModelContext};
 mod activation;
 mod omni;
+mod omni_gate_up;
+mod omni_norm_rope;
 pub use omni::{
     OmniCombineBenchmark, OmniExpertBenchmark, OmniRouteBenchmark, OmniRouterBenchmark,
 };
+pub use omni_gate_up::OmniGateUpBenchmark;
+pub use omni_norm_rope::OmniNormRopeBenchmark;
 mod convolution;
 mod normalization_packing;
 pub(crate) mod quantized;
@@ -84,6 +88,7 @@ pub struct OmniKernelConfig {
     pub minimum_tokens: usize,
     pub sorted_combine: bool,
     pub fused_mlp: bool,
+    pub fused_norm_rope: bool,
     pub pack_swiglu: bool,
     pub compact_experts: bool,
     pub reuse_backbone: bool,
@@ -100,6 +105,7 @@ impl Default for OmniKernelConfig {
             minimum_tokens: 0,
             sorted_combine: false,
             fused_mlp: false,
+            fused_norm_rope: false,
             pack_swiglu: false,
             compact_experts: false,
             reuse_backbone: false,
@@ -570,6 +576,14 @@ pub struct AttentionBenchmark {
     output: Tensor,
     _context: ModelContext,
 }
+/// Explicit operator-only inputs and preparation. Model defaults are unaffected.
+#[derive(Default)]
+pub struct AttentionProbeOptions<'a> {
+    pub packing_source: Option<&'a str>,
+    pub centered_key_source: Option<&'a str>,
+    /// Little-endian row-major q.bf16, k.bf16 and v.bf16 with exact probe shapes.
+    pub input_directory: Option<&'a std::path::Path>,
+}
 impl AttentionBenchmark {
     pub fn new(tokens: usize, source: Option<&str>) -> Result<Self> {
         Self::case(
@@ -612,7 +626,15 @@ impl AttentionBenchmark {
         model: crate::ModelVariant,
         fixture: AttentionFixture,
     ) -> Result<Self> {
-        Self::build_case(tokens, source, integrated, model, fixture, false)
+        Self::build_case(
+            tokens,
+            source,
+            integrated,
+            model,
+            fixture,
+            false,
+            Default::default(),
+        )
     }
     pub fn prepacked_case(
         tokens: usize,
@@ -620,7 +642,47 @@ impl AttentionBenchmark {
         model: crate::ModelVariant,
         fixture: AttentionFixture,
     ) -> Result<Self> {
-        Self::build_case(tokens, Some(source), false, model, fixture, true)
+        Self::build_case(
+            tokens,
+            Some(source),
+            false,
+            model,
+            fixture,
+            true,
+            Default::default(),
+        )
+    }
+    /// Include an explicit Q/K preparation source in every candidate replay.
+    /// References retain their own preparation; no environment override is used.
+    pub fn prepacked_case_with_packing(
+        tokens: usize,
+        source: &str,
+        packing_source: &str,
+        model: crate::ModelVariant,
+        fixture: AttentionFixture,
+    ) -> Result<Self> {
+        Self::build_case(
+            tokens,
+            Some(source),
+            false,
+            model,
+            fixture,
+            true,
+            AttentionProbeOptions {
+                packing_source: Some(packing_source),
+                ..Default::default()
+            },
+        )
+    }
+    pub fn probe_case(
+        tokens: usize,
+        source: Option<&str>,
+        model: crate::ModelVariant,
+        fixture: AttentionFixture,
+        prepacked: bool,
+        options: AttentionProbeOptions<'_>,
+    ) -> Result<Self> {
+        Self::build_case(tokens, source, false, model, fixture, prepacked, options)
     }
     fn build_case(
         tokens: usize,
@@ -629,10 +691,16 @@ impl AttentionBenchmark {
         model: crate::ModelVariant,
         fixture: AttentionFixture,
         prepacked: bool,
+        options: AttentionProbeOptions<'_>,
     ) -> Result<Self> {
         anyhow::ensure!(
             tokens > 0 && tokens <= crate::encoding::MAX_CONTEXT_TOKENS,
             "unsupported attention probe shape"
+        );
+        anyhow::ensure!(
+            (options.packing_source.is_none() && options.centered_key_source.is_none())
+                || (prepacked && source.is_some() && model == crate::ModelVariant::ClefOmni),
+            "custom preparation requires an explicit prepacked Omni attention source"
         );
         let context = ModelContext::new(Default::default())?;
         let mut engine = Engine::new(&context)?;
@@ -647,6 +715,8 @@ impl AttentionBenchmark {
         // Operator candidates are selected explicitly through `source` above.
         engine.experimental_attention = None;
         engine.omni_prepack_qk = prepacked;
+        engine.omni_qk_prepare_source = options.packing_source.map(str::to_owned);
+        engine.omni_centered_key_source = options.centered_key_source.map(str::to_owned);
         let values = |len, factor| {
             (0..len)
                 .map(|i| {
@@ -665,24 +735,36 @@ impl AttentionBenchmark {
                 })
                 .collect::<Vec<_>>()
         };
-        let q = engine.input(
-            tokens,
-            heads * dim,
-            DType::Bf16,
-            bytemuck::cast_slice(&values(tokens * (heads * dim), 17)),
-        )?;
-        let k = engine.input(
-            tokens,
-            4 * dim,
-            DType::Bf16,
-            bytemuck::cast_slice(&values(tokens * 4 * dim, 31)),
-        )?;
-        let v = engine.input(
-            tokens,
-            4 * dim,
-            DType::Bf16,
-            bytemuck::cast_slice(&values(tokens * 4 * dim, 43)),
-        )?;
+        let mut input = |name: &str, cols, factor| -> Result<Tensor> {
+            if let Some(directory) = options.input_directory {
+                let bytes = std::fs::read(directory.join(format!("{name}.bf16")))?;
+                anyhow::ensure!(
+                    bytes.len() == tokens * cols * 2,
+                    "{name}: fixture shape differs"
+                );
+                anyhow::ensure!(
+                    bytes
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .all(
+                            |b| half::bf16::from_bits(u16::from_le_bytes([b[0], b[1]])).is_finite()
+                        ),
+                    "{name}: nonfinite input fixture"
+                );
+                engine.input(tokens, cols, DType::Bf16, &bytes)
+            } else {
+                engine.input(
+                    tokens,
+                    cols,
+                    DType::Bf16,
+                    bytemuck::cast_slice(&values(tokens * cols, factor)),
+                )
+            }
+        };
+        let q = input("q", heads * dim, 17)?;
+        let k = input("k", 4 * dim, 31)?;
+        let v = input("v", 4 * dim, 43)?;
         let output = if let Some(source) = source {
             let source = format!("{}\n{}", include_str!("../kernels/common.loom"), source);
             engine.attention_tiled_source_dim(&q, &k, &v, true, &source, dim)?
