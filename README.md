@@ -1,25 +1,68 @@
 # clef-hrx
 
-[Cloudflare CLEF](https://huggingface.co/Cloudflare/clef),
+Run [CLEF](https://huggingface.co/Cloudflare/clef),
 [CLEF Flash](https://huggingface.co/Cloudflare/clef-flash), and
-[CLEF Omni](https://huggingface.co/Cloudflare/clef-omni) inference in Rust for
-AMD Strix Halo. The text backbone, media encoders and decision head run as
-[Loom](https://github.com/ROCm/hrx-system) kernels through
-[HRX](https://github.com/zacharydenton/hrx-rs).
+[CLEF Omni](https://huggingface.co/Cloudflare/clef-omni) locally in Rust on AMD
+Strix Halo, using [HRX](https://github.com/zacharydenton/hrx-rs).
 
-CLEF answers structured questions about text, images and video. Omni also handles
-audio and video soundtracks:
+All three answer structured questions about text, images and video. Omni also
+supports audio and video soundtracks. Outputs are choices, scores and
+probabilities.
 
-| Question type | Output |
-| --- | --- |
-| `choice` | Selected option and probabilities |
-| `score` | Expected score, legend and probabilities |
-| `noul` | Probability that a proposition is true |
+## Models and performance
+
+Measured on a Radeon 8060S (`gfx1151`) with 128 GiB unified memory.
+JevBench covers all 231 cases; WorkflowEvals covers all 705 cases.
+Speed is input tokens per second with the model loaded, including encoding,
+preparation, GPU execution and readback. Flash JevBench uses a warm kernel cache;
+WorkflowEvals timings include shared-GPU runs.
+
+| Model | Precision | JevBench accuracy | JevBench tok/s | WorkflowEvals tok/s |
+| --- | --- | ---: | ---: | ---: |
+| CLEF | BF16 | 87.4% | 616 | 548 |
+| CLEF | INT4 MLP | 88.3% | 847 | — |
+| CLEF | INT4 | 84.0% | 1,032 | — |
+| Flash | BF16 | 82.7% | 1,794 | 1,557 |
+| Flash | INT4 MLP | 79.2% | 2,261 | 599 |
+| Flash | INT4 | 71.4% | 2,523 | 1,848 |
+| Omni | BF16 | 80.1% | 1,145 | — |
+| Omni | INT4 | 81.0% | 3,031 | 1,194 |
+
+BF16 is the default. INT4 MLP quantizes only MLP projections; INT4 also quantizes
+attention projections. A dash means no complete measurement for the current kernels.
+
+Results and reproduction: [CLEF](docs/evaluation.md),
+[Flash](docs/clef-flash.md), [Omni](docs/omni-memory-tuning.md),
+[WorkflowEvals](docs/workflowevals.md), [llama.cpp comparison](docs/llama-jevbench.md).
+
+## Compared with Cloudflare
+
+WorkflowEvals agreement with consensus reference actions, in percent.
+Each cell is **local / Cloudflare published**. Local CLEF and Flash use BF16;
+local Omni uses INT4, compared with Cloudflare's unquantized model.
+Published scores are from [Cloudflare's model cards](https://huggingface.co/Cloudflare/clef-omni#workflow-evals).
+
+| Metric | CLEF BF16 | Flash BF16 | Omni INT4 |
+| --- | ---: | ---: | ---: |
+| Invoice exact actions | 64.7 / 64.7 | 57.1 / 57.1 | 57.3 / 60.2 |
+| Invoice primary action | 86.4 / 86.2 | 73.6 / 73.3 | 79.3 / 82.0 |
+| Customer service exact actions | 76.5 / 76.3 | 76.6 / 77.0 | 69.0 / 71.6 |
+| Security exact actions | 62.9 / 62.9 | 61.3 / 61.7 | 56.7 / 61.7 |
+| Agent trace primary action | 68.5 / 68.5 | 70.3 / 69.8 | 63.1 / 65.8 |
+
+CLEF BF16 matches or slightly exceeds all five published scores. Flash BF16 is
+within 0.5 percentage points; Omni INT4 is 2.6–5.0 points below published Omni.
+
+Cloudflare's [hosted CLEF measurements](https://blog.cloudflare.com/clef-faster-cheaper-multimodal/#clef-model-is-now-faster)
+report median latencies of 152 ms at ~800 tokens, 305 ms at ~3,400, and 1,635 ms
+at ~16,000. Dividing input size by latency gives approximately **5,300–11,100
+input tok/s**, versus **548–616** for local CLEF BF16 across our suites.
+These use different workloads and hardware, so they are not a matched speed test.
 
 ## Build and run
 
-Requires Rust 1.91+, Linux and a `gfx1151` GPU. Original CLEF BF16 needs at least 50 GiB of
-available RAM for short requests. Audio and video input need ffmpeg and ffprobe.
+Requires Linux, Rust 1.91+ and a `gfx1151` GPU. Original CLEF BF16 needs at least
+50 GiB available RAM for short requests. Audio and video require ffmpeg and ffprobe.
 
 ```sh
 git clone https://github.com/zacharydenton/clef-hrx.git
@@ -28,112 +71,13 @@ cargo build --release --locked
 ./target/release/clef --max-length 512 decide examples/invoice.json
 ```
 
-For example, `invoice.json` can ask:
+Select `--model clef`, `--model clef-flash` or `--model clef-omni`, and
+`--precision bf16`, `--precision int4-mlp` or `--precision int4`.
+Defaults are CLEF, BF16 and a 65,536-token context limit. Add `--jsonl` to process
+multiple requests with the model loaded, or `--raw` for probabilities and timings.
 
-```json
-{
-  "model": "clef",
-  "state": "The invoice is 30 days overdue.",
-  "questions": {
-    "needs_followup": {
-      "type": "noul",
-      "instructions": "Does this invoice need a payment reminder?"
-    }
-  }
-}
-```
-
-Add `--raw` for logits, unrounded probabilities and timings. For repeated
-requests, keep the model loaded and pass newline-delimited JSON:
-
-```sh
-./target/release/clef --max-length 1536 decide requests.jsonl --jsonl
-```
-
-Select Flash with `--model clef-flash` or Omni with `--model clef-omni`;
-original CLEF remains the default. [Omni usage and verification](docs/clef-omni.md).
-Use `--model-dir PATH` for a local snapshot or `--offline` for cached files.
-First use downloads weights and creates a tiled projection cache alongside them.
-Existing converted checkpoints remain readable.
-
-`--max-length` sets the token limit (default 65,536); `--strict-context` rejects
-requests that would truncate state. `--memory-gib` sets the allocation budget
-(default 80 GiB). See [Flash qualification and reproduction](docs/clef-flash.md).
-
-## Precision
-
-BF16 is the default. Use `--precision` to select INT4:
-
-```sh
-./target/release/clef --precision int4-mlp decide examples/invoice.json
-./target/release/clef --precision int4 decide examples/invoice.json
-```
-
-See [precision options](docs/usage.md#precision).
-
-## Evaluation
-
-Original CLEF on full JevBench, AMD Strix Halo, with the model already loaded:
-
-| Runtime / mode | Full JevBench accuracy | Resident input tok/s |
-| --- | ---: | ---: |
-| clef-hrx BF16 | 202/231 (87.4%) | 616 |
-| llama.cpp HIP BF16 | 203/231 (87.9%) | 343 |
-| clef-hrx INT4 MLP only | 204/231 (88.3%) | 847 |
-| llama.cpp HIP Q4_K_M | 204/231 (88.3%) | 335–351 |
-| clef-hrx INT4 backbone | 194/231 (84.0%) | 1,032 |
-
-BF16 is **1.79× faster** than llama.cpp HIP BF16. MLP-only INT4 is
-**2.42–2.53× faster** than llama.cpp HIP Q4_K_M, with both scoring 204/231.
-[llama.cpp comparison and reproduction](docs/llama-jevbench.md).
-
-[Results and reproduction](docs/evaluation.md#tiled-weight-layout).
-
-CLEF Flash with the model already loaded and a warm kernel cache for JevBench:
-
-| Mode | Full JevBench accuracy | JevBench input tok/s | WorkflowEvals input tok/s |
-| --- | ---: | ---: | ---: |
-| BF16 | 191/231 (82.7%) | 1,794 | 1,557 |
-| INT4 MLP only | 183/231 (79.2%) | 2,261 | 599 |
-| INT4 backbone | 165/231 (71.4%) | 2,523 | 1,848 |
-
-[Flash results and reproduction](docs/clef-flash.md).
-WorkflowEvals rates cover [all 705 cases](docs/workflowevals.md#flash-full-suite-results)
-with the model already loaded.
-
-Original CLEF BF16 reaches **548 input tok/s across all 705 WorkflowEvals cases**,
-matching or exceeding Cloudflare's published accuracy scores.
-Flash's optimized attention gives **2.93× faster WorkflowEvals in BF16** and
-**3.10× in INT4**, with unchanged accuracy metrics. These kernels are enabled by
-default in their qualified precision modes. Results and reproduction:
-[CLEF](docs/long-context-bf16.md), [Flash BF16](docs/flash-long-context.md),
-[Flash INT4](docs/attention-kernel-tuning.md#model-qualification).
-Original CLEF INT4 also uses optimized long-context attention; see its
-[qualification coverage](docs/attention-kernel-tuning.md#acceptance-with-partial-coverage-october-15).
-
-Omni uses optimized kernels by default: **1,145 BF16 / 3,031 INT4 input
-tok/s** on full JevBench, with **80.1% / 81.0% accuracy** respectively.
-Full WorkflowEvals measured **1,194 INT4 input tok/s** on a shared GPU.
-[Omni results and reproduction](docs/omni-memory-tuning.md).
-
-## Library
-
-`ClefModel` exposes inference and `load_in` accepts an existing HRX `ModelContext`.
-`Encoder` can prepare schemas and text without loading models or opening a GPU.
-[Requests, media inputs and Rust example](docs/usage.md).
-
-## Development
-
-```sh
-cargo test --locked --lib --bins --tests --examples --all-features
-cargo test --locked --doc
-cargo bench --locked --bench preprocessing
-python3 scripts/bench_workload.py baseline --profile quick
-CLEF_BENCH_FULL_MODEL=1 cargo bench --locked --bench inference
-```
-
-GPU and checkpoint tests are ignored by default.
-See [development](docs/development.md) and [kernel benchmarks](docs/optimization.md).
+[CLI and Rust API](docs/usage.md) · [Omni media inputs](docs/clef-omni.md) ·
+[Development](docs/development.md) · [Kernel benchmarks](docs/optimization.md)
 
 ## License
 
